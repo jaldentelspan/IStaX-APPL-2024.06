@@ -1,0 +1,71 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+DIR_udld := $(DIR_APPL)/udld
+MODULE_ID_udld := 123 # VTSS_MODULE_ID_UDLD
+
+OBJECTS_udld_c := udld.o udld_tlv.o \
+$(call if-module,web,udld_web.o) \
+$(if $(MODULE_ICFG),udld_icfg.o)
+
+OBJECTS_udld_cxx := udld_expose.o          \
+  $(call if-module,private_mib,udld_mib.o) \
+  $(call if-module,json_rpc,udld_json.o)
+
+OBJECTS_udld := $(OBJECTS_udld_c) $(OBJECTS_udld_cxx)
+
+$(OBJECTS_udld_c): %.o: $(DIR_udld)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_udld), $@, $<)
+
+$(OBJECTS_udld_cxx): %.o: $(DIR_udld)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_udld), $@, $<)
+
+INCLUDES += -I$(DIR_udld)
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_udld),$(DIR_udld)/udld.icli))
+
+# Web Content Generation
+WEB_CONTENT += $(DIR_udld)/html
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_udld += $(DIR_udld)/*.h
+VTSS_CODE_STYLE_CHK_FILES_udld += $(DIR_udld)/udld.cxx
+VTSS_CODE_STYLE_CHK_FILES_udld += $(DIR_udld)/udld_icfg.cxx
+VTSS_CODE_STYLE_CHK_FILES_udld += $(DIR_udld)/udld_tlv.cxx
+VTSS_CODE_STYLE_CHK_FILES_udld += $(DIR_udld)/udld_web.cxx
+
+# Tidy files
+TIDY_FILES_udld += $(DIR_udld)/html/*.htm $(DIR_udld)/html/help/*.htm
+
+# JSlint files
+JSLINT_FILES_udld += $(TIDY_FILES_udld)
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/udld.h
+

@@ -1,0 +1,119 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+DIR_synce_dpll := $(DIR_APPL)/synce_dpll
+MODULE_ID_synce_dpll := 88 # VTSS_MODULE_ID_SYNCE_DPLL
+DIR_synce_dpll_src := $(DIR_synce_dpll)/src
+DIR_synce_dpll_zl30772_fw_upd_src := $(DIR_synce_dpll)/zl30772_fw_update
+DIR_synce_dpll_zl30732_cfg := $(DIR_synce_dpll)/zl30732_cfg
+
+OBJECTS_C_synce_dpll := synce_custom_clock_api.o synce_omega_clock_api.o synce_spi_if.o
+
+OBJECTS_C_synce_dpll_firmware_update := $(if $(MODULE_ZLS),zl303xx_Dpll77xFlash.o)
+
+OBJECTS_CXX_synce_dpll := synce_dpll_base.o synce_dpll_servalt.o synce_dpll_zl303xx.o
+
+OBJECTS_CXX_synce_dpll_zl30363 := synce_dpll_zl30363.o
+
+OBJECTS_CXX_synce_dpll_zl3077x := synce_dpll_zl3077x.o
+
+OBJECTS_CXX_synce_dpll_zl3073x := synce_dpll_zl3073x.o
+
+OBJECTS_synce_dpll := $(OBJECTS_C_synce_dpll) \
+                      $(OBJECTS_CXX_synce_dpll) \
+                      $(OBJECTS_C_synce_dpll_firmware_update) \
+                      $(OBJECTS_CXX_synce_dpll_zl30363) \
+                      $(OBJECTS_CXX_synce_dpll_zl3077x) \
+                      $(OBJECTS_CXX_synce_dpll_zl3073x)
+
+$(OBJECTS_C_synce_dpll): %.o: $(DIR_synce_dpll_src)/%.cxx $(BUILD)/make/module_synce_dpll.in
+	$(call compile_cxx,$(MODULE_ID_synce_dpll), $@, $<)
+
+$(OBJECTS_C_synce_dpll_firmware_update): %.o: $(DIR_synce_dpll_zl30772_fw_upd_src)/%.cxx $(BUILD)/make/module_synce_dpll.in
+	$(call compile_cxx,$(MODULE_ID_synce_dpll), $@, $<)
+
+$(OBJECTS_CXX_synce_dpll): %.o: $(DIR_synce_dpll_src)/%.cxx $(BUILD)/make/module_synce_dpll.in
+	$(call compile_cxx,$(MODULE_ID_synce_dpll), $@, $<)
+
+$(OBJECTS_CXX_synce_dpll_zl30363): %.o: $(DIR_synce_dpll_src)/%.cxx $(BUILD)/make/module_synce_dpll.in
+	$(call compile_cxx,$(MODULE_ID_synce_dpll), $@, $<, $(INCLUDES_zls3038x))
+
+$(OBJECTS_CXX_synce_dpll_zl3077x): %.o: $(DIR_synce_dpll_src)/%.cxx $(BUILD)/make/module_synce_dpll.in
+	$(call compile_cxx,$(MODULE_ID_synce_dpll), $@, $<, $(INCLUDES_zls3038x))
+
+$(OBJECTS_CXX_synce_dpll_zl3073x): %.o: $(DIR_synce_dpll_src)/%.cxx $(BUILD)/make/module_synce_dpll.in
+	$(call compile_cxx,$(MODULE_ID_synce_dpll), $@, $<, $(INCLUDES_zls3038x))
+
+# # Built-in ICLI
+# $(eval $(call add_icli,$(MODULE_ID_synce_dpll),$(DIR_synce_dpll_src)/synce_dpll.icli))
+
+INCLUDES += -I$(DIR_synce_dpll)/include
+
+# Web Content Generation
+# WEB_CONTENT += $(DIR_synce_dpll_src)/html
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_synce_dpll := \
+  $(DIR_synce_dpll)/zl30772_fw_update/*.cxx   \
+  $(DIR_synce_dpll)/zl30772_fw_update/*.h     \
+  $(DIR_synce_dpll)/src/*.cxx                 \
+  $(DIR_synce_dpll)/src/*.h                   \
+  $(DIR_synce_dpll)/include/*
+
+# Tidy files
+# TIDY_FILES_synce_dpll += $(DIR_synce_dpll_src)/html/*.htm $(DIR_synce_dpll_src)/html/help/*.htm
+
+# ZL30772 DPLL Firmware Update.
+# The following two lines are commented out by default, which means that no
+# attempt to update ZL30772 DPLL firmware will be attempted.
+#
+# If you wish to automatically attempt up to five updates of the firmware,
+# uncomment the two lines and build a new application. This will cause F/W
+# files to be added to the switch's /etc/mscc/dpll/firmware/ directory.
+#
+# If uncommented, the following will take place during boot of the switch before
+# anything else happens:
+#   1) If no ZL30772 DPLL is detected, boot will commence as normal.
+#   2) Otherwise, the DPLL's current F/W version is read and compared to the F/W
+#      version bundled with the software. If current F/W version >= new version
+#      boot commences as normal while indicating this in a sylog message (can be
+#      displayed with "show logging").
+#   3) Otherwise, a special file holding the number of attempts the F/W update
+#      process has run is read. If the contents of this file is greater than or
+#      equal to 5, no more attempts are made, and a syslog message reports this,
+#      and the boot proceeds as normal.
+#   4) Otherwise, the special file's contents is incremented by one, and the F/W
+#      update begins.
+#      a) If it completes successfully, the special file is erased and the
+#         switch (and thereby the DPLL) gets rebooted.
+#      b) If it fails, the switch reboots without deleting the special file.
+#DPLL_FIRMWARE = $(DIR_synce_dpll_zl30772_fw_upd_src)/zl30772.firmware1.hex $(DIR_synce_dpll_zl30772_fw_upd_src)/zl30772.firmware2.hex $(DIR_synce_dpll_zl30772_fw_upd_src)/zl30772.utility.hex
+#DPLL_SHOW_FW_VER = $(DIR_synce_dpll_zl30772_fw_upd_src)/showver.sh
+
+DPLL_CFG = $(DIR_synce_dpll_zl30732_cfg)/UNG8385_ZL30732_all_regs_v3.mfg \
+           $(DIR_synce_dpll_zl30732_cfg)/EV23X71A_ZL80732_all_regs.mfg

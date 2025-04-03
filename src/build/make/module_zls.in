@@ -1,0 +1,235 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+MODULE_ID_zl_3034x_pdv := 108 # VTSS_MODULE_ID_ZL_3034X_PDV
+
+# This makefile compiles vtss_appl/zls/platform and vtss_appl/zls/base, which
+# both are identical whether or not using 30380 or 30387.
+# The only difference is the zlApr folders, which define the flavor. The zlApr
+# folders contain .o files per target CPU. One of these is linked into a .so
+# file and placed directly on target. See also .../build/tools/image_append.rb.
+
+# Pointer to zls3038x source code directory
+DIR_zls            := $(DIR_APPL)/zls
+DIR_zls_base       := $(DIR_zls)/base
+DIR_zls_platform   := $(DIR_zls)/platform
+
+# ZL_UNG_MODIFIED is the flag introduced by UNG to indicate the code modified by UNG in TIM BU src code.
+ZL_BASE_DEFINES = -D__BYTE_ORDER -D__LITTLE_ENDIAN -D_DEBUG -DZL_BYPASS_MSGQ -DOS_LINUX -DZL303XX_OS_LINUX -Wno-undef -Wno-unused-but-set-variable $(INCLUDES_zls3038x) -DZL_UNG_MODIFIED
+
+ifdef MODULE_ZLS30387
+    ZL_BASE_DEFINES += -DAPR_INCLUDED -DZLS3038X_INCLUDED
+endif
+ifdef MODULE_ZLS30361
+    ZL_BASE_DEFINES += -DZLS30361_INCLUDED
+endif
+ifdef MODULE_ZLS3077X
+    ZL_BASE_DEFINES += -DZLS30771_INCLUDED
+endif
+ifdef MODULE_ZLS3073X
+    ZL_BASE_DEFINES += -DZLS30731_INCLUDED
+endif
+
+# We create a suitable .so file from a .o file for the relevant servo.
+# The order of the next three ifdefs is carefully chosen. The more capable a
+# servo, the later in the list of ifdefs.
+ifdef MODULE_ZLS30387
+DIR_zlApr := $(DIR_zls)/30387
+endif
+
+ifdef MODULE_ZLS30380
+DIR_zlApr := $(DIR_zls)/30380
+endif
+
+ifeq ($(MSCC_SDK_ARCH),arm)
+    APR_LIB_TARGET_VARIANT := objARMv7-LE-HF-fPIC-LC
+else ifeq ($(MSCC_SDK_ARCH),arm64)
+    APR_LIB_TARGET_VARIANT := objARMv8-LE-fPIC
+else
+    APR_LIB_TARGET_VARIANT := objMIPS32-LE
+endif
+
+TARGETS_zls = libzl303xx.so
+
+$(TARGETS_zls): $(DIR_zlApr)/zlApr/$(APR_LIB_TARGET_VARIANT)/lnxTemp/zlAprLib.o
+	$(call what, [LD ] $@ $^)
+	$(Q)$(XCXX) $(LDSOFLAGS) -fvisibility=hidden -o $@ $^
+
+LIB_FILES += $(TARGETS_zls)
+
+# In released source code, only the .h files are preserved in $(DIR_zls)/base.
+# The .c files in that folder are compiled into a .a file that is placed in
+# .../build/vtss_libs/.
+# The source code, however, is always used if it exists.
+
+# We need to name the libfile from the config.mk file in order to have different
+# .a files depending on the target platforms.
+ZLS_BASE_LIB_FILENAME := libzls_base_$(CONFIG_BASENAME).a
+
+# Determine if source code exists
+ZLS_BASE_SRC_EXISTS := $(words $(wildcard $(DIR_zls_base)/zlApi/src/*.c))
+
+# If source code exists then build the module (if no source code, the library
+# must already exist in .../build/vtss_libs/)
+ifneq ($(ZLS_BASE_SRC_EXISTS),0)
+
+# Source exists. Build it directly.
+
+# zlApi
+OBJECTS_zls30387_zlapi = zl303xx_ApiVersion.o zl303xx_AprStateMachine.o \
+                         zl303xx_HoldoverUtils.o zl303xx_Ptsf.o zl303xx_DeviceIf.o
+
+OBJECTS_zls30361_zlapi = zl303xx_ApiVersion.o zl303xx_Ptsf.o zl303xx_DeviceIf.o \
+                         zl303xx_RdWr.o zl303xx_Var.o zl303xx_Params.o
+
+OBJECTS_zls3073x_zlapi = zl303xx_ApiVersion.o zl303xx_Ptsf.o zl303xx_DeviceIf.o \
+                         zl303xx_RdWr.o zl303xx_Var.o zl303xx_Params.o
+
+OBJECTS_zls3077x_zlapi = zl303xx_ApiVersion.o zl303xx_Ptsf.o zl303xx_DeviceIf.o \
+                         zl303xx_RdWr.o zl303xx_Var.o zl303xx_Params.o
+
+OBJECTS_zlapi = $(sort $(if $(MODULE_ZLS30387), $(OBJECTS_zls30387_zlapi)) \
+                       $(if $(MODULE_ZLS30361), $(OBJECTS_zls30361_zlapi)) \
+                       $(if $(MODULE_ZLS3073X), $(OBJECTS_zls3073x_zlapi)) \
+                       $(if $(MODULE_ZLS3077X), $(OBJECTS_zls3077x_zlapi)))
+
+# Compiler rules
+$(OBJECTS_zlapi): %.o: $(DIR_zls_base)/zlApi/src/%.c
+	$(call compile_c,$(MODULE_ID_zl_3034x_pdv), $@, $<, $(ZL_BASE_DEFINES))
+
+# zlDpll
+OBJECTS_zls30361_zldpll = zl303xx_Dpll36x.o zl303xx_Dpll361.o
+
+OBJECTS_zls3077x_zldpll = zl303xx_Dpll77x.o zl303xx_Dpll771.o
+
+OBJECTS_zls3073x_zldpll = zl303xx_Dpll73xConfig.o zl303xx_Dpll73xDynamicOp.o \
+                          zl303xx_Dpll73xGlobal.o zl303xx_Dpll73xMsgRouter.o zl303xx_Dpll73xReport.o
+
+OBJECTS_zldpll = $(if $(MODULE_ZLS30361), $(OBJECTS_zls30361_zldpll)) \
+                 $(if $(MODULE_ZLS3073X), $(OBJECTS_zls3073x_zldpll)) \
+                 $(if $(MODULE_ZLS3077X), $(OBJECTS_zls3077x_zldpll))
+
+$(OBJECTS_zldpll): %.o: $(DIR_zls_base)/zlDpll/src/%.c
+	$(call compile_c,$(MODULE_ID_zl_3034x_pdv), $@, $<, $(ZL_BASE_DEFINES))
+
+# zlUserExamples
+OBJECTS_zls30387_zlexamples = zl303xx_ExampleAprGlobals.o zl303xx_ExampleUtils.o \
+                              zl303xx_ExampleAprBinding.o
+
+OBJECTS_zlexamples = $(if $(MODULE_ZLS30387), $(OBJECTS_zls30387_zlexamples))
+
+$(OBJECTS_zlexamples): %.o: $(DIR_zls_base)/zlUserExamples/src/%.c
+	$(call compile_c,$(MODULE_ID_zl_3034x_pdv), $@, $<, $(ZL_BASE_DEFINES))
+
+## zlUserUtils
+OBJECTS_zls30387_zlutils = zl303xx_DebugApr.o
+
+OBJECTS_zls30361_zlutils = zl303xx_DebugMisc.o zl303xx_DebugDpll36x.o
+
+OBJECTS_zls3073x_zlutils = zl303xx_DebugMisc.o zl303xx_DebugDpll73x.o
+
+OBJECTS_zls3077x_zlutils = zl303xx_DebugMisc.o zl303xx_DebugDpll77x.o
+
+OBJECTS_zlutils = $(sort $(if $(MODULE_ZLS30387), $(OBJECTS_zls30387_zlutils)) \
+                         $(if $(MODULE_ZLS30361), $(OBJECTS_zls30361_zlutils)) \
+                         $(if $(MODULE_ZLS3073X), $(OBJECTS_zls3073x_zlutils)) \
+                         $(if $(MODULE_ZLS3077X), $(OBJECTS_zls3077x_zlutils)))
+
+# Compiler rules
+$(OBJECTS_zlutils): %.o: $(DIR_zls_base)/zlUserUtils/src/%.c
+	$(call compile_c,$(MODULE_ID_zl_3034x_pdv), $@, $<, $(ZL_BASE_DEFINES))
+
+## zlUserPorting
+## Files are common to all dpll types
+OBJECTS_zlporting = zl303xx_DataTypes.o zl303xx_OsTaskMon.o zl303xx_LogToMsgQ.o \
+                    zl303xx_LogBuffer.o zl303xx_Trace.o zl303xx_LibcAbstractions.o \
+
+
+# Compiler rules
+$(OBJECTS_zlporting): %.o: $(DIR_zls_base)/zlUserPorting/src/%.c
+	$(call compile_c,$(MODULE_ID_zl_3034x_pdv), $@, $<, $(ZL_BASE_DEFINES))
+
+## All zls/base objects
+OBJECTS_zls_base = $(OBJECTS_zlapi) $(OBJECTS_zlutils) $(OBJECTS_zlporting) $(OBJECTS_zlexamples) $(OBJECTS_zldpll)
+
+# libraries
+$(ZLS_BASE_LIB_FILENAME): $(OBJECTS_zls_base)
+	$(call what,Generating ZLS base library - $@)
+	$(Q)$(XAR) csr $@ $^
+else
+$(ZLS_BASE_LIB_FILENAME): $(BUILD)/vtss_libs/$(ZLS_BASE_LIB_FILENAME)
+	$(shell cp $(BUILD)/vtss_libs/$(ZLS_BASE_LIB_FILENAME) $(ZLS_BASE_LIB_FILENAME))
+	@echo "NOTE: ZLS sources unavailable, assuming binary (base) form only"
+endif
+
+# Platform
+# zls module interface (= sources in platform)
+OBJECTS_zls30387_platform =  zl_3038x_api_pdv.o zl_3038x_porting.o
+
+OBJECTS_zls30361_platform = zl_30361_api.o zl_30361_synce_clock_api.o              \
+                            zl_30361_synce_support.o zl_dpll_porting.o             \
+                            zl_3038x_porting.o zl_dpll_low_level_support.o         \
+                            $(if $(MODULE_ICLI),zl_30361_api_icli_functions.o)
+
+OBJECTS_zls3077x_platform = zl_3077x_api.o zl_3077x_synce_clock_api.o              \
+                            zl_3077x_synce_support.o zl_dpll_porting.o             \
+                            zl_3038x_porting.o zl_dpll_low_level_support.o         \
+                            $(if $(MODULE_ICLI),zl_3077x_api_icli_functions.o)
+
+OBJECTS_zls3073x_platform = zl_3073x_api.o zl_3073x_synce_clock_api.o              \
+                            zl_3073x_synce_support.o zl_dpll_porting.o             \
+                            zl_3038x_porting.o                                     \
+                            $(if $(MODULE_ZLS30341), ,zl_dpll_low_level_support.o) \
+                            $(if $(MODULE_ICLI),zl_3073x_api_icli_functions.o)
+
+OBJECTS_zls_platform = $(sort $(if $(MODULE_ZLS30387), $(OBJECTS_zls30387_platform)) \
+                              $(if $(MODULE_ZLS30361), $(OBJECTS_zls30361_platform)) \
+                              $(if $(MODULE_ZLS3073X), $(OBJECTS_zls3073x_platform)) \
+                              $(if $(MODULE_ZLS3077X), $(OBJECTS_zls3077x_platform)))
+
+$(OBJECTS_zls_platform): %.o: $(DIR_zls_platform)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_zl_3034x_pdv), $@, $<, $(ZL_BASE_DEFINES))
+
+# Module objects (Module core objects + Module platform objects)
+OBJECTS_zls = $(OBJECTS_zls_platform) $(OBJECTS_zls_base)
+
+$(OBJECTS_zls) : | build_api
+
+# Add this as a generated/used library
+LIB_FILES += $(ZLS_BASE_LIB_FILENAME)
+
+# Include files
+INCLUDES_zls3038x = -I$(DIR_zls_base)/zlApi/include -I$(DIR_zls_base)/zlApr/include -I$(DIR_zls_base)/zlUserPorting/include -I$(DIR_zls_base)/zlUserUtils/include -I$(DIR_zls_platform) -I$(DIR_zls_base)/zlDpll/include -I$(DIR_zls_base)/zlUserExamples/include
+
+INCLUDES += -I$(DIR_zls_platform) -I$(DIR_zls_base)/zlApi/include -I$(DIR_zls_base)/zlUserPorting/include -I$(DIR_zls_base)/zlDpll/include
+
+# Built-in ICLI
+$(eval $(if $(MODULE_ZLS30361), $(call add_icli,$(MODULE_ID_zl_3034x_pdv),$(DIR_zls_platform)/zl_30361_api.icli, $(INCLUDES_zls3038x))))
+$(eval $(if $(MODULE_ZLS3077X), $(call add_icli,$(MODULE_ID_zl_3034x_pdv),$(DIR_zls_platform)/zl_3077x_api.icli, $(INCLUDES_zls3038x))))
+$(eval $(if $(MODULE_ZLS3073X), $(call add_icli,$(MODULE_ID_zl_3034x_pdv),$(DIR_zls_platform)/zl_3073x_api.icli, $(INCLUDES_zls3038x))))
+

@@ -1,0 +1,74 @@
+########################################################-*- mode: Makefile -*-
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+# ------------------------------------------------------------------------
+
+# Files location
+MODULE_ID_ipmc_lib := 38 # VTSS_MODULE_ID_IPMC_LIB
+DIR_ipmc_lib       := $(DIR_APPL)/ipmc/lib
+
+# Module objects
+OBJECTS_ipmc_lib_ :=                                                    \
+  ipmc_lib.o                                                            \
+  ipmc_lib_base.o                                                       \
+  ipmc_lib_expose.o                                                     \
+  ipmc_lib_pdu.o                                                        \
+  ipmc_lib_trace.o                                                      \
+  ipmc_lib_utils.o                                                      \
+  $(call if-module,      smb_ipmc,             ipmc_lib_profile.o)      \
+  $(call if-all-modules, smb_ipmc web,         ipmc_lib_profile_web.o)  \
+  $(call if-all-modules, smb_ipmc json_rpc,    ipmc_lib_profile_json.o) \
+  $(call if-all-modules, smb_ipmc private_mib, ipmc_lib_profile_mib.o)
+
+# Get rid of duplicate files by using sort()
+OBJECTS_ipmc_lib := $(sort $(OBJECTS_ipmc_lib_))
+
+# Compiler rules
+$(OBJECTS_ipmc_lib): %.o: $(DIR_ipmc_lib)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_ipmc_lib), $@, $<)
+
+INCLUDES += -I$(DIR_ipmc_lib)
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_ipmc_lib), $(foreach m, ipmc_lib, $(DIR_ipmc_lib)/$(m).icli)))
+
+# Web content generation
+WEB_CONTENT += $(DIR_ipmc_lib)/html
+
+# Tidy files
+TIDY_FILES_ipmc_lib := $(DIR_ipmc_lib)/html/*.htm $(DIR_ipmc_lib)/html/help/*.htm
+
+# JSlint files
+JSLINT_FILES_ipmc_lib := $(TIDY_FILES_ipmc_lib)
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/ipmc_lib.h
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_ipmc_lib +=     \
+  $(DIR_ipmc_lib)/*.h                     \
+  $(DIR_ipmc_lib)/*.cxx                   \
+  $(DIR_ipmc_lib)/*.hxx                   \
+  $(DIR_APPL)/include/vtss/appl/ipmc_lib.h
+

@@ -1,0 +1,72 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+DIR_sflow := $(DIR_APPL)/sflow
+MODULE_ID_sflow := 83 # VTSS_MODULE_ID_SFLOW
+
+OBJECTS_sflow_c := sflow.o                      \
+  $(call if-module,web,sflow_web.o)             \
+  $(call if-module,icli,sflow_icli_functions.o) 
+
+OBJECTS_sflow_c +=  $(call if-module,snmp,sflow_snmp.o)
+
+OBJECTS_sflow_cxx := sflow_expose.o \
+  $(if $(MODULE_JSON_RPC),sflow_json.o)
+
+$(OBJECTS_sflow_c): %.o: $(DIR_sflow)/%.cxx $(BUILD)/make/module_sflow.in
+	$(call compile_cxx,$(MODULE_ID_sflow), $@, $<)
+
+$(OBJECTS_sflow_cxx): %.o: $(DIR_sflow)/%.cxx $(BUILD)/make/module_sflow.in
+	$(call compile_cxx,$(MODULE_ID_sflow), $@, $<)
+
+OBJECTS_sflow := $(OBJECTS_sflow_c) $(OBJECTS_sflow_cxx)
+#Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_sflow),$(DIR_sflow)/sflow.icli))
+
+INCLUDES += -I$(DIR_sflow)
+
+# Web Content Generation
+WEB_CONTENT += $(DIR_sflow)/html
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_sflow := \
+  $(DIR_sflow)/sflow.cxx \
+  $(DIR_sflow)/sflow_icli_functions.cxx \
+  $(DIR_sflow)/sflow_snmp.cxx \
+  $(DIR_sflow)/sflow_web.cxx \
+  $(DIR_sflow)/*.h
+
+# Tidy files
+TIDY_FILES_sflow += $(DIR_sflow)/html/*.htm $(DIR_sflow)/html/help/*.htm
+
+# JSlint files
+JSLINT_FILES_sflow := $(TIDY_FILES_sflow)
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/sflow.h
+

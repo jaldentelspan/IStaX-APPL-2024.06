@@ -1,0 +1,64 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2018 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+DIR_vtss_appl := $(TOP)/vtss_api/appl
+MODULE_ID_vtss_appl := 4 # VTSS_MODULE_ID_MAIN
+
+OBJECTS_vtss_appl := vtss_appl.o vtss_appl_otn.o vtss_appl_trace.o vtss_version.o
+
+OBJECTS_vtss_appl += vtss_appl_cli.o vtss_appl_switch_cli.o vtss_appl_otn_cli.o
+OBJECTS_vtss_appl += vtss_appl_board_daytona.o
+OBJECTS_vtss_appl += vtss_appl_board_leda.o
+
+$(OBJECTS_vtss_appl) : | build_api
+.PHONY: always
+
+# Module target list
+TARGETS_vtss_appl := $(OBJECTS) vtss_appl.elf vtss_appl.bin
+
+vtss_appl.elf vtss_appl.bin vtss_version.o: always
+
+# Specific rules - main target
+vtss_appl.elf: $(OBJECTS) $(LIB_FILES)
+	$(call what,Linking $@)
+	$(Q)$(XLD) $(LDFLAGS) $(LIB_LINK_FLAGS_EXTERNAL) $(OBJECTS) -o $@
+
+$(OBJECTS_vtss_appl): %.o: $(DIR_vtss_appl)/%.c
+	$(call compile_c,$(MODULE_ID_vtss_appl), $@, $<)
+
+CTIME := $(shell perl -w ../make/compile_time.pl)
+ifndef RELEASE_VERSION
+RELEASE_VERSION := dev-build by $(USER)@$(HOSTNAME) $(CTIME)
+endif
+
+# Don't use FDMA
+DEFINES += -DSW_RELEASE="$(RELEASE_VERSION)" -DCOMPILE_TIME="$(CTIME)" -DVTSS_OPT_FDMA=0
+
+# Include files
+INCLUDES += -I$(DIR_vtss_appl)
+

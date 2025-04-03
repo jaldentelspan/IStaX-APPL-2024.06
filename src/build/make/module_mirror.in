@@ -1,0 +1,75 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+
+# Files Location
+DIR_mirror := $(DIR_APPL)/mirror
+MODULE_ID_mirror := 15 # VTSS_MODULE_ID_MIRROR
+
+# Module objects
+OBJECTS_mirror_core := mirror.o mirror_basic.o \
+$(if $(MODULE_WEB),mirror_web.o) \
+$(if $(MODULE_ICFG),mirror_icfg.o)
+
+OBJECTS_mirror_cxx := mirror_expose.o         \
+  $(call if-module, private_mib, mirror_mib.o) \
+  $(call if-module, json_rpc, mirror_json.o)
+
+OBJECTS_mirror := $(OBJECTS_mirror_core) $(OBJECTS_mirror_cxx)
+
+# Compiler rules
+$(OBJECTS_mirror_core): %.o: $(DIR_mirror)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_mirror), $@, $<)
+
+$(OBJECTS_mirror_cxx): %.o: $(DIR_mirror)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_mirror), $@, $<,)
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_mirror),$(foreach m, mirror,$(DIR_mirror)/$(m).icli)))
+
+# Include files
+INCLUDES += -I$(DIR_mirror)
+
+# Web content generation
+WEB_CONTENT += $(DIR_mirror)/html
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_mirror += $(DIR_mirror)/mirror.cxx \
+                                    $(DIR_mirror)/mirror_basic.cxx \
+                                    $(DIR_mirror)/mirror_icfg.cxx \
+                                    $(DIR_mirror)/mirror_web.cxx \
+                                    $(DIR_mirror)/*.h
+
+# Tidy files
+TIDY_FILES_mirror += $(DIR_mirror)/html/*.htm $(DIR_mirror)/html/help/*.htm
+
+# JSlint files
+JSLINT_FILES_mirror += $(DIR_mirror)/html/*.htm $(DIR_mirror)/html/help/*.htm
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/mirror.h

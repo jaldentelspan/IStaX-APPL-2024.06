@@ -1,0 +1,699 @@
+# -*- mode: makefile-gmake; -*-
+#
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+include $(BUILD)/make/templates/base.in
+include $(BUILD)/make/templates/targets.in
+
+##################################################################
+#
+# Customization Support
+# =====================
+#
+# $(Custom/SwitchName)  - GUI Product name
+#
+# $(Custom/SwitchDesc)  - GUI Product description
+#
+# $(Custom/Defines)     - Product specific defines (CFLAGS)
+#
+# $(Custom/linuxRemovePackages) - Removes linux packages (from linux config)
+#
+# $(Custom/AddModules)  - Adds specific modules to build
+#
+# $(Custom/OmitModules) - Removes specific modules from build
+#
+# $(Custom/DefaultConfig) - Use specific default configuration text file
+#
+# $(Custom/MibPrefix) - Prefix to be used when generating MIBs. Default is VTSS (case sensitive)
+#
+# $(Custom/MibEnterpriseName) - Private enterprise Name. Default is vtss (case sensitive). Note it can be different with $(Custom/MibPrefix)
+#
+# $(Custom/MibEnterpriseOid) - Private enterprise OID number. Default is 6603
+#
+# $(Custom/MibEnterpriseProductName) - Private enterprise product name. Default is vtssSwitchMgmt (case sensitive)
+#
+# $(Custom/MibEnterpriseProductId) - Private enterprise product ID. Default is 1
+#
+# $(Custom/WebDir)      - Customization overlay directory for WebGUI
+#
+# $(Custom/NoHtmlCompress) - Disable YUI HTML compression (requires Java)
+#
+# $(Custom/SnmpHeadLineDescPrefix) - The prefix string of headline description in private MIB. Default is Microsemi ENT e.g. 'PORT-MIB: Microsemi ENT private MIB'
+#
+# $(Custom/SnmpContact)     - The value of CONTACT-INFO clause in MODULE-IDENTITY macro (requires private MIB)
+#
+# $(Custom/SnmpOrganisation) - The value of ORGANIZATION clause in MODULE-IDENTITY macro (requires private MIB)
+#
+# $(Custom/Stage2) - Stage2 compilation flavor: debug, clang, minimal, smb
+#
+# $(Custom/Meba) - Custom MEBA (board interface) library
+#
+# $(Custom/MebaSrc) - Custom MEBA implementation source file
+#
+##################################################################
+
+##################################################################
+#
+# linux Switch Build configuration
+#
+##################################################################
+VTSS_OS := Linux
+
+# The exhaustive list of supported software configurations (product types)
+PNAME_BRINGUP              := Bringup
+PNAME_DEFAULT              := Default
+PNAME_WEBSTAX              := WebStaX
+PNAME_SMBSTAX              := SMBStaX
+PNAME_ISTAX                := IStaX
+PNAME_ISTAX380             := IStaX38x
+PNAME_ISTAXMACSEC          := IStaXMACsec
+
+# Ordinals for the above configurations (7 bits - bit 8 is stacking/nonstacking)
+SW_ID_BRINGUP              := 1
+SW_ID_DEFAULT              := 1
+SW_ID_WEBSTAX              := 2
+SW_ID_SMBSTAX              := 3
+SW_ID_ISTAX                := 5
+SW_ID_ISTAX380             := 6
+SW_ID_ISTAXMACSEC          := 7
+
+# @arg $1 is board target
+# @arg $2 is chip target
+# @return the appropriate target codename for the (board,chip) combination
+define linuxSwitch/TargetName
+$(strip $(if $(filter $1,BOARD_LUTON10_REF),luton10)
+	$(if $(filter $1,BOARD_LUTON26_REF),luton26)
+	$(if $(filter $1,BOARD_OCELOT_REF),ocelot)
+	$(if $(filter $1,BOARD_JAGUAR2_REF BOARD_JAGUAR2_CU48_REF BOARD_JAGUAR2_AQR_REF),jaguar2c)
+	$(if $(filter $1,BOARD_SERVAL2_REF),serval2)
+	$(if $(filter $1,BOARD_SERVALT_REF),servalt)
+	$(if $(filter $1,BOARD_JAGUAR2_REF BOARD_JAGUAR2_CU48_REF BOARD_JAGUAR2_AQR_REF),ls1046)
+	$(if $(filter $1,BOARD_UNDEF),jaguar2c)
+)
+endef
+
+# Chip -> machine
+MACHINE_luton10  := vcoreiii
+MACHINE_luton26  := vcoreiii
+MACHINE_jaguar2  := vcoreiii
+MACHINE_serval2  := vcoreiii
+MACHINE_servalt  := vcoreiii
+MACHINE_jaguar2c := vcoreiii
+MACHINE_ocelot   := vcoreiii
+MACHINE_ls1046   := ls1046
+MACHINE_sparx5   := sparx5
+MACHINE_lan966x  := lan966x
+MACHINE_lan969x  := lan969x
+MACHINE_bbb      := bbb
+
+# Chip -> kernel
+KERNEL_luton10  := vcoreiii
+KERNEL_luton26  := vcoreiii
+KERNEL_jaguar2  := vcoreiii
+KERNEL_serval2  := vcoreiii
+KERNEL_servalt  := vcoreiii
+KERNEL_jaguar2c := vcoreiii
+KERNEL_ocelot   := vcoreiii
+KERNEL_ls1046   := xstax
+KERNEL_sparx5   := xstax
+KERNEL_lan966x  := xstax
+KERNEL_lan969x  := xstax
+KERNEL_bbb      := standalone
+
+# Chip -> Chip no.
+CHIPNO_luton10  := 2
+CHIPNO_luton26  := 2
+CHIPNO_jaguar2  := 5
+CHIPNO_serval2  := 7
+CHIPNO_servalt  := 6
+CHIPNO_jaguar2c := 7
+CHIPNO_ocelot   := 8
+
+# Chip -> SOC family (currently don't care)
+SOCFAM_luton10  := luton26
+SOCFAM_luton26  := luton26
+SOCFAM_jaguar2  := jaguar2
+SOCFAM_serval2  := jaguar2
+SOCFAM_servalt  := servalt
+SOCFAM_jaguar2c := jaguar2
+SOCFAM_ocelot   := ocelot
+
+VTSS_TRACE_LVL_MIN_BRINGUP     := 8
+VTSS_TRACE_LVL_MIN_DEFAULT     := 0
+VTSS_TRACE_LVL_MIN_WEBSTAX     := 0
+VTSS_TRACE_LVL_MIN_SMBSTAX     := 0
+VTSS_TRACE_LVL_MIN_ISTAX       := 0
+VTSS_TRACE_LVL_MIN_ISTAX380    := 0
+VTSS_TRACE_LVL_MIN_ISTAXMACSEC := 0
+
+# @arg $1 is target name (SDK/platform)
+# @arg $2 is CPU target
+define Setup/LinuxTarget
+	$(call CheckOneOf,$1,linux-intel brsdk,Target Name)
+	$(call CheckOneOf,$2,mipsel arm64 arm intel,CPU Target)
+  # This defines paths and target rules preamble/postamble
+	TARGET := $1
+	MSCC_SDK_ARCH := $2
+endef
+
+# @arg $1 is target name (SDK/platform)
+# @arg $2 is CPU target
+define linuxSwitch/TargetDefines
+ $(if $(filter $2,mipsel),,-DVTSS_OPT_VCORE_III=0)
+endef
+
+# Software Identification Number - an integer ordinal
+# @arg $1 - Product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+define linuxSwitch/SoftwareId
+$(if $(Custom/SwitchSwId),$(Custom/SwitchSwId),$(SW_ID_$1))
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+# Build configuration profiles
+define linuxSwitch/Modules/BRINGUP
+  $(call linuxSwitch/Modules/BRINGUP/$1,$2)    \
+  backtrace board conf firmware icfg icli ip   \
+  main meba misc msg packet optional_modules   \
+  port sprout stage2_loader symreg sysutil     \
+  thread_load_monitor timer util vtss_api      \
+  vtss_basics
+
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+# Build configuration profiles
+define linuxSwitch/Modules/DEFAULT
+  $(call linuxSwitch/Modules/BRINGUP,$1,$2) \
+  $(call linuxSwitch/Modules/DEFAULT/$1,$2) \
+  mirror syslog thermal_protect phy cpuport kr led_pow_reduc
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/Modules/WEBSTAX
+  $(call linuxSwitch/Modules/DEFAULT,$1,$2)  \
+  $(call linuxSwitch/Modules/WEBSTAX/$1,$2)  \
+  access_mgmt acl aggr auth dot1x eee fan    \
+  ipmc json_rpc l3rt lacp led_pow_reduc lldp \
+  loop_detect loop_protection mac mstp       \
+  nas_mac_based poe port_power_savings qos   \
+  snmp vlan web pvlan
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/Modules/SMBSTAX
+  $(call linuxSwitch/Modules/WEBSTAX,$1,$2) \
+  $(call linuxSwitch/Modules/SMBSTAX/$1,$2) \
+  alarm                                     \
+  arp_inspection                            \
+  build_smb                                 \
+  cdp                                       \
+  cli_telnet                                \
+  daylight_saving                           \
+  ddmi                                      \
+  dhcp6_client                              \
+  dhcp6_relay                               \
+  dhcp_relay                                \
+  dhcp_server                               \
+  dhcp_snooping                             \
+  dhcp6_snooping                            \
+  dns                                       \
+  dot1x_acct                                \
+  frr_ospf                                  \
+  frr_ospf6                                 \
+  frr_rip                                   \
+  gvrp                                      \
+  ip_source_guard                           \
+  ipv6_source_guard                         \
+  ipv6                                      \
+  json_ipc                                  \
+  json_rpc_notification                     \
+  lldp_med                                  \
+  mvr                                       \
+  mvrp                                      \
+  nas_dot1x_multi                           \
+  nas_dot1x_single                          \
+  nas_options                               \
+  ntp                                       \
+  priv_lvl                                  \
+  psec                                      \
+  radius                                    \
+  rmirror                                   \
+  rmon                                      \
+  sflow                                     \
+  smb_ipmc                                  \
+  smb_snmp                                  \
+  smon                                      \
+  ssh                                       \
+  tacplus                                   \
+  udld                                      \
+  upnp                                      \
+  users                                     \
+  vcl                                       \
+  vlan_translation                          \
+  voice_vlan
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/Modules/ISTAX
+  $(call linuxSwitch/Modules/SMBSTAX,$1,$2) \
+  $(call linuxSwitch/Modules/ISTAX/$1,$2)   \
+  build_istax                               \
+  afi                                       \
+  aps                                       \
+  cfm                                       \
+  erps                                      \
+  eth_link_oam                              \
+  iec_mrp                                   \
+  p802_1_as private_mib                     \
+  private_mib_gen                           \
+  ptp                                       \
+  redbox                                    \
+  synce                                     \
+  tsn                                       \
+  tsn_frer                                  \
+  tsn_psfp                                  \
+  zls30361                                  \
+  zls30387                                  \
+  zls3077x                                  \
+  zls3073x
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/Modules/ISTAX380
+  $(call linuxSwitch/Modules/ISTAX,$1,$2)    \
+  $(call linuxSwitch/Modules/ISTAX380/$1,$2) \
+  build_istax38x                             \
+  zls30380
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/Modules/ISTAXMACSEC
+  $(call linuxSwitch/Modules/ISTAX,$1,$2)       \
+  $(call linuxSwitch/Modules/ISTAXMACSEC/$1,$2) \
+  build_istaxmacsec                             \
+  macsec
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/OmitModules/WEBSTAX
+  $(call linuxSwitch/OmitModules/LINUX)         \
+  $(call linuxSwitch/OmitModules/DEFAULT/$1,$2) \
+  $(call linuxSwitch/OmitModules/WEBSTAX/$1,$2)
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/OmitModules/SMBSTAX
+  $(call linuxSwitch/OmitModules/LINUX)         \
+  $(call linuxSwitch/OmitModules/DEFAULT/$1,$2) \
+  $(call linuxSwitch/OmitModules/SMBSTAX/$1,$2)
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/OmitModules/ISTAX
+  $(call linuxSwitch/OmitModules/LINUX)         \
+  $(call linuxSwitch/OmitModules/DEFAULT/$1,$2) \
+  $(call linuxSwitch/OmitModules/ISTAX/$1,$2)
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/OmitModules/ISTAX380
+  $(call linuxSwitch/OmitModules/LINUX)          \
+  $(call linuxSwitch/OmitModules/DEFAULT/$1,$2)  \
+  $(call linuxSwitch/OmitModules/ISTAX380/$1,$2)
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is stackable type    (STACKABLE, STANDALONE)
+define linuxSwitch/OmitModules/ISTAXMACSEC
+  $(call linuxSwitch/OmitModules/LINUX)          \
+  $(call linuxSwitch/OmitModules/DEFAULT/$1,$2)  \
+  $(call linuxSwitch/OmitModules/ISTAXMACSEC/$1,$2)
+endef
+
+# Omit platform-dependent modules
+# @arg $1 is architecture type (Luton26, Serval)
+define linuxSwitch/OmitPlatformModules/linux-intel
+  firmware
+endef
+
+# @arg $1 is the list of modules
+# @returns $1 and any required helper modules
+define linuxSwitch/Modules/AddHelpers
+  $1 \
+  $(if $(filter aggr dot1x lacp mstp lldp,$1),l2proto)                               \
+  $(if $(filter dhcp_server dhcp_snooping dhcp_relay,$1),dhcp_helper)                \
+  $(if $(filter dot1x,$1),radius)                                                    \
+  $(if $(filter dot1x icli mstp tacplus,$1),md5)                                     \
+  $(if $(filter frr_rip,$1),frr_router)                                              \
+  $(if $(filter gvrp,$1),garp xxrp)                                                  \
+  $(if $(filter icli,$1),cli)                                                        \
+  $(if $(filter ip,$1),dhcp_client frr ip_misc l2proto subject vlan)                 \
+  $(if $(filter ip_source_guard,$1),dhcp_snooping dhcp_helper)                       \
+  $(if $(filter ipv6_source_guard,$1),dhcp6_snooping)                                \
+  $(if $(filter ipmc mvr,$1),ipmc_lib)                                               \
+  $(if $(filter json_rpc,$1),fast_cgi)                                               \
+  $(if $(filter mvrp,$1),mrp xxrp)                                                   \
+  $(if $(filter nas_dot1x_multi nas_dot1x_single nas_options nas_mac_based ,$1),nas) \
+  $(if $(filter ptp,$1),tod)                                                         \
+  $(if $(filter ptp synce,$1),synce_dpll)                                            \
+  $(if $(filter tsn_psfp tsn_frer,$1),stream)                                        \
+  $(if $(filter rmirror,$1),mirror)                                                  \
+  $(if $(filter sflow,$1),timer)                                                     \
+  $(if $(filter voice_vlan dhcp_snooping nas_mac_based,$1),psec psec_limit)          \
+  $(if $(filter web,$1),webcontent fast_cgi)                                         \
+  $(if $(filter zls30380 zls30387,$1),zls)
+endef
+
+# @arg $1 is architecture type (Luton26, Serval)
+# @arg $2 is product type      (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $3 is stackable type    (STACKABLE, STANDALONE)
+# @arg $4 is target SDK name   (brsdk, linux-intel)
+define linuxSwitch/Modules
+$(sort $(call linuxSwitch/Modules/AddHelpers,     \
+  $(filter-out                                    \
+    $(Custom/OmitModules)                         \
+    $(call linuxSwitch/OmitPlatformModules/$4,$1) \
+    $(call linuxSwitch/OmitModules/$2,$1,$3),     \
+    $(Custom/AddModules)                          \
+    $(call linuxSwitch/Modules/$2,$1,$3))))
+endef
+
+# Return list of all available modules
+define AllModules
+	$(sort $(patsubst module_%.in,%,$(notdir $(wildcard $(BUILD)/make/module_*.in))))
+endef
+
+# @arg $1 is modules enabled
+define linuxSwitch/DisabledModules
+ $(sort $(filter-out $1, $(call AllModules)))
+endef
+
+# @arg $1 is product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is architecture defines
+# Note: The OS_LINUX define below is required by the Microsemi/Zarlink servo/filter (MS-PDV) for PTP
+define linuxSwitch/Defines
+ -DVTSS_BUILD_CONFIG_$1 \
+ -DVTSS_SW_ID=$(call linuxSwitch/SoftwareId,$1) \
+ -DOS_LINUX \
+ $2 $(Custom/Defines)
+endef
+
+define linuxSwitch/Build
+# Validate required variables
+$(call CheckSet,TARGET \
+       VTSS_PRODUCT_NAME VTSS_PRODUCT_NAME_GUI \
+       VTSS_PRODUCT_CHIP VTSS_PRODUCT_HW)
+
+PERSONALITY := $(VTSS_PRODUCT_NAME_GUI)
+
+# Application directory
+DIR_APPL := $(TOP)/vtss_appl
+
+# Start with default INCLUDES
+# -I$(TOP)/vtss_appl/util (RBNTBD)
+INCLUDES := -I$(TOP)/vtss_appl/include
+
+# Initial DEFINES list
+DEFINES := -DVTSS_OPSYS_LINUX \
+ $(if $(filter 1,$(VTSS_API_EXTERNAL)),-DVTSS_HAS_VTSS_API_CONFIG_H, \
+      -D$(VTSS_PRODUCT_HW) -DVTSS_CHIP_$(VTSS_PRODUCT_CHIP)) \
+ -DVTSS_PRODUCT_NAME="\"$(VTSS_PRODUCT_NAME_GUI)\"" \
+ -DVTSS_PRODUCT_DESC="\"$(VTSS_PRODUCT_DESC_GUI)\"" \
+ -DVTSS_SNMP_HEADLINE_DESC=$(if $(Custom/SnmpHeadLineDesc),'$(Custom/SnmpHeadLineDesc)',"\"Microsemi ENT private MIB\"") \
+ -DVTSS_SNMP_CONTACT=$(if $(Custom/SnmpContact),'$(Custom/SnmpContact)',"\"Application support: http://www.microchip.com/support\"") \
+ -DVTSS_SNMP_ORGANISATION=$(if $(Custom/SnmpOrganisation),'$(Custom/SnmpOrganisation)',"\"Microsemi Corporation\"") \
+ $(ARCH_FEATURE_FLAGS) \
+ $(if $(filter debug,$(Custom/Stage2)),-DVTSS_SW_OPTION_DEBUG)
+endef
+
+# @arg $1 is architecture type (Luton26, Serval, Jaguar2, ServalT)
+# @arg $2 is product type      (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $3 is stackable type    (STACKABLE, STANDALONE)
+# @arg $4 is target SDK name
+# @arg $5 is additional defines
+define linuxSwitch/Product
+ # Product Stackable - STACKABLE or STANDALONE
+ VTSS_PRODUCT_STACKABLE := $3
+ $(call CheckOneOf,$3,STACKABLE STANDALONE,Stack Type)
+ # Product Type
+ VTSS_PRODUCT_NAME := $2
+ # Architecture Type
+ VTSS_ARCHITECTURE_TYPE := $1
+ # Product Name
+ $(if $(PNAME_$2),,$(error Unknown build type $2))
+ VTSS_PRODUCT_NAME_GUI := $(if $(Custom/SwitchName),$(Custom/SwitchName),$(PNAME_$2))
+ VTSS_PRODUCT_DESC_GUI := $(if $(Custom/SwitchDesc),$(Custom/SwitchDesc),GigaBit Ethernet Switch)
+ VTSS_SOFTWARE_ID      := $(call linuxSwitch/SoftwareId,$2)
+ # Modules - Product, architecture-wise and helpers
+ MODULES := $(call linuxSwitch/Modules,$1,$2,$3,$4)
+ MODULES_DISABLED := $(call linuxSwitch/DisabledModules,$(call linuxSwitch/Modules,$1,$2,$3,$4))
+ # Defines - Product and architecture-wise
+ ARCH_FEATURE_FLAGS := $(call linuxSwitch/Defines,$2,$5) -DVTSS_TRACE_LVL_MIN=$(VTSS_TRACE_LVL_MIN_$2)
+ # Stage2 compilation flavor
+ MSCC_SDK_FLAVOR := $(if $(Custom/Stage2),$(Custom/Stage2),$(if $(filter BRINGUP,$2),minimal,smb))
+endef
+
+# @arg $1 is product type      (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is target SDK name
+# @arg $3 is additional defines
+define linuxSwitch/ProductX
+ # Product Stackable - STACKABLE or STANDALONE
+ VTSS_PRODUCT_STACKABLE := STANDALONE
+ # Product Type
+ VTSS_PRODUCT_NAME := $1
+ # Product Name
+ $(if $(PNAME_$1),,$(error Unknown build type $1))
+ VTSS_PRODUCT_NAME_GUI := $(if $(Custom/SwitchName),$(Custom/SwitchName),$(PNAME_$1))
+ VTSS_PRODUCT_DESC_GUI := $(if $(Custom/SwitchDesc),$(Custom/SwitchDesc),GigaBit Ethernet Switch)
+ VTSS_SOFTWARE_ID      := $(call linuxSwitch/SoftwareId,$1)
+ # Modules - Product, architecture-wise and helpers
+ MODULES := $(call linuxSwitch/Modules,$1,$2)
+ MODULES_DISABLED := $(call linuxSwitch/DisabledModules,$(call linuxSwitch/Modules,$1,$2))
+ # Defines - Product and architecture-wise
+ ARCH_FEATURE_FLAGS := $(call linuxSwitch/Defines,$2,$3)
+ # Stage2 compilation flavor
+ MSCC_SDK_FLAVOR := $(if $(Custom/Stage2),$(Custom/Stage2),$(if $(filter BRINGUP,$2),minimal,smb))
+endef
+
+##################################################################
+#
+# Luton26 Support
+# ===============
+#
+# Chipsets: CARACAL_LITE VSC7423
+#           SPARX_III_10 VSC7424
+#           SPARX_III_18 VSC7425
+#           SPARX_III_24 VSC7426
+#           SPARX_III_26 VSC7427
+#           CARACAL_1    VSC7428
+#           CARACAL_2    VSC7429
+#
+# Boards:   BOARD_LUTON26_REF
+#           BOARD_LUTON10_REF
+#
+##################################################################
+
+define linuxSwitch/Modules/BRINGUP/Luton26
+endef
+
+# Here we define things not included in non-Lu26 builds.
+define linuxSwitch/Modules/DEFAULT/Luton26
+endef
+
+# Modules not supported on Luton26
+define linuxSwitch/OmitModules/DEFAULT/Luton26
+endef
+
+# @arg $1 is product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is chip type    (SPARX_III_10, SPARX_III_26, CARACAL_1, CARACAL_2)
+# @arg $3 is board name   (BOARD_LUTON10_REF, BOARD_LUTON26_REF)
+# @arg $4 is target platform name
+# @arg $5 is CPU target name
+# Additional modules must be added with Custom/AddModules
+# Additional defines must be added with Custom/Defines
+define linuxSwitch/Luton26
+	$(call CheckBoard,$3,BOARD_LUTON26_REF BOARD_LUTON10_REF)
+	$(call Setup/Switch,$2,$3)
+	$(call Setup/LinuxTarget,$4,$5)
+	$(call linuxSwitch/Product,Luton26,$1,STANDALONE,$4,$(call linuxSwitch/TargetDefines,$4,$5))
+endef
+
+##################################################################
+#
+# Serval Support
+# ==============
+#
+# Chipsets: SERVAL VSC7418
+#
+# Boards:   BOARD_SERVAL_REF
+#
+##################################################################
+
+# @arg $1 is stackable type (STACKABLE, STANDALONE)
+# Add modules one-by-one when bringing up a new target.
+define linuxSwitch/Modules/BRINGUP/Serval
+endef
+
+# @arg $1 is product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is chip type    (SERVAL)
+# @arg $3 is board name   (BOARD_SERVAL_REF)
+# @arg $4 is SDK type
+# @arg $5 is target arch
+# Additional modules must be added with Custom/AddModules
+# Additional defines must be added with Custom/Defines
+define linuxSwitch/Serval
+	$(call CheckBoard,$3,BOARD_SERVAL_REF)
+	$(call Setup/Switch,$2,$3)
+	$(call Setup/LinuxTarget,$4,$5)
+	$(call linuxSwitch/Product,Serval,$1,STANDALONE,$4,$(call linuxSwitch/TargetDefines,$4,$5) -DVTSS_OPT_AFI_OPTIMIZE_FOR_TIMERS=1)
+endef
+
+##################################################################
+#
+# Jaguar2 Support
+# ===============
+#
+# Chipsets: SparX-IV-52 VSC7442
+#           SparX-IV-44 VSC7444
+#           SparX-IV-80 VSC7448
+#           SparX-IV-90 VSC7449
+#           Serval-2    VSC7438
+#           Lynx-2      VSC7464
+#           Jaguar-2    VSC7468
+#
+# Boards:   BOARD_SERVAL2_REF      (15 ports)
+#           BOARD_JAGUAR2_REF      (29 ports)
+#           BOARD_JAGUAR2_CU48_REF (51 or 53 ports, 53 is the new one made for VSC7449)
+#
+##################################################################
+
+# @arg $1 is stackable type (STACKABLE, STANDALONE)
+# Add modules one-by-one when bringing up a new target.
+define linuxSwitch/Modules/BRINGUP/Jaguar2
+endef
+
+# @arg $1 is product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is board type   (BOARD_SERVAL2_REF BOARD_JAGUAR2_REF BOARD_JAGUAR2_CU48_REF BOARD_JAGUAR2_AQR_REF)
+# @arg $3 is chip type    (JAGUAR_2 SERVAL_2)
+# @arg $4 is target name
+# @arg $5 is CPU target name
+# Additional modules must be added with Custom/AddModules
+# Additional defines must be added with Custom/Defines
+define linuxSwitch/Jaguar2c
+	$(call CheckOneOf,$2,BOARD_SERVAL2_REF BOARD_JAGUAR2_REF BOARD_JAGUAR2_CU48_REF BOARD_JAGUAR2_AQR_REF,Board Type)
+	$(call Setup/Switch,$3,$2)
+	$(call Setup/LinuxTarget,$4,$5)
+	$(call linuxSwitch/Product,Jaguar2,$1,STANDALONE,$4, $(call linuxSwitch/TargetDefines,$4,$5))
+endef
+
+##################################################################
+#
+# ServalT Support
+# ===============
+#
+# Chipsets: Serval-T      VSC7410
+#           Serval-TP     VSC7415
+#           Serval-TE     VSC7430
+#           Serval-TEP    VSC7435
+#           Serval-2 Lite VSC7436
+#           Serval-TE10   VSC7437
+#           SparX-IV-34   VSC7440
+#
+# Boards:   BOARD_SERVALT_REF (9 ports)
+#
+##################################################################
+# Add modules one-by-one when bringing up a new target.
+define linuxSwitch/Modules/BRINGUP/ServalT
+endef
+
+define linuxSwitch/OmitModules/DEFAULT/ServalT
+  led_pow_reduc
+endef
+
+# @arg $1 is product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is personality  (STANDALONE, STACKABLE)
+# @arg $3 is chip type    (ServalT)
+# @arg $4 is target name
+# @arg $5 is CPU target name
+# Additional modules must be added with Custom/AddModules
+# Additional defines must be added with Custom/Defines
+define linuxSwitch/ServalT
+	$(call Setup/Switch,$3,BOARD_SERVALT_REF)
+	$(call Setup/LinuxTarget,$4,$5)
+	$(call linuxSwitch/Product,ServalT,$1,$2,$4, $(call linuxSwitch/TargetDefines,$4,$5))
+endef
+
+##################################################################
+#
+# Ocelot Support
+# ==============
+#
+# Chipsets: VSC751x
+#
+# Boards:   ....
+#
+##################################################################
+
+define linuxSwitch/Modules/BRINGUP/Ocelot
+endef
+
+define linuxSwitch/OmitModules/DEFAULT/Ocelot
+  fan led_pow_reduc
+endef
+
+# @arg $1 is product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is chip type    (7511, 7512, 7513, 7514)
+# @arg $3 is SDK target name
+# @arg $4 is CPU target name
+# Additional modules must be added with Custom/AddModules
+# Additional defines must be added with Custom/Defines
+define linuxSwitch/Ocelot
+	$(call Setup/Switch,$2,BOARD_OCELOT_REF)
+	$(call Setup/LinuxTarget,$3,$4)
+	$(call linuxSwitch/Product,Ocelot,$1,STANDALONE,$3,$(call linuxSwitch/TargetDefines,$3,$4))
+endef
+
+# @arg $1 is product type (BRINGUP, WEBSTAX, SMBSTAX, ISTAX, ISTAX38X, ISTAXMACSEC)
+# @arg $2 is SDK target name
+# @arg $3 is CPU target name
+# Additional modules must be added with Custom/AddModules
+# Additional defines must be added with Custom/Defines
+define linuxSwitch/Multi
+	$(call Setup/Switch,UNDEF,BOARD_UNDEF)
+	$(call Setup/LinuxTarget,$2,$3)
+	$(call linuxSwitch/Product,Generic,$1,STANDALONE,$2)
+endef

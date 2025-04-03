@@ -1,0 +1,67 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+DIR_pvlan := $(DIR_APPL)/pvlan
+MODULE_ID_pvlan := 23 # VTSS_MODULE_ID_PVLAN
+
+OBJECTS_pvlan_basic := pvlan.o     \
+  $(if $(MODULE_WEB),pvlan_web.o)  \
+  $(if $(MODULE_ICFG),pvlan_icfg.o)
+OBJECTS_pvlan_serializer :=                 \
+  $(if $(MODULE_PRIVATE_MIB),pvlan_mib.o)   \
+  $(if $(MODULE_JSON_RPC),pvlan_json.o)
+
+OBJECTS_pvlan = $(OBJECTS_pvlan_basic) $(OBJECTS_pvlan_serializer)
+
+$(OBJECTS_pvlan_basic): %.o: $(DIR_pvlan)/%.cxx $(BUILD)/make/module_pvlan.in
+	$(call compile_cxx,$(MODULE_ID_pvlan), $@, $<)
+
+$(OBJECTS_pvlan_serializer): %.o: $(DIR_pvlan)/%.cxx $(BUILD)/make/module_pvlan.in
+	$(call compile_cxx,$(MODULE_ID_pvlan), $@, $<)
+
+INCLUDES += -I$(DIR_pvlan)
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_pvlan),$(foreach m, pvlan,$(DIR_pvlan)/$(m).icli)))
+
+# Web Content Generation
+WEB_CONTENT += $(DIR_pvlan)/html
+
+# Tidy files
+TIDY_FILES_pvlan += $(DIR_pvlan)/html/*.htm $(DIR_pvlan)/html/help/*.htm
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_pvlan :=  \
+  $(DIR_pvlan)/*.h \
+  $(DIR_pvlan)/pvlan.cxx \
+  $(DIR_pvlan)/pvlan_icfg.cxx \
+  $(DIR_pvlan)/pvlan_web.cxx \
+  $(if $(MODULE_PRIVATE_MIB),$(DIR_pvlan)/*.cxx) \
+  $(DIR_pvlan)/*.hxx
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/pvlan.h

@@ -1,0 +1,88 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# Files Location
+DIR_rmon := $(DIR_APPL)/rmon
+MODULE_ID_rmon := 92 # VTSS_MODULE_ID_RMON
+DIR_rmon_platform := $(DIR_APPL)/rmon/platform
+DIR_rmon_base := $(DIR_APPL)/rmon/base
+
+# Web content generation
+WEB_CONTENT += $(DIR_rmon_platform)/html
+
+OBJECTS_rmon_platform_cxx := rmon_expose.o \
+                    $(if $(MODULE_JSON_RPC),rmon_json.o)
+
+# Module platform objects
+OBJECTS_rmon_platform := 
+OBJECTS_rmon_platform +=  rmon.o rmon_timer.o \
+  vtss_rmon_porting.o                         \
+  $(if $(MODULE_WEB),rmon_web.o)              \
+  $(if $(MODULE_ICFG),rmon_icfg.o)
+
+OBJECTS_rmon_base := rmon_rows.o rmon_agutil.o
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_rmon), $(foreach m, rmon, $(DIR_rmon_platform)/$(m).icli)))
+
+$(OBJECTS_rmon_platform_cxx): %.o: $(DIR_rmon_platform)/%.cxx $(BUILD)/make/module_rmon.in
+	$(call compile_cxx,$(MODULE_ID_rmon), $@, $<)
+
+# Compiler rules
+$(OBJECTS_rmon_platform): %.o: $(DIR_rmon_platform)/%.cxx $(BUILD)/make/module_rmon.in
+	$(call compile_cxx,$(MODULE_ID_rmon), $@, $<, -D_KERNEL=1)
+
+$(OBJECTS_rmon_base): %.o: $(DIR_rmon_base)/%.cxx $(BUILD)/make/module_rmon.in
+	$(call compile_cxx,$(MODULE_ID_rmon), $@, $<, -D_KERNEL=1)
+
+# Include files
+INCLUDES += -I$(DIR_rmon_platform)
+INCLUDES += -I$(DIR_rmon_base)
+
+# Total list of objects
+OBJECTS_rmon := $(OBJECTS_rmon_platform) $(OBJECTS_rmon_platform_cxx)
+OBJECTS_rmon += $(OBJECTS_rmon_base)
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_rmon += \
+  $(DIR_rmon)/platform/rmon.cxx \
+  $(DIR_rmon)/platform/rmon_icfg.cxx \
+  $(DIR_rmon)/platform/rmon_timer.cxx \
+  $(DIR_rmon)/platform/rmon_web.cxx \
+  $(DIR_rmon)/platform/vtss_rmon_porting.cxx \
+  $(DIR_rmon_platform)/*.h \
+  $(DIR_rmon_base)/*.h
+
+# Tidy files
+TIDY_FILES_rmon += $(DIR_rmon_platform)/html/*.htm $(DIR_rmon_platform)/html/help/*.htm
+
+# JSLINT files
+JSLINT_FILES_rmon += $(DIR_rmon_platform)/html/*.htm $(DIR_rmon_platform)/html/help/*.htm
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/rmon.h

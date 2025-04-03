@@ -1,0 +1,1 @@
+configs/bringup_multi.mk

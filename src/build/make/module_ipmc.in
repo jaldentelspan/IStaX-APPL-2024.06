@@ -1,0 +1,64 @@
+########################################################-*- mode: Makefile -*-
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+# ------------------------------------------------------------------------
+
+# Files location
+MODULE_ID_ipmc := 69 # VTSS_MODULE_ID_IPMC
+DIR_ipmc       := $(DIR_APPL)/ipmc
+
+# Module objects
+OBJECTS_ipmc_ :=                                            \
+  ipmc.o                                                    \
+  $(call if-module, web,         ipmc_web.o)                \
+  $(call if-module, json_rpc,    ipmc_expose.o ipmc_json.o) \
+  $(call if-module, private_mib, ipmc_expose.o ipmc_mib.o)
+
+# Get rid of duplicate files by using sort()
+OBJECTS_ipmc := $(sort $(OBJECTS_ipmc_))
+
+# Compiler rules
+$(OBJECTS_ipmc): %.o: $(DIR_ipmc)/%.cxx $(BUILD)/make/module_ipmc.in
+	$(call compile_cxx,$(MODULE_ID_ipmc), $@, $<)
+
+INCLUDES += -I$(DIR_ipmc)
+
+# Web content generation
+WEB_CONTENT += $(DIR_ipmc)/html
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_ipmc), $(foreach m, ipmc, $(DIR_ipmc)/$(m).icli)))
+
+# Tidy files
+TIDY_FILES_ipmc := $(DIR_ipmc)/html/*.htm $(DIR_ipmc)/html/help/*.htm
+
+# JSlint files
+JSLINT_FILES_ipmc := $(TIDY_FILES_ipmc)
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_ipmc += \
+  $(DIR_ipmc)/*.h                 \
+  $(DIR_ipmc)/*.cxx               \
+  $(DIR_ipmc)/*.hxx
+

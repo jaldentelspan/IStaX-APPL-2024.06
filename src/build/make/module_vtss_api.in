@@ -1,0 +1,123 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# TODO: code-style
+
+MODULE_ID_vtss_api := 2 # VTSS_MODULE_ID_API_AI
+
+$(MESA_API_BASE):
+	sudo $(MESA_API_INSTALL) $(MESA_API_NAME)
+
+ifneq ("$(wildcard $(TOP)/vtss_api)","")
+# Use locally bundled API ######################################################
+ifneq ("$(wildcard $(API_PATH)/bin)","")
+# Use pre-build binary API #####################################################
+build_api:
+	$(info )
+	$(info )
+	$(info ******************************************************************************)
+	$(info * WARNING!!!)
+	$(info * A pre-built binary API is being used. Changes to the vtss_api source files)
+	$(info * will not have any effect.)
+	$(info *)
+	$(info * The pre-built binary API is located at:)
+	$(info * $(API_ABS_PATH)/bin)
+	$(info *)
+	$(info * To build the API from source, delete the binary API by using the command:)
+	$(info * rm -rf $(API_ABS_PATH)/bin)
+	$(info ******************************************************************************)
+	$(info )
+	$(info )
+
+else
+# Build API from source ########################################################
+ifeq (,$(findstring -DVTSS_SW_OPTION_DEBUG,$(DEFINES)))
+# Build API from source as a static library ####################################
+build_api:
+	$(info Using source API from $(API_PATH) and targets: "$(TARGET_LIST)")
+	$(info Building API as a shared library)
+	$(Q) mkdir -p build_api
+	$(Q) (cd build_api &&                                                                     \
+	      cmake -Wno-dev $(MSCC_SDK_CMAKE_TC) -DBUILD_MESA_DEMO=false                         \
+	            $(sort $(foreach t,$(TARGET_LIST),-D$(cfg_api_$(t))=true))                    \
+	            $(sort $(foreach t,$(TARGET_LIST),-DBUILD_MEBA_STATIC_$(cfg_meba_$(t))=true)) \
+	            $(TOPABS)/vtss_api &&                                                         \
+	      cmake $(TOPABS)/vtss_api)
+	$(Q)$(MAKE) -C build_api
+else
+ifeq (,$(findstring -DVTSS_SW_OPTION_ASAN,$(DEFINES)))
+# Build API from source as a static library with debug symbols #################
+build_api:
+	$(info Using source API from $(API_PATH) and targets: "$(TARGET_LIST)")
+	$(info Building API as a static library)
+	$(Q) mkdir -p build_api
+	$(Q) (cd build_api &&                                                                     \
+	      cmake -Wno-dev $(MSCC_SDK_CMAKE_TC) -DBUILD_MESA_DEMO=false                         \
+	            $(sort $(foreach t,$(TARGET_LIST),-D$(cfg_api_$(t))_static=true ))            \
+	            $(sort $(foreach t,$(TARGET_LIST),-DBUILD_MEBA_STATIC_$(cfg_meba_$(t))=true)) \
+	            -DCMAKE_BUILD_TYPE=Debug                                                      \
+	            $(TOPABS)/vtss_api &&                                                         \
+	      cmake $(TOPABS)/vtss_api)
+	$(Q)$(MAKE) -C build_api
+else
+# Build API from source as a static library ####################################
+build_api:
+	$(info Using source API from $(API_PATH) and targets: "$(TARGET_LIST)")
+	$(info Building API as a static library, -DBUILD_ASAN=true)
+	$(Q) mkdir -p build_api
+	$(Q) (cd build_api &&                                                                      \
+	      cmake -Wno-dev $(MSCC_SDK_CMAKE_TC) -DBUILD_MESA_DEMO=false                          \
+	            $(sort $(foreach t,$(TARGET_LIST),-D$(cfg_api_$(t))_static=true ))             \
+	            $(sort $(foreach t,$(TARGET_LIST),-DBUILD_MEBA_STATIC_$(cfg_meba_$(t))=true )) \
+	            -DBUILD_MESA_LAYER=true -DCMAKE_BUILD_TYPE=Debug -DBUILD_ASAN=true             \
+	            $(TOPABS)/vtss_api &&                                                          \
+	      cmake $(TOPABS)/vtss_api)
+	$(Q)$(MAKE) -C build_api
+endif
+endif
+endif
+else
+# Use pre-installed binary API #################################################
+
+ifneq (,$(findstring -DVTSS_SW_OPTION_DEBUG,$(DEFINES)))
+$(error "vtss_api must be bundled with the application in order to build static libraries when compiling with debug")
+endif
+build_api: $(MESA_API_BASE)
+	$(info "Using binary API from $(API_BUILD_PATH)")
+
+endif
+
+INCLUDES += -I$(API_BUILD_PATH)/include_common
+ifeq ("$(words $(TARGET_LIST))", "1") # If this is a single-target build, allow vtss_api include
+INCLUDES += $(foreach t,$(TARGET_LIST), -I$(API_BUILD_PATH)/include_$(cfg_api_$(t)))
+endif
+
+API_LIB_DIR  := $(API_BUILD_PATH)
+
+export API_BUILD_PATH
+

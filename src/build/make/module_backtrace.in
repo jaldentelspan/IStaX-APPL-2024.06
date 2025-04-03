@@ -1,0 +1,111 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# ------------------------------------oOo------------------------------------
+# Prolog
+
+DIR_backtrace := $(DIR_APPL)/backtrace
+MODULE_ID_backtrace := 16 # VTSS_MODULE_ID_MISC
+
+# ------------------------------------oOo------------------------------------
+# "bt" is a standalone program that can be invoked from a shell. It takes
+# a process or thread ID as argument and internally uses ptrace to pause
+# that thread to obtain a stack backtrace.
+# When compiled with debug, the switch app will utilize the bt app to backtrace all
+# threads when doing a 'debug thread status backtrace'.
+# The program is only available when compiling for MIPS. I haven't tried with ARM,
+# but it could be that it works out of the box (if changing -lunwind-mips with
+# -lunwind-arm or something like that).
+# Also, it is only available when using the debug SDK, because it requires
+# libunwind, which is only available in that package.
+ifeq ("$(TARGET)-$(MSCC_SDK_ARCH)", "brsdk-mipsel")
+ifneq ($(filter debug,$(Custom/Stage2)),)
+
+# Name of application on target
+BT_APP := bt
+OBJ_bt := bt.o
+
+$(OBJ_bt): %.o: $(DIR_backtrace)/%.c
+	$(call compile_c,$(MODULE_ID_backtrace), $@, $<)
+
+LINK_FLAGS_bt := -lunwind -lunwind-ptrace -lunwind-mips
+
+$(BT_APP).elf:: $(OBJ_bt)
+	$(call what,Linking $@)
+	$(Q)$(XLDXX) $(LDFLAGS) -z noexecstack -L. -Wl,-Map -Wl,$(basename $@).txt $(OBJ_bt) $(LINK_FLAGS_bt) -o $@
+
+.PHONY: build-bt
+build-bt: $(BT_APP).elf
+
+# Hook into install-application make target
+install-application:: build-bt
+	$(Q)install -d $(BINDIR)
+	$(Q)install -m 755 $(BT_APP).elf $(BINDIR)/$(BT_APP)
+	$(Q)$(XSTRIP) --remove-section=.comment --remove-section=.note $(BINDIR)/$(BT_APP)
+
+endif
+endif
+
+# ------------------------------------oOo------------------------------------
+# "btsig" is a shared object that allows for backtracing a process in case of e.g. a segmentation fault.
+# To apply it to any program, you must set the LD_PRELOAD environment variable to /lib/btsig.so
+# prior to invoking the program.
+
+# Name of .so on target
+BTSIG_SO := btsig.so
+OBJ_btsig := btsig.o
+
+$(OBJ_btsig): | build_api
+$(OBJ_btsig): %.o: $(DIR_backtrace)/%.c
+	$(Q)$(XCC) $(TARGET_CFLAGS) -fPIC -fasynchronous-unwind-tables -c -o $@ $<
+
+# If using uclibc, link with libubacktrace.
+# If using glibc, link without LINK_FLAGS_btsig
+#LINK_FLAGS_btsig := -lubacktrace
+
+$(BTSIG_SO):: $(OBJ_btsig)
+	$(call what,Linking $@)
+	$(Q)$(XLDXX) $(LDSOFLAGS) -z noexecstack -Wl,-Map -Wl,$(basename $@).txt $(OBJ_btsig) $(LINK_FLAGS_btsig) -o $@
+
+.PHONY: build-btsig
+build-btsig: $(BTSIG_SO)
+
+# Hook into install-application make target
+install-application:: build-btsig
+	$(call what,Installing $(BTSIG_SO) into $(DESTDIR)/lib)
+	$(Q)install -d $(DESTDIR)/lib
+	$(Q)install -m 755 $(BTSIG_SO) $(DESTDIR)/lib/$(BTSIG_SO)
+
+# ------------------------------------oOo------------------------------------
+# Epilog
+
+# Get both apps compiled
+OBJ_backtrace := $(OBJ_bt) $(OBJ_btsig)
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_backtrace = $(DIR_backtrace)/*.c

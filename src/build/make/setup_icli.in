@@ -1,0 +1,97 @@
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ICLI Command Generation & Register begin
+ICLI_SCRIPT_CMD     := ./icli_tool_cmdgen
+
+OBJECTS_icli_modules =
+OBJECTS_icli_htm     =
+OBJECTS_icli_txt     =
+# ICLI Command Generation & Register end
+
+# Add ICLI module
+# $1 = ICLI file (full path)
+# $2 = User specified include option
+# $3 = Module ID
+define add_icli_single_common
+
+# Boilerplate command generation
+$(patsubst %.icli,%_icli.cxx,$(notdir $1)): $1 $(ICLI_SCRIPT_CMD)
+	$(call what,Generating ICLI module: $(notdir $1))
+	$(Q)$(ICLI_SCRIPT_CMD) $1 -L -G . -I $(DIR_APPL)/icli/platform/icli_porting_help.h
+
+# icli-to-htm compile dependency
+$(patsubst %.icli,%.htm,$(notdir $1)): $(patsubst %.icli,%_icli.o,$(notdir $1))
+
+# Add htm files
+OBJECTS_icli_htm += $(patsubst %.icli,%.htm,$(notdir $1))
+
+# icli-to-htm compile dependency
+$(patsubst %.icli,%.txt,$(notdir $1)): $(patsubst %.icli,%_icli.o,$(notdir $1))
+
+# Add txt files
+OBJECTS_icli_txt += $(patsubst %.icli,%.txt,$(notdir $1))
+
+endef
+
+# Add ICLI module
+# $1 = ICLI file (full path)
+# $2 = User specified include option
+define add_icli_single_lib
+$(call add_icli_single_common,$1,$2)
+
+# C-to-obj compile dependency
+$(patsubst %.icli,%_icli.o,$(notdir $1)): $(patsubst %.icli,%_icli.cxx,$(notdir $1)) | build_api
+	$$(call compile_lib_cxx,$3,$$@,$$<,$2)
+
+endef
+
+define add_icli_single
+$(call add_icli_single_common,$1,$2)
+
+# C-to-obj compile dependency
+$(patsubst %.icli,%_icli.o,$(notdir $1)): $(patsubst %.icli,%_icli.cxx,$(notdir $1)) | build_api
+	$$(call compile_cxx,$3,$$@,$$<,$2)
+
+# Add ICLI-module-obj to list of object files
+OBJECTS_icli_modules += $(patsubst %.icli,%_icli.o,$(notdir $1))
+
+endef
+
+# Add ICLI module
+# $1 = Module ID
+# $2 = ICLI files (full path)
+# $3 = User specified include option
+define add_icli
+$(foreach C,$2,$(call add_icli_single,$C,$3,$1))
+endef
+
+# Add ICLI module (used by libraries)
+# $1 = Module ID
+# $2 = ICLI files (full path)
+# $3 = User specified include option
+define add_icli_lib
+$(foreach C,$2,$(call add_icli_single_lib,$C,$3,$1))
+endef

@@ -1,0 +1,100 @@
+Install by copying from http://coverity.microchip.com:8080/
+===========================================================
+
+Make sure you have a license file "license.dat"
+
+Click on "Help" in upper right corner
+Click on "Downloads"
+Click on "Select a package" on the bottom of the page
+Pick one that matches your PC and click "Download"
+
+Copy license.dat to /opt/coverity
+
+Install the softwware in /opt/coverity 
+
+First run
+=========
+Takes around 30 minutes on my old machine.
+
+Better use an IStaX target, because that will probably generate most issues.
+
+rbn@soft-dev14:.../build(master)$ make coverity-first
+
+Copy files to a safe place:
+
+rbn@soft-dev14:.../build(master)$ mkdir ~/temp
+rbn@soft-dev14:.../build(master)$ cp -r obj/cov ~/temp
+
+Now try to look at the report, through a browser. Open
+~/temp/cov/cov-istax_arm_multi/html/index.html
+
+This will contain ALL issues detected by Coverity. In this case this is 671.
+
+coverity.microchip.com:8080
+===========================
+
+Use http://coverity.microchip.com:8080/#/project-view/12419/10076, which will
+guide you directly to the WebStaX project.
+
+Login with your M-number and password.
+
+This is where you find the issues still to be resolved.
+
+As of today, there are 219 issues to be looked at.
+
+Find the ones you think you can solve and assign them to yourself (Owner).
+
+Locate the issue in your precious "First run" report. It's there isn't it?
+
+What should I fix?
+==================
+
+Back in the days, we used to dismiss a lot of Coverity issues, because they were
+ignorable. This is the difference between the number of issues of your local run
+minus the number of issues of Cov. Web = 671 - 219 = 452 bugs.
+
+I think it's better to make Coverity *never* find these issues again, because if
+we for some reason lose our Coverity database or change server or change company
+name or (perhaps more important) a customer also runs Coverity on our code), we
+(or the customer) can start all over again.
+
+So for instance this code snippet:
+
+  vtss_1588_tx_msg(announce->ptp_port->port_mask, &announce->ann_buf);
+
+is reported by Coverity as "Unchecked return value".
+
+You should change the code snippet to either check the return value and take
+proper action or void the return value, like this:
+
+   (void)vtss_1588_tx_msg(announce->ptp_port->port_mask, &announce->ann_buf);
+
+(Notice that according to our coding guide lines, there's no space between
+"(void)" and "vtss_1588..."
+
+Time to check that it works:
+
+Next runs
+=========
+
+With the issue fixed in source code, check that it's gone by running Coverity
+locally.
+
+The following will take the time it takes to compile the changed file and
+dependencies plus the time it takes to create a new report. Typically less than
+a minute.
+
+rbn@soft-dev14:.../build$ make coverity-next
+
+Committing
+==========
+
+If you have a CID from coverity.microchip.com:8080, then commit your changes as:
+$ git commit -m "CC-<xyz>. <Module>: Fixed bla-bla-bla"
+
+Then paste the SHA into the CID in Coverity.
+
+The "CC-" prefix is legacy.
+
+If you don't have a CID, then commit your changes as:
+$ git commit -m "CC: <Module>: Fixed bla-bla-bla"

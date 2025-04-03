@@ -1,0 +1,243 @@
+#!/usr/bin/env ruby
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+require 'optimist'
+require 'pty'
+
+VERSION = "1.0"
+
+$debug = false
+
+def die(msg)
+  $stderr.puts "Error: " + msg
+  exit(1)
+end
+
+ADDR_REGEXP       = /^\#\d+\s+(0x\S+)/                    # eCos                                 (e.g. "#0  0x800c92c4")
+ADDR_REGEXP2      = /^\[bt\]:\s+\(\d+\)\s+.*\[(0x\S+)\]$/ # Linux                                (e.g. "[bt]: (1) /usr/bin/switch_app(_Z27vtss_crashhandler_backtracePFiPKczE+0x1c) [0x4fc0c8]")
+EXCEPTION_REGEXP  = /Exception .* caught at PC (0x\S+)/
+THREAD_REGEXP     = /^\s*\d+\s+\S+\s+\d+\s+\d+\s+/        # eCos                                 (e.g. " 11 Run         7       7 CLI Serial                   N/A        N/A 0x8115d8c0 65536 13840*")
+THREAD_REGEXP2    = /^<(.+)>\s+PID=\d+, TID=\d+/          # Linux, exception                     (e.g. "<CLI Serial> PID=65, TID=82 Received signal 6 (Aborted)")
+THREAD_REGEXP3    = /^\s*\d+\s+\S+/                       # Linux, 'debug thread' or trace error (e.g. " 82 CLI Serial                       R     Normal            0     0.00%      0.00%         82         65*")
+TRACE_REGEXP      = /^(E|W) \S+ \d\d:\d\d:\d\d /
+CODE_REV_REGEXP   = /^Code Revision:\s*(\S+)/
+FILE_LINE_REGEXP  = /Line (\d+) of "(.+)"/
+FUNC_REGEXP       = /starts at .+ <([^+>]+)(\+\d+)?>/
+
+class Processor
+
+  # Read data from trace_filename, or read from stdin. Then launch the gdb executable
+  # and load elf_fn.
+  # Then process input data:
+  #   * Exception address is resolved
+  #   * Per-thread backtrace is resolved
+
+  def initialize(trace_filename, elf_fn, gdb)
+    die("ELF filename must not contain path elements") if elf_fn =~ /\//
+
+    @path_strip = 0
+    @elf_filename = [elf_fn, "obj/#{elf_fn}", "build/obj/#{elf_fn}"].find { |fn|
+      if File.exist?(fn) && File.file?(fn)
+        @path_strip = fn.split('/').length - 1
+        true
+      else
+        nil
+      end
+    }
+
+    die("Can't find the ELF file, #{elf_fn}") unless @elf_filename
+
+    backtrace = if trace_filename
+                  IO.readlines(trace_filename)
+                else
+                  puts "Input backtrace now, end with EOF (^D)"
+                  $stdin.readlines
+                end
+
+    @r, @w, pid = PTY.spawn(gdb + " " + @elf_filename)
+    $stderr.puts "Launched GDB on #{@elf_filename}, please stand by while processing takes place" if $debug
+    rd
+
+    @thread = nil
+    @code_rev = nil
+    while ln = backtrace.shift
+      case ln
+      when EXCEPTION_REGEXP
+        a = $1
+        puts
+        puts "EXCEPTION:"
+        process([$1])
+      when ADDR_REGEXP
+        acc = []
+        while ln =~ ADDR_REGEXP
+          acc << $1
+          while (ln = backtrace.shift) && ln.strip == ""
+          end
+        end
+        process(acc)
+        backtrace.unshift ln if ln
+      when ADDR_REGEXP2
+        acc = []
+        while ln =~ ADDR_REGEXP2
+          acc << $1
+          while (ln = backtrace.shift) && ln.strip == ""
+          end
+        end
+        process(acc)
+        backtrace.unshift ln if ln
+      when /^DSR\s+N\/A/
+        @thread = "Thread: DSR"
+      when THREAD_REGEXP
+        @thread = "Thread: #{ln[26..49]}"
+      when THREAD_REGEXP2
+        @thread = "Thread: " + $1
+      when THREAD_REGEXP3
+        @thread = "Thread: #{ln[4..35]}"
+      when TRACE_REGEXP
+        puts "VTSS TRACE: #{ln}"
+      when CODE_REV_REGEXP
+        if !@code_rev
+          @code_rev = $1
+          puts
+          puts "CODE REVISION: #{@code_rev}"
+          puts
+        end
+      end
+    end
+  end
+
+  private
+
+  def process(addresses)
+    matches = addresses.map { |a|
+      @w.puts "info line * #{a}"
+      file = "(unknown)"
+      func = "(unknown)"
+      input = rd.split(/\n/).each { |i|
+        if i =~ FILE_LINE_REGEXP
+          file, line = $2, $1
+          file = file.split('/')
+          if file.length == 1 && @elf_filename.split('/').length > 1
+            file = [File.dirname(@elf_filename), file]
+          elsif file.length > @path_strip && file[0...@path_strip] == [".."]*@path_strip
+            file = file[@path_strip..-1]
+          end
+          file = file.join('/')
+          file = "#{file}:#{line}"
+        end
+        if i =~ FUNC_REGEXP
+          func = $1
+        end
+      }
+      $stderr.puts "--------------" if $debug
+      [a, file, func]
+    }
+    longest = 0
+    matches.each { |m|
+      f = m[1]
+      longest = f.length if f.length > longest
+    }
+
+    puts "***** #{@thread.strip} ***** " if @thread
+    matches.each { |m|
+      a, file, func = m
+      pad = ' '*(longest - file.length)
+      puts "#{file}: #{pad} #{a} #{func}"
+    }
+    puts
+  end
+
+  def rd
+    res = ""
+    while !(res =~ /\(gdb\)/)
+      res << @r.readpartial(1)
+    end
+    $stderr.puts res if $debug
+    res
+  end
+
+end
+
+#
+# MAIN
+#
+
+opts = Optimist::options do
+  version "VTSS ECoS Backtrace Resolver #{VERSION}"
+  banner <<-EOS
+Copyright (c) 2006-2023 Microsemi Corporation
+
+Unpublished rights reserved under the copyright laws of the United States of
+America, other countries and international treaties. Permission to use, copy,
+store and modify, the software and its source code is granted but only in
+connection with products utilizing the Microsemi switch and PHY products.
+Permission is also granted for you to integrate into other products, disclose,
+transmit and distribute the software only in an absolute machine readable
+format (e.g. HEX file) and only in or with products utilizing the Microsemi
+switch and PHY products.  The source code of the software may not be
+disclosed, transmitted or distributed without the prior written permission of
+Microsemi.
+
+This copyright notice must appear in any copy, modification, disclosure,
+transmission or distribution of the software.  Microsemi retains all
+ownership, copyright, trade secret and proprietary rights in the software and
+its source code, including all modifications thereto.
+
+THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+NON-INFRINGEMENT.
+
+Process a stack trace, either from a T_E/T_W trace or from an exception, and try to
+resolve addresses relative to a build ELF file.
+
+The stack trace can either be supplied as a text file, or cut-and-pasted to
+stdin.
+
+IMPORTANT: Just provide the filename of the ELF file (if it's not 'IStaX.elf');
+           we'll search through current directory (.), ./obj and ./build/obj.
+
+HINT: The generated output resembles compiler warnings that at least 'emacs' will
+      read and understand. It's thus possible to use 'M-x compile' to launch this
+      script with appropriate parameters and then navigate the backtrace within
+      'emacs'. May even work for VIM.
+
+By martin.eskildsen@microsemi.com . *Unsupported software*, but I do read mail.
+
+Options:
+EOS
+
+  opt :gdb, "GDB executable", :type => :string, :default => "/opt/vtss-cross-ecos-mips32-24kec-v2/bin/mipsel-vtss-elf-gdb"
+  opt :elf, ".elf file to load into GDB", :type => :string, :default => "IStaX.elf"
+  opt :file, "Text file containing backtrace (otherwise use stdin)", :type => :string
+  opt :debug, "(Enable debugging of this script)"
+end
+
+$debug = opts.debug != nil
+
+p = Processor.new(opts.file, opts.elf, opts.gdb)
+
+# EOF

@@ -1,0 +1,113 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# Files Location
+DIR_dhcp_relay          := $(DIR_APPL)/dhcp_relay
+MODULE_ID_dhcp_relay := 55 # VTSS_MODULE_ID_DHCP_RELAY
+DIR_dhcp_relay_core     := $(DIR_dhcp_relay)/base
+DIR_dhcp_relay_platform := $(DIR_dhcp_relay)/platform
+
+# Module core objects
+OBJECTS_iscdhcp_libdhcp := $(addprefix iscdhcp_common_, \
+  alloc.o bpf.o comapi.o conflex.o ctrace.o discover.o  \
+  dispatch.o dlpi.o ethernet.o execute.o fddi.o         \
+  inet.o lpf.o memory.o nit.o options.o packet.o        \
+  parse.o print.o raw.o resolv.o socket.o tables.o tr.o \
+  tree.o upf.o heap.o dns_dummy.o)
+
+OBJECTS_iscdhcp_libomapi := $(addprefix iscdhcp_omapip_, \
+  protocol.o buffer.o alloc.o result.o connection.o      \
+  errwarn.o listener.o dispatch.o generic.o support.o    \
+  handle.o message.o convert.o hash.o auth.o inet_addr.o \
+  array.o trace.o mrtrace.o toisc.o iscprint.o)
+
+OBJECTS_iscdhcp_libdst := $(addprefix iscdhcp_dst_, \
+  dst_support.o dst_api.o hmac_link.o md5_dgst.o    \
+  base64.o prandom.o)
+
+OBJECTS_iscdhcp_relay := $(addprefix iscdhcp_relay_, dhcrelay.o)
+
+# Module platform objects
+OBJECTS_dhcp_relay_platform := dhcp_relay.o \
+  $(if $(MODULE_WEB),dhcp_relay_web.o)      \
+  $(if $(MODULE_ICFG), dhcp_relay_icfg.o)
+
+OBJECTS_dhcp_relay_cxx := dhcp_relay_expose.o                     \
+                    $(if $(MODULE_PRIVATE_MIB),dhcp_relay_mib.o) \
+                    $(if $(MODULE_JSON_RPC),dhcp_relay_json.o)
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_dhcp_relay), $(foreach m, dhcp_relay, $(DIR_dhcp_relay_platform)/$(m).icli)))
+
+# Module objects (Module core objects + Module platform objects)
+OBJECTS_dhcp_relay := $(OBJECTS_iscdhcp_libdhcp) $(OBJECTS_iscdhcp_libomapi) $(OBJECTS_iscdhcp_libdst) $(OBJECTS_iscdhcp_relay) $(OBJECTS_dhcp_relay_platform) \
+                      $(OBJECTS_dhcp_relay_cxx)
+
+# Compiler rules
+$(OBJECTS_iscdhcp_libdhcp): iscdhcp_common_%.o: $(DIR_dhcp_relay_core)/common/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_relay), $@, $<, -DISCDHCP_ISTAX_PLATFORM)
+
+$(OBJECTS_iscdhcp_libomapi): iscdhcp_omapip_%.o: $(DIR_dhcp_relay_core)/omapip/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_relay), $@, $<, -DISCDHCP_ISTAX_PLATFORM)
+
+$(OBJECTS_iscdhcp_libdst): iscdhcp_dst_%.o: $(DIR_dhcp_relay_core)/dst/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_relay), $@, $<, -DISCDHCP_ISTAX_PLATFORM)
+
+$(OBJECTS_iscdhcp_relay): iscdhcp_relay_%.o: $(DIR_dhcp_relay_core)/relay/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_relay), $@, $<, -DISCDHCP_ISTAX_PLATFORM)
+
+$(OBJECTS_dhcp_relay_platform): %.o: $(DIR_dhcp_relay_platform)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_relay), $@, $<)
+
+$(OBJECTS_dhcp_relay_cxx): %.o: $(DIR_dhcp_relay_platform)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_relay), $@, $<,)
+
+
+# Include files
+###INCLUDES += -I$(DIR_dhcp_relay_core)/includes -I$(DIR_dhcp_relay_core)/includes/isc-dhcp -I$(DIR_dhcp_relay_core)/includes/omapip -I$(DIR_dhcp_relay_core)/includes/arpa -I$(DIR_dhcp_relay_platform)
+INCLUDES += -I$(DIR_dhcp_relay_core)/includes
+INCLUDES += -I$(DIR_dhcp_relay_core)/includes/isc-dhcp
+INCLUDES += -I$(DIR_dhcp_relay_core)/includes/omapip
+INCLUDES += -I$(DIR_dhcp_relay_core)/includes/arpa
+INCLUDES += -I$(DIR_dhcp_relay_platform)
+
+
+# Web content generation
+WEB_CONTENT += $(DIR_dhcp_relay_platform)/html
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_dhcp_relay += $(DIR_dhcp_relay)/platform/dhcp_relay.cxx $(DIR_dhcp_relay)/platform/dhcp_relay_icfg.cxx $(DIR_dhcp_relay)/platform/dhcp_relay_web.cxx $(DIR_dhcp_relay_platform)/*.h
+
+# Tidy files
+TIDY_FILES_dhcp_relay += $(DIR_dhcp_relay_platform)/html/*.htm $(DIR_dhcp_relay_platform)/html/help/*.htm
+
+# JSlint files
+JSLINT_FILES_dhcp_relay += $(DIR_dhcp_relay_platform)/html/*.htm $(DIR_dhcp_relay_platform)/html/help/*.htm
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/dhcp_relay.h

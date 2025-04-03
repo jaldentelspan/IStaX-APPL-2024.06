@@ -1,0 +1,79 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2019 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# File locations
+DIR_ssh_platform := $(DIR_APPL)/ssh/platform
+MODULE_ID_ssh := 49 # VTSS_MODULE_ID_SSH
+
+OBJECTS_ssh :=                          \
+  vtss_ssh.o                            \
+  vtss_ssh_linux.o                      \
+  $(if $(MODULE_WEB),vtss_ssh_web.o)    \
+  $(if $(MODULE_ICFG),vtss_ssh_icfg.o)  \
+  $(if $(MODULE_PRIVATE_MIB),ssh_mib.o) \
+  $(if $(MODULE_JSON_RPC),ssh_json.o)
+
+$(OBJECTS_ssh): %.o: $(DIR_ssh_platform)/%.cxx $(BUILD)/make/module_ssh.in
+	$(call compile_cxx,$(MODULE_ID_ssh), $@, $<)
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_ssh), $(DIR_ssh_platform)/vtss_ssh.icli))
+
+icli_ssh: | build_api
+icli_ssh: $(DIR_ssh_platform)/wrapper/icli_ssh.cxx
+	$(call compile_cxx,$(MODULE_ID_ssh), icli_ssh.o, $<)
+	$(Q)$(XLDXX) $(LDFLAGS) icli_ssh.o -o $@
+
+install-application:: icli_ssh
+	$(call what, Install ssh helpers)
+	$(Q)install -d $(RBINDIR) $(ETCDIR) $(LIBDIR)
+	$(Q)install -m 755 icli_ssh $(RBINDIR)/icli
+	$(Q)install -m 644 $(DIR_ssh_platform)/misc/shells $(ETCDIR)/shells
+
+# Include files
+INCLUDES += -I$(DIR_ssh_platform)
+
+# Web content generation
+WEB_CONTENT += $(DIR_ssh_platform)/html
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/ssh.h
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_ssh += \
+  $(DIR_ssh_platform)/*.cxx      \
+  $(DIR_ssh_platform)/*.h        \
+  $(DIR_ssh_platform)/*.hxx      \
+  $(DIR_APPL)/include/vtss/appl/ssh.h
+
+# Tidy files
+TIDY_FILES_ssh += $(DIR_ssh_platform)/html/*.htm $(DIR_ssh_platform)/html/help/*.htm
+
+# JSLINT files
+JSLINT_FILES_ssh += $(TIDY_FILES_ssh)
+

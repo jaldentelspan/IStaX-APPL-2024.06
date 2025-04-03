@@ -1,0 +1,64 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+DIR_misc := $(DIR_APPL)/misc
+MODULE_ID_misc := 16 # VTSS_MODULE_ID_MISC
+
+OBJECTS_misc_c_or_cxx := misc.o mgmt.o critd.o interface.o vtss_usb.o
+
+ifneq ("$(VTSS_PRODUCT_NAME)","BRINGUP")
+OBJECTS_misc_c_or_cxx +=           \
+  zl40251.o                        \
+  $(if $(MODULE_ICLI),misc_icli_util.o)
+endif
+
+OBJECTS_misc_cxx := lock.o \
+  $(if $(MODULE_ALARM),misc_any.o)
+
+ifneq ("$(VTSS_PRODUCT_NAME)","BRINGUP")
+$(eval $(call add_icli,$(MODULE_ID_misc),$(DIR_misc)/misc.icli))
+endif
+
+OBJECTS_misc := $(OBJECTS_misc_c_or_cxx) $(OBJECTS_misc_cxx)
+$(OBJECTS_misc_c_or_cxx): %.o: $(DIR_misc)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_misc), $@, $<)
+
+$(OBJECTS_misc_cxx): %.o: $(DIR_misc)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_misc), $@, $<)
+
+INCLUDES += -I$(DIR_misc)
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/interface.h
+
+VTSS_CODE_STYLE_CHK_FILES_misc += $(DIR_misc)/critd.cxx $(DIR_misc)/misc_icli_util.cxx
+
+# Adding the misc file to the image. Ending up in /etc/mscc/misc/
+ifneq ("$(VTSS_PRODUCT_NAME)","BRINGUP")
+MISC_FILES = $(DIR_misc)/ZL40251_EEPROM_Image.txt
+endif

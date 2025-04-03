@@ -1,0 +1,105 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+DIR_util := $(DIR_APPL)/util
+MODULE_ID_util := 16 # VTSS_MODULE_ID_MISC
+DIR_util_avlt := $(DIR_APPL)/util/avlt
+
+OBJECTS_util_core :=
+OBJECTS_util_os :=
+OBJECTS_util_avlt :=
+OBJECTS_util_rowStatus :=
+OBJECTS_util_cxx :=  vtss_basics_trace.o         \
+                     vtss_appl_types.o           \
+                     vtss_appl_formatting_tags.o \
+                     vtss_common_iterator.o      \
+                     vtss_safe_queue.o           \
+                     vtss_trace.o                \
+                     vtss_trace_io.o             \
+                     trace_conf.o                \
+                     vtss_uboot.o                \
+                     otp_interface.o             \
+                     mac_utils.o                 \
+                     vtss_cmdline.o              \
+                     $(call if-module,acl,vtss_vcap.o)
+
+ifneq (,$(TURNKEY))
+  OBJECTS_util_core += vtss_fifo.o                  \
+                       vtss_fifo_cp.o               \
+                       vtss_tftp.o                  \
+                       vtss_remote_file_transfer.o  \
+                       vtss_bip_buffer.o            \
+                       vtss_module_id.o             \
+                       vtss_free_list.o             \
+                       vtss_hostaddr.o
+
+  OBJECTS_util_avlt += vtss_avl_tree.o
+  OBJECTS_util_os += os_file.o
+endif
+
+OBJECTS_util_os += vtss_os_wrapper.o                        \
+
+
+  OBJECTS_util_rowStatus += $(call if-module,snmp,vtss_rowStatus.o)
+  OBJECTS_util_os        += vtss_os_wrapper_linux.o
+  OBJECTS_util_cxx       += vtss_process_manager.o  \
+                            vtss_mtd.o
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_util),$(DIR_util)/util.icli))
+
+OBJECTS_util := $(OBJECTS_util_core) $(OBJECTS_util_os) $(OBJECTS_util_avlt) $(OBJECTS_util_rowStatus) $(OBJECTS_util_cxx) $(OBJECTS_util_os_ports)
+
+$(OBJECTS_util_os_ports): %.o: $(DIR_util)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_util), $@, $<)
+
+$(OBJECTS_util_core) $(OBJECTS_util_os): %.o: $(DIR_util)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_util), $@, $<)
+
+$(OBJECTS_util_avlt): %.o: $(DIR_util_avlt)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_util), $@, $<)
+
+$(OBJECTS_util_rowStatus): %.o: $(DIR_util)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_util), $@, $<)
+
+$(OBJECTS_util_cxx): %.o: $(DIR_util)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_util), $@, $<)
+
+INCLUDES += -I$(DIR_util) -I$(DIR_util_avlt)
+
+# S/W coding style check
+ifneq (,$(TURNKEY))
+VTSS_CODE_STYLE_CHK_FILES_TWO_INDENT_util := $(DIR_util)/vtss_bip_buffer.cxx
+VTSS_CODE_STYLE_CHK_FILES_util := $(DIR_util)/os_file.cxx $(DIR_util)/vtss_os_wrapper.h $(DIR_util)/vtss_os_wrapper_linux.h $(DIR_util)/vtss_os_wrapper_linux.cxx
+endif
+
+VTSS_CODE_STYLE_CHK_FILES_util += $(DIR_util)/trace_conf.cxx                \
+                                  $(DIR_util)/vtss_remote_file_transfer.cxx \
+                                  $(DIR_util)/vtss_remote_file_transfer.cxx \
+                                  $(DIR_util)/vtss_trace.cxx
+                                  

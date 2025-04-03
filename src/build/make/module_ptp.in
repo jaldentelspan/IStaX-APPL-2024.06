@@ -1,0 +1,105 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+# Microchip is aware that some terminology used in this technical document is
+# antiquated and inappropriate. As a result of the complex nature of software
+# where seemingly simple changes have unpredictable, and often far-reaching
+# negative results on the software's functionality (requiring extensive retesting
+# and revalidation) we are unable to make the desired changes in all legacy
+# systems without compromising our product or our clients' products.
+
+# Pointer to PTP source code directory
+DIR_ptp       := $(DIR_APPL)/ptp
+MODULE_ID_ptp := 65 # VTSS_MODULE_ID_PTP
+
+# PTP module interface (= sources in platform)
+OBJECTS_ptp_platform :=                                                                  \
+  ptp.o                                                                                  \
+  ptp_public.o                                                                           \
+  ptp_local_clock.o                                                                      \
+  ptp_1pps_serial.o                                                                      \
+  ptp_pim.o                                                                              \
+  ptp_1pps_sync.o                                                                        \
+  ptp_1pps_closed_loop.o                                                                 \
+  ptp_afi.o                                                                              \
+  ptp_parse_nmea.o                                                                       \
+  $(if $(MODULE_ICLI),        ptp_icli_functions.o ptp_icli_show_functions.o ptp_icfg.o) \
+  $(if $(MODULE_WEB),         ptp_web.o)                                                 \
+  $(if $(MODULE_PRIVATE_MIB), ptp_mib.o)                                                 \
+  $(if $(MODULE_JSON_RPC),    ptp_json.o)                                                \
+
+OBJECTS_ptp_base :=            \
+  vtss_ptp_api.o               \
+  vtss_ptp_servo.o             \
+  vtss_ptp_basic_servo.o       \
+  vtss_ptp_ms_servo.o          \
+  vtss_ptp_types.o             \
+  vtss_ptp_sys_timer.o         \
+  vtss_ptp_master.o            \
+  vtss_ptp_slave.o             \
+  vtss_ptp_pack_unpack.o       \
+  vtss_ptp_main.o              \
+  vtss_ptp_bmca.o              \
+  vtss_ptp_peer_delay.o        \
+  vtss_ptp_tc.o                \
+  vtss_ptp_802_1as_bmca.o      \
+  vtss_ptp_802_1as_site_sync.o \
+  vtss_ptp_unicast.o           \
+  vtss_ptp_filters.o           \
+  vtss_ptp_802_1as.o           \
+  vtss_ptp_path_trace.o
+
+OBJECTS_ptp_test :=             \
+  ptp_unit_test.o
+
+$(OBJECTS_ptp_platform): %.o: $(DIR_ptp)/platform/%.cxx $(BUILD)/make/module_ptp.in
+	$(call compile_cxx,$(MODULE_ID_ptp), $@, $<, $(INCLUDES_zls3038x))
+
+$(OBJECTS_ptp_base): %.o: $(DIR_ptp)/base/src/%.cxx $(BUILD)/make/module_ptp.in
+	$(call compile_cxx,$(MODULE_ID_ptp), $@, $<, $(INCLUDES_zls3038x))
+
+$(OBJECTS_ptp_test): %.o: $(DIR_ptp)/test/%.cxx $(BUILD)/make/module_ptp.in
+	$(call compile_cxx,$(MODULE_ID_ptp), $@, $<, $(INCLUDES_zls3038x))
+
+OBJECTS_ptp := $(OBJECTS_ptp_platform) $(OBJECTS_ptp_base)
+
+#OBJECTS_ptp += $(OBJECTS_ptp_test)
+
+INCLUDES += -I$(DIR_ptp)/platform -I$(DIR_ptp)/base/include -I$(DIR_ptp)/base/src
+
+# Web Content Generation
+WEB_CONTENT += $(DIR_ptp)/platform/html
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_ptp),$(foreach m, ptp,$(DIR_ptp)/platform/$(m).icli)))
+
+# Tidy files
+TIDY_FILES_ptp += $(DIR_ptp)/platform/html/*.htm $(DIR_ptp)/platform/html/help/*.htm
+
+# JSLint files. SRIHARSHATODO: Please fix 'make jslint'
+# JSLINT_FILES_ptp += $(TIDY_FILES_ptp)
+
+# Public header files. SRIHARSHATODO: Please fix 'make doxygen-no-pdf'
+# PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/ptp.h
+

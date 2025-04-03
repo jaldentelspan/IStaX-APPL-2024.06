@@ -1,0 +1,224 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# Files Location
+DIR_snmp     := $(DIR_APPL)/snmp/platform
+MODULE_ID_snmp := 36 # VTSS_MODULE_ID_SNMP
+DIR_ucd_snmp := $(DIR_APPL)/snmp/base/ucd_snmp
+
+# Web content generation
+WEB_CONTENT += $(DIR_APPL)/snmp/platform/html
+
+OBJECTS_vtss_snmp       := mibContextTable.o sysORTable.o snmp_mib_redefine.o rfc1213_mib2.o rfc4188_bridge.o rfc3635_etherlike.o rfc3411_framework.o rfc3412_mpd.o
+OBJECTS_ucd_snmp        := ucd_snmp_callout.o ucd_snmp_sysORTable.o
+OBJECTS_ucd_snmp_mib2   := ucd_snmp_rfc1213_mib2.o ucd_snmp_tcp_linux.o ucd_snmp_udp_linux.o
+OBJECTS_vtss_snmp       += vtss_snmp_linux.o
+OBJECTS_CXX_vtss_snmp   := vtss_private_trap.o
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_snmp),$(foreach m, snmp,$(DIR_snmp)/$(m).icli)))
+$(eval $(call add_icli,$(MODULE_ID_snmp),$(foreach m, trap,$(DIR_snmp)/$(m).icli)))
+
+OBJECTS_snmp_cxx := snmp_expose.o                     \
+                    $(if $(MODULE_PRIVATE_MIB),snmp_mib.o) \
+                    $(if $(MODULE_JSON_RPC),snmp_json.o)
+
+ifeq ($(filter rmon,$(MODULES)),rmon)
+  OBJECTS_vtss_snmp     += rfc2819_rmon.o
+  OBJECTS_ucd_snmp_rmon := ucd_snmp_rfc2819_rmon.o
+endif
+
+ifeq ($(filter smon,$(MODULES)),smon)
+  OBJECTS_vtss_snmp += rfc2613_smon.o
+endif
+
+ifeq ($(filter lldp,$(MODULES)),lldp)
+  OBJECTS_vtss_snmp += dot1ab_lldp.o
+endif
+
+ifeq ($(filter smb_snmp,$(MODULES)),smb_snmp)
+  OBJECTS_vtss_snmp += rfc2863_ifmib.o rfc4133_entity.o rfc3636_mau.o rfc2674_q_bridge.o rfc4363_p_bridge.o
+  OBJECTS_vtss_snmp += ieee8021QBridgeMib.o ieee8021BridgeMib.o ieee8021CfmMib.o
+  OBJECTS_ucd_snmp  += ucd_snmp_ieee8021QBridgeMib.o ucd_snmp_ieee8021BridgeMib.o ucd_snmp_ieee8021CfmMib.o
+  OBJECTS_vtss_snmp += rfc3414_usm.o rfc3415_vacm.o
+  ifeq ($(filter dot1x,$(MODULES)),dot1x)
+    OBJECTS_vtss_snmp += ieee8021x_mib.o
+  endif
+  ifeq ($(filter dot1x_acct,$(MODULES)),dot1x_acct)
+    OBJECTS_vtss_snmp += rfc4670_radiusclient.o
+  endif
+  ifeq ($(filter eth_link_oam,$(MODULES)),eth_link_oam)
+    OBJECTS_vtss_snmp += dot3OamMIB.o
+  endif
+  ifeq ($(filter ipmc,$(MODULES)),ipmc)
+    OBJECTS_vtss_snmp += mgmdMIBObjects.o
+  endif
+  ifeq ($(filter lacp,$(MODULES)),lacp)
+    OBJECTS_vtss_snmp += ieee8023_lag_mib.o
+  endif
+  ifeq ($(filter mstp,$(MODULES)),mstp)
+    OBJECTS_vtss_snmp += ieee8021MstpMib.o
+    OBJECTS_ucd_snmp += ucd_snmp_ieee8021MstpMib.o
+  endif
+  ifeq ($(filter radius,$(MODULES)),radius)
+    OBJECTS_vtss_snmp += rfc4668_radiusclient.o
+  endif
+  ifeq ($(filter p802_1_as,$(MODULES)),p802_1_as)
+    OBJECTS_vtss_snmp += ieee8021AsTimeSyncMib.o
+    OBJECTS_ucd_snmp  += ucd_snmp_ieee8021AsTimeSyncMib.o
+  endif
+  ifeq ($(filter tsn,$(MODULES)),tsn)
+    OBJECTS_vtss_snmp += ieee8021STMib.o
+    OBJECTS_ucd_snmp  += ucd_snmp_ieee8021STMib.o
+  endif
+  ifeq ($(filter tsn,$(MODULES)),tsn)
+    OBJECTS_vtss_snmp += ieee8021PreemptionMib.o
+    OBJECTS_ucd_snmp  += ucd_snmp_ieee8021PreemptionMib.o
+  endif
+  ifeq ($(filter qos,$(MODULES)),qos)
+    OBJECTS_vtss_snmp += ieee8021PSFPMib.o
+    OBJECTS_ucd_snmp  += ucd_snmp_ieee8021PSFPMib.o
+  endif
+  ifeq ($(filter frr_ospf,$(MODULES)),frr_ospf)
+    OBJECTS_vtss_snmp += rfc4750_ospf.o
+    OBJECTS_ucd_snmp  += ucd_snmp_ospf.o
+  endif
+  ifeq ($(filter frr_rip,$(MODULES)),frr_rip)
+    OBJECTS_vtss_snmp += rfc1724_rip2.o
+    OBJECTS_ucd_snmp  += ucd_snmp_rip2.o
+  endif
+endif
+
+ifeq ($(filter ip,$(MODULES)),ip)
+  OBJECTS_vtss_snmp += rfc4292_ip_forward.o
+  OBJECTS_vtss_snmp += rfc4293_ip.o
+endif
+
+# Add lldpXMedMIB.o if we have lldp_med or poe
+ifeq ($(filter lldp,$(MODULES)),lldp)
+ifneq ($(filter lldp_med poe,$(MODULES)),)
+     OBJECTS_vtss_snmp += lldpXMedMIB.o
+endif
+endif
+
+OBJECTS_vtss_snmp += vtss_snmp.o ifIndex.o dot1Port.o inet_address.o
+OBJECTS_vtss_snmp += $(if $(MODULE_WEB),snmp_web.o)
+OBJECTS_vtss_snmp += $(if $(MODULE_ICFG),snmp_icfg.o)
+OBJECTS_vtss_snmp += $(if $(MODULE_ICFG),trap_icfg.o)
+
+# Compiler rules
+$(OBJECTS_vtss_snmp): %.o: $(DIR_snmp)/%.cxx $(BUILD)/make/module_snmp.in
+	$(call compile_cxx,$(MODULE_ID_snmp), $@, $<, )
+
+$(OBJECTS_CXX_vtss_snmp): %.o: $(DIR_snmp)/%.cxx $(BUILD)/make/module_snmp.in
+	$(call compile_cxx,$(MODULE_ID_snmp), $@, $<, )
+
+$(OBJECTS_ucd_snmp): %.o: $(DIR_ucd_snmp)/%.cxx $(BUILD)/make/module_snmp.in
+	$(call compile_cxx,$(MODULE_ID_snmp), $@, $<, )
+
+$(OBJECTS_ucd_snmp_mib2): %.o: $(DIR_ucd_snmp)/mibII/%.cxx $(BUILD)/make/module_snmp.in
+	$(call compile_cxx,$(MODULE_ID_snmp), $@, $<, )
+
+$(OBJECTS_ucd_snmp_rmon): %.o: $(DIR_ucd_snmp)/Rmon/%.cxx $(BUILD)/make/module_snmp.in
+	$(call compile_cxx,$(MODULE_ID_snmp), $@, $<, )
+
+$(OBJECTS_snmp_cxx): %.o: $(DIR_snmp)/%.cxx
+	    $(call compile_cxx,$(MODULE_ID_snmp), $@, $<,)
+
+# Total list of objects
+OBJECTS_snmp := $(OBJECTS_vtss_snmp)
+OBJECTS_snmp += $(OBJECTS_ucd_snmp)
+OBJECTS_snmp += $(OBJECTS_ucd_snmp_mib2)
+OBJECTS_snmp += $(OBJECTS_ucd_snmp_rmon)
+OBJECTS_snmp += $(OBJECTS_snmp_cxx)
+OBJECTS_snmp += $(OBJECTS_CXX_vtss_snmp)
+
+# Include files
+INCLUDES += -I$(DIR_snmp)
+INCLUDES += -I$(DIR_ucd_snmp) -I$(DIR_ucd_snmp)/mibII -I$(DIR_ucd_snmp)/Rmon
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_snmp += \
+  $(DIR_snmp)/dot1Port.cxx \
+  $(DIR_snmp)/dot1ab_lldp.cxx \
+  $(DIR_snmp)/dot3OamMIB.cxx \
+  $(DIR_snmp)/ieee8021AsTimeSyncMib.cxx \
+  $(DIR_snmp)/ieee8021BridgeMib.cxx \
+  $(DIR_snmp)/ieee8021CfmMib.cxx \
+  $(DIR_snmp)/ieee8021MstpMib.cxx \
+  $(DIR_snmp)/ieee8021PreemptionMib.cxx \
+  $(DIR_snmp)/ieee8021PSFPMib.cxx \
+  $(DIR_snmp)/ieee8021QBridgeMib.cxx \
+  $(DIR_snmp)/ieee8021STMib.cxx \
+  $(DIR_snmp)/ieee8021x_mib.cxx \
+  $(DIR_snmp)/ieee8023_lag_mib.cxx \
+  $(DIR_snmp)/ifIndex.cxx \
+  $(DIR_snmp)/inet_address.cxx \
+  $(DIR_snmp)/lldpXMedMIB.cxx \
+  $(DIR_snmp)/mgmdMIBObjects.cxx \
+  $(DIR_snmp)/mibContextTable.cxx \
+  $(DIR_snmp)/rfc1213_mib2.cxx \
+  $(DIR_snmp)/rfc2613_smon.cxx \
+  $(DIR_snmp)/rfc2674_q_bridge.cxx \
+  $(DIR_snmp)/rfc2819_rmon.cxx \
+  $(DIR_snmp)/rfc2863_ifmib.cxx \
+  $(DIR_snmp)/rfc3411_framework.cxx \
+  $(DIR_snmp)/rfc3412_mpd.cxx \
+  $(DIR_snmp)/rfc3414_usm.cxx \
+  $(DIR_snmp)/rfc3415_vacm.cxx \
+  $(DIR_snmp)/rfc3635_etherlike.cxx \
+  $(DIR_snmp)/rfc3636_mau.cxx \
+  $(DIR_snmp)/rfc4133_entity.cxx \
+  $(DIR_snmp)/rfc4188_bridge.cxx \
+  $(DIR_snmp)/rfc4292_ip_forward.cxx \
+  $(DIR_snmp)/rfc4293_ip.cxx \
+  $(DIR_snmp)/rfc4363_p_bridge.cxx \
+  $(DIR_snmp)/rfc4668_radiusclient.cxx \
+  $(DIR_snmp)/rfc4670_radiusclient.cxx \
+  $(DIR_snmp)/snmp_icfg.cxx \
+  $(DIR_snmp)/snmp_mib_redefine.cxx \
+  $(DIR_snmp)/snmp_web.cxx \
+  $(DIR_snmp)/sysORTable.cxx \
+  $(DIR_snmp)/trap_icfg.cxx \
+  $(DIR_snmp)/vtss_snmp.cxx \
+  $(DIR_snmp)/vtss_snmp_linux.cxx \
+  $(DIR_snmp)/*.h
+
+# Tidy files
+TIDY_FILES_snmp += $(DIR_snmp)/html/*.htm $(DIR_snmp)/html/help/*.htm
+
+# JSLINT files
+JSLINT_FILES_snmp += $(TIDY_FILES_snmp)
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/snmp.h
+
+# Libs
+LIB_LINK_FLAGS_EXTERNAL += -lnetsnmp -lnetsnmpagent -lnetsnmpmibs
+
+INCLUDES += -I$(DIR_snmp)

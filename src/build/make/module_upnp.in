@@ -1,0 +1,82 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# Files Location
+DIR_upnp := $(DIR_APPL)/upnp
+MODULE_ID_upnp := 52 # VTSS_MODULE_ID_UPNP
+DIR_upnp_base := $(DIR_upnp)/base
+DIR_upnp_platform := $(DIR_upnp)/platform
+
+# Module objects
+OBJECTS_upnp_base     := upnp_device.o
+OBJECTS_upnp_platform := vtss_upnp.o  \
+  $(if $(MODULE_WEB),vtss_upnp_web.o) \
+  $(if $(MODULE_ICFG),upnp_icfg.o)
+OBJECTS_upnp_cxx := upnp_expose.o \
+  $(if $(MODULE_PRIVATE_MIB),upnp_mib.o) \
+  $(if $(MODULE_JSON_RPC),upnp_json.o)
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_upnp),$(foreach m, upnp,$(DIR_upnp_platform)/$(m).icli)))
+
+OBJECTS_upnp := $(OBJECTS_upnp_base) $(OBJECTS_upnp_platform) $(OBJECTS_upnp_cxx)
+
+$(OBJECTS_upnp_base): %.o: $(DIR_upnp_base)/%.cxx $(BUILD)/make/module_upnp.in
+	$(call compile_cxx,$(MODULE_ID_upnp), $@, $<)
+
+$(OBJECTS_upnp_platform): %.o: $(DIR_upnp_platform)/%.cxx $(BUILD)/make/module_upnp.in
+	$(call compile_cxx,$(MODULE_ID_upnp), $@, $<)
+
+$(OBJECTS_upnp_cxx): %.o: $(DIR_upnp_platform)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_upnp), $@, $<)
+
+# Include libupnp
+LIB_LINK_FLAGS_EXTERNAL += $(if $(filter $(TARGET),linux-intel brsdk),-lupnp)
+
+# Include files
+INCLUDES += -I$(DIR_upnp_base) -I$(DIR_upnp_platform) -I$(MSCC_SDK_SYSROOT)/usr/include/upnp/
+
+# Web Content Generation
+WEB_CONTENT += $(DIR_APPL)/upnp/platform/html
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_upnp += \
+        $(DIR_upnp)/base/upnp_device.cxx \
+        $(DIR_upnp)/platform/upnp_icfg.cxx \
+        $(DIR_upnp)/platform/vtss_upnp.cxx \
+        $(DIR_upnp)/platform/vtss_upnp_web.cxx \
+        $(DIR_upnp_platform)/*.h
+
+# Tidy files
+TIDY_FILES_upnp += $(DIR_upnp_platform)/html/*.htm $(DIR_upnp_platform)/html/help/*.htm
+
+# JSLINT files
+JSLINT_FILES_upnp += $(DIR_upnp_platform)/html/*.htm $(DIR_upnp_platform)/html/help/*.htm
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/upnp.h

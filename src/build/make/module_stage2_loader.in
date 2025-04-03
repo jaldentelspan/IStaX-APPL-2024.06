@@ -1,0 +1,70 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# TODO: code-style
+DIR_stage2_loader := $(DIR_APPL)/stage2_loader
+
+DIR_xz_embedded := $(DIR_stage2_loader)/xz-embedded/linux
+
+ifeq ($(MSCC_SDK_ARCH),mipsel)
+	STATIC = -static
+	SDK_STATIC_SYSROOT = $(MSCC_SDK_UCLIBC)/xstax/release/x86_64-linux/mipsel-buildroot-linux-uclibc/sysroot
+else ifeq ($(MSCC_SDK_ARCH),arm64)
+	STATIC =
+	SDK_STATIC_SYSROOT = $(MSCC_SDK_UCLIBC)/xstax/release/x86_64-linux/aarch64-buildroot-linux-gnu/sysroot
+else ifeq ($(MSCC_SDK_ARCH),arm)
+	STATIC =
+	SDK_STATIC_SYSROOT = $(MSCC_SDK_UCLIBC)/xstax/release/x86_64-linux/arm-buildroot-linux-gnueabihf/sysroot
+endif
+
+OBJS_stage2_loader = build_stage2_loader/basic_linux_system_init_urandom.o build_stage2_loader/firmware_vimage.o build_stage2_loader/main.o build_stage2_loader/service.o  build_stage2_loader/service_parse.o  build_stage2_loader/tar.o build_stage2_loader/ramload.o build_stage2_loader/run.o build_stage2_loader/vtss_mtd.o
+
+OBJS_xz_embedded = build_stage2_loader/xz_crc32.o \
+                   build_stage2_loader/xz_crc64.o \
+                   build_stage2_loader/xz_dec_bcj.o \
+                   build_stage2_loader/xz_dec_lzma2.o \
+                   build_stage2_loader/xz_dec_stream.o
+
+STAGE2_LOADER_CFLAGS := -pthread -Os -pipe -feliminate-unused-debug-types -DMSCC_BRSDK=$(MSCC_SDK_NAME) -Wall -Wno-sign-compare -Wno-write-strings --sysroot $(SDK_STATIC_SYSROOT) -fsigned-char -z noexecstack -I$(SDK_STATIC_SYSROOT)/usr/include/ 
+
+STAGE2_LOADER_LINK_FLAGS  :=   -lc -lmbedcrypto -lz
+
+#--sysroot $(MSCC_SDK_UCLIBC)/x86_64-linux/mipsel-buildroot-linux-uclibc/sysroot
+$(OBJS_xz_embedded): build_stage2_loader/%.o: $(DIR_xz_embedded)/lib/xz/%.c $(BUILD)/make/module_stage2_loader.in
+	$(Q)mkdir -p build_stage2_loader
+	$(Q)$(UCC) $(STAGE2_LOADER_CFLAGS) -I$(DIR_xz_embedded)/include/ -I$(DIR_xz_embedded)/include/linux -I$(DIR_xz_embedded)/../userspace -c -o $@ $<
+
+$(OBJS_stage2_loader): build_stage2_loader/%.o: $(DIR_stage2_loader)/%.c $(BUILD)/make/module_stage2_loader.in
+	$(Q)mkdir -p build_stage2_loader
+	$(Q)$(UCC) $(STAGE2_LOADER_CFLAGS) -I$(DIR_xz_embedded)/include/ -c -o $@ $<
+
+build_stage2_loader/stage2-loader: $(OBJS_stage2_loader) $(OBJS_xz_embedded) $(BUILD)/make/module_stage2_loader.in
+	$(call what,Build stage2-loader)
+	$(Q)$(UCC) $(STATIC) $(STAGE2_LOADER_CFLAGS) -o $@ $(OBJS_stage2_loader) $(OBJS_xz_embedded) $(STAGE2_LOADER_LINK_FLAGS)
+	$(Q)$(XSTRIP) $(STRIP_FLAGS) $@
+

@@ -1,0 +1,75 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+# Files Location
+DIR_dhcp_snooping := $(DIR_APPL)/dhcp_snooping
+MODULE_ID_dhcp_snooping := 56 # VTSS_MODULE_ID_DHCP_SNOOPING
+
+# Module objects
+OBJECTS_dhcp_snooping_platform := dhcp_snooping.o       \
+  $(if $(MODULE_WEB),dhcp_snooping_web.o)      \
+  $(if $(MODULE_ICFG),dhcp_snooping_icfg.o)
+
+
+OBJECTS_dhcp_snooping_cxx := \
+  $(call if-module, private_mib, dhcp_snooping_mib.o) \
+  $(call if-module, json_rpc, dhcp_snooping_json.o)
+
+OBJECTS_dhcp_snooping := $(OBJECTS_dhcp_snooping_platform) $(OBJECTS_dhcp_snooping_cxx)
+
+# If you wish to have the DHCP Snooping module verify MAC addresses,
+# you need to enable the following define
+# DEFINES += -DDHCP_SNOOPING_MAC_VERI_SUPPORT
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_dhcp_snooping),$(foreach m, dhcp_snooping,$(DIR_dhcp_snooping)/$(m).icli)))
+
+# Compiler rules
+$(OBJECTS_dhcp_snooping_platform): %.o: $(DIR_dhcp_snooping)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_snooping), $@, $<)
+
+$(OBJECTS_dhcp_snooping_cxx): %.o: $(DIR_dhcp_snooping)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_dhcp_snooping), $@, $<,)
+
+# Include files
+INCLUDES += -I$(DIR_dhcp_snooping)
+
+# Web content generation
+WEB_CONTENT += $(DIR_dhcp_snooping)/html
+
+# S/W coding style check
+VTSS_CODE_STYLE_CHK_FILES_dhcp_snooping += $(DIR_dhcp_snooping)/dhcp_snooping.cxx $(DIR_dhcp_snooping)/dhcp_snooping_icfg.cxx $(DIR_dhcp_snooping)/dhcp_snooping_web.cxx $(DIR_dhcp_snooping)/*.h
+
+# JSLINT files
+JSLINT_FILES_dhcp_snooping += $(DIR_dhcp_snooping)/html/*.htm $(DIR_dhcp_snooping)/html/help/*.htm
+
+# Tidy files
+TIDY_FILES_dhcp_snooping += $(DIR_dhcp_snooping)/html/*.htm $(DIR_dhcp_snooping)/html/help/*.htm
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/dhcp_snooping.h

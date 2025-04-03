@@ -1,0 +1,625 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+
+DIR_main := $(DIR_APPL)/main
+MODULE_ID_main := 4 # VTSS_MODULE_ID_MAIN
+
+ifeq ($(CODE_REVISION),)
+CODE_REVISION := $(shell $(BUILD)/tools/code_version)
+endif
+
+CTIME           := $(shell perl -w $(BUILD)/make/compile_time.pl)
+BUILD_ID        ?= dev-build by $(USER)@$(HOSTNAME) $(CTIME)
+
+OBJECTS_main := main.o vtss_api_if.o crashhandler.o backtrace.o main_conf.o vtss_alloc.o \
+	$(if $(MODULE_WEB),control_web.o)
+
+$(OBJECTS_main): %.o: $(DIR_main)/%.cxx
+	$(call compile_cxx,$(MODULE_ID_main), $@, $<)
+
+INCLUDES += -I$(DIR_main) -I$(DIR_APPL)/../vtss_basics/include/vtss/basics
+INCLUDES += $(pkg-config --cflags libunwind)
+
+# Make malloc() and free() go through the heap wrappers, so that 'debug heap'
+# shows per-module allocations.
+# The only downside of enabling this is that every call to those functions cost
+# a tiny bit of additional CPU time, and a tiny bit of additional memory per
+# allocation (for side-band data).
+DEFINES += -DVTSS_FEATURE_HEAP_WRAPPERS
+
+# Always link
+.PHONY: always
+
+# Default image type & linux arch
+ifeq ($(MSCC_SDK_ARCH),arm64)
+    ARCH       := arm64
+    IMAGETYPES ?= itb ubifs ext4.gz
+else ifeq ($(MSCC_SDK_ARCH),arm)
+    ARCH       := arm
+    IMAGETYPES ?= itb ext4.gz
+else
+    ARCH       := mips
+    IMAGETYPES ?= mfi
+endif
+
+LINUX_SRC_CHECKOUT := $(LINUX_SRC_PARENT_DIR)/linux-src
+KOPT               := ARCH=$(ARCH) CROSS_COMPILE=$(MSCC_SDK_PREFIX)
+
+ifneq ("$(wildcard $(LINUX_SRC_CHECKOUT))","")
+LINUX_SRC = $(LINUX_SRC_CHECKOUT)
+else
+LINUX_SRC = $(MSCC_SDK_SYSROOT)/usr/src/linux
+endif
+
+KERNEL_DTS_PATH = $(LINUX_SRC)/scripts/dtc/include-prefixes
+
+# $1: kernel
+define KernelFactory
+# Live, compiled kernel
+KERNEL_BSRC_$1  := mscc-linux-$1
+
+ifeq ($(MSCC_SDK_ARCH),arm64)
+    KERNEL_STOCK_$1 := $$(MSCC_SDK_GNU)/$1/release/mscc-linux-kernel.bin.gz
+    KERNEL_BUILT_$1 := $$(KERNEL_BSRC_$1)/arch/arm64/boot/Image
+    KERNEL_DTBS_$1  := arch/$$(ARCH)/boot/dts/microchip
+else ifeq ($(MSCC_SDK_ARCH),arm)
+    KERNEL_STOCK_$1 := $$(MSCC_SDK_GNU)/$1/release/mscc-linux-kernel.bin.gz
+    KERNEL_BUILT_$1 := $$(KERNEL_BSRC_$1)/arch/arm/boot/Image
+    KERNEL_DTBS_$1  := arch/$$(ARCH)/boot/dts/microchip
+else
+    KERNEL_STOCK_$1 := $$(MSCC_SDK_GNU)/xstax/release/mscc-linux-kernel.bin
+    KERNEL_BUILT_$1 := $$(KERNEL_BSRC_$1)/arch/mips/boot/vmlinux.bin
+    KERNEL_DTBS_$1  := arch/$$(ARCH)/boot/dts/mscc
+endif
+
+ifneq ("$$(wildcard $$(LINUX_SRC_CHECKOUT))","")
+# We have the Linux source checked out - use that one
+KERNEL_FILE_$1 := $$(KERNEL_BUILT_$1)
+else
+KERNEL_FILE_$1 := $$(KERNEL_STOCK_$1)
+endif
+
+KERNEL_DEFCONFIG := microchip_xstax_defconfig
+KERNEL_DEFCONFIG_SRC := $$(LINUX_SRC_CHECKOUT)/arch/$$(ARCH)/configs/$${KERNEL_DEFCONFIG}
+
+$$(KERNEL_BSRC_$1): always
+	$$(call what,Create Linux kernel $1 dir - $$@)
+	$$(Q)mkdir -p $$@
+	$$(Q)[ -f $$@/.config ] || ([ -f $$(KERNEL_DEFCONFIG_SRC) ] && $$(MAKE) -C $$(LINUX_SRC_CHECKOUT) $$(KOPT) O=$$(OBJ)/$$@ $${KERNEL_DEFCONFIG})
+	$$(Q)[ -f $$@/.config ] || cp -v $$(MSCC_SDK_SYSROOT)/usr/src/mscc-linux-kernel/.config $$@
+	$$(MAKE) -C $$(LINUX_SRC_CHECKOUT) $$(KOPT) O=$$(OBJ)/$$@ outputmakefile dtbs
+	$$(Q)cp -v $$(OBJ)/$$@/$$(KERNEL_DTBS_$1)/*.dtb $$@/..
+
+$$(KERNEL_BUILT_$1): always | $$(KERNEL_BSRC_$1)
+	$$(call what,Create Linux kernel - $$@)
+	$$(MAKE) -C $$(KERNEL_BSRC_$1) $$(KOPT) -j -l 10 $$(@F)
+
+endef
+
+mmc-rootfs.squashfs: WORKDIR=mmc-rootfs
+mmc-rootfs.squashfs: $(TOPABS)/build/initramfs/main.c
+	$(Q)rm -fr $@ $(WORKDIR)
+	$(Q)mkdir -p $(WORKDIR)/sbin $(WORKDIR)/dev $(WORKDIR)/proc $(WORKDIR)/sys $(WORKDIR)/mnt $(WORKDIR)/mnt2 $(WORKDIR)/ld $(WORKDIR)/ld/old
+ifeq ($(MSCC_SDK_ARCH),arm64)
+	$(Q)tar -C $(WORKDIR) -xf $(MSCC_SDK_ROOTFS) \
+	./usr/sbin/veritysetup \
+	./lib/libblkid.so.1 ./lib/libblkid.so.1.1.0 ./lib/libc.so.6 \
+	./lib/libuuid.so.1 ./lib/libuuid.so.1.3.0 ./lib/libm.so.6 ./lib/ld-linux-aarch64.so.1 \
+	./usr/lib/libcryptsetup.so.12 ./usr/lib/libcryptsetup.so.12.10.0 ./usr/lib/libpopt.so.0 \
+	./usr/lib/libpopt.so.0.0.2 ./usr/lib/libdevmapper.so.1.02 ./usr/lib/libargon2.so.1 \
+	./usr/lib/libjson-c.so.5 ./usr/lib/libjson-c.so.5.3.0
+	$(Q)ln -s lib $(WORKDIR)/lib64
+	$(Q)ln -s lib $(WORKDIR)/usr/lib64
+	#$(Q)tar -C $(WORKDIR) --wildcards  -xf $(MSCC_SDK_ROOTFS) ./lib/*
+	#$(Q)tar -C $(WORKDIR) --wildcards  -xf $(MSCC_SDK_ROOTFS) ./usr/lib/*
+endif
+	$(Q)mkdir -p $(WORKDIR)/tmp
+	$(Q)$(TOPABS)/build/tools/image_append.rb -t $(TOPABS) -d $(WORKDIR)/tmp -u
+	$(Q)echo -n "" > $(WORKDIR)/tmp/fw_printenv.lock
+	$(Q)$(XCC) -o $(WORKDIR)/sbin/init -s -static $<
+	$(Q)mksquashfs $(WORKDIR)/ $@ -comp xz -all-root > /dev/null
+
+stage1_rootfs.squashfs: build_stage2_loader/stage2-loader
+	$(call what, Create $@)
+	$(Q)rm -rf stage1_rootfs stage1_rootfs.squashfs
+	$(Q)unsquashfs -f -d stage1_rootfs $(MSCC_SDK_UCLIBC)/xstax/release/rootfs.squashfs 2> /dev/null > /dev/null
+	$(Q)rm -rf stage1_rootfs/etc/services
+	$(Q)install -m 755 build_stage2_loader/stage2-loader  stage1_rootfs/usr/bin/stage2-loader
+	$(Q)ln -sf ../usr/bin/stage2-loader stage1_rootfs/sbin/init
+	$(Q)mksquashfs stage1_rootfs/* stage1_rootfs.squashfs -comp xz -all-root > /dev/null
+
+# $1: Profile name (e.g. istax_lan969x)
+# $2: Kernel (e.g. xstax)
+# $3: MEBA DTSO (e.g.lan969x)
+# $4: Target filename (*.mfi) (e.g.istax_lan969x)
+# $5: DTB file (e.g.lan969x)
+# $6: Chip name (e.g.lan969x)
+# Note: The first line HAS to be blank below!
+define MfiFactory
+
+$4.mfi: $4-$5.mfi
+
+$4/$5-$3.dtb: $5.dtb ${3}.dtbo
+	$$(call what,Create DT $$@)
+	$$(Q)mkdir -p $4
+	$$(Q)fdtoverlay -i $$< -o $$@ ${3}.dtbo
+
+$4/kernel-$5-$3.bin: $$(KERNEL_FILE_$2) $4/$5-$3.dtb
+	$$(Q)cat $$^ > $$@
+
+$4/kernel-$5-$3.xz: $4/kernel-$5-$3.bin
+	$$(Q)xz --check=crc32 --lzma2=preset=6e,dict=64KiB < $$< > $$@
+
+$4-$5.mfi: WORKDIR=wd-$4-$5
+$4-$5.mfi: $4.app-rootfs metadata.txt $4/kernel-$5-$3.xz $$(WEBCONTENT_SQUASHFS) stage1_rootfs.squashfs
+	$$(call what,Build $$@ on host `hostname` using WORKDIR=$$(WORKDIR) and pwd = `pwd`)
+	$$(Q)$$(MFI) -o $$@ stage1 \
+	        --kernel-set $4/kernel-$5-$3.xz \
+	        --initrd-set stage1_rootfs.squashfs \
+	        --kernel-command "init=/usr/bin/stage2-loader loglevel=4 image=mfi" \
+	        --metadata-set metadata.txt \
+	        --license-terms $$(MSCC_SDK_UCLIBC)/xstax/release/legal-info/licensedata.xz \
+	        --machine $6 \
+	        --soc-name $$(SOCFAM_$6) \
+	        --soc-no $$(CHIPNO_$6)
+	$$(Q)rm -rf $$(WORKDIR) $$(WORKDIR).squashfs
+	$$(Q)mkdir $$(WORKDIR)
+	$$(Q)unsquashfs -f -d $$(WORKDIR) $$(MSCC_SDK_GNU)/xstax/release/rootfs.squashfs 2> /dev/null > /dev/null
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/strace
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/strace-log-merge
+ifeq (BRINGUP,$(findstring BRINGUP, $(VTSS_PRODUCT_NAME)))
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/xtables
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libnetsnmp*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ntpd
+	$$(Q)rm -rf $$(WORKDIR)/usr/share/pci.ids.gz
+	$$(Q)rm -rf $$(WORKDIR)/var/www/hiawatha/
+	$$(Q)rm -rf $$(WORKDIR)/etc/hiawatha*
+	$$(Q)rm -rf $$(WORKDIR)/etc/init.d/S49ntp
+	$$(Q)rm -rf $$(WORKDIR)/etc/init.d/S80dhcp-relay
+	$$(Q)rm -rf $$(WORKDIR)/etc/init.d/S80dhcp-server
+	$$(Q)rm -rf $$(WORKDIR)/etc/ntp.conf
+	$$(Q)rm -rf $$(WORKDIR)/etc/init.d/S59snmpd
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/cgi-fcgi
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/lspci
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/net-snmp-create-v3-user
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/setpci
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/ssi-cgi
+	$$(Q)rm -rf $$(WORKDIR)/usr/bin/update-pciids
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/hiawatha*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libdhcp*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libdns*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libevent*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libfcgi*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libirs*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libisc*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libixml*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libjson*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libnet*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libip4tc*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libip6tc*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libupnp*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libomapi*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libpci*
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/libxtables*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/iptables*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ip6tables*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/snmpd*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/wigwam*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/xtables-legacy-multi*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/cgi-wrapper
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/dhcrelay*
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/flash_lock
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/flash_unlock
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/hiawatha*
+	$$(Q)rm -rf $$(WORKDIR)/var/lib/dhcp
+	$$(Q)rm -rf $$(WORKDIR)/var/lib/hiawatha
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ubicrc32
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ubiblock
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ubinfo
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ubirmvol
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ubirsvol
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/ubinize
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/nanddump
+	$$(Q)rm -rf $$(WORKDIR)/usr/sbin/nandtest
+	$$(Q)rm -rf $$(WORKDIR)/usr/libexec/lzo
+
+endif
+	$$(Q)mksquashfs $$(WORKDIR)/* $$(WORKDIR).squashfs -comp xz -all-root > /dev/null
+	$$(Q)$$(MFI) -i $$@ -o $$@ rootfs-squash \
+	        --action append \
+	        --name "rootfs" \
+	        --version $$(MSCC_SDK_VERSION) \
+	        --license-terms $$(MSCC_SDK_GNU)/xstax/release/legal-info/licensedata.xz \
+	        --file 			$$(WORKDIR).squashfs
+#	$$(Q)rm -fr $$(WORKDIR) $$(WORKDIR).squashfs
+	$$(Q)$$(MFI) -i $$@ -o $$@ rootfs-squash \
+	        --action append \
+	        --name "vtss" \
+	        --version $$(CODE_REVISION) \
+	        --file $4.app-rootfs
+ifneq ("$$(WEBCONTENT_SQUASHFS)","")
+	$$(Q)$$(MFI) -i $$@ -o $$@ rootfs-squash \
+	        --action append \
+	        --name "vtss-web-ui" \
+	        --version $$(CODE_REVISION) \
+	        --file $$(WEBCONTENT_SQUASHFS)
+endif
+	$$(call check-image-size,$$@,$$(VTSS_PRODUCT_NAME))
+	$$(call copy-to-dir-and-link,/tftpboot/$$(USER),$$@,new.mfi)
+
+endef
+
+INITRD=$(MSCC_SDK_UCLIBC)/stage1/rootfs.tar
+
+# $1: Profile name
+# $2: Kernel
+# $3: MEBA DTSO
+# $4: Target filename
+# $5: Machine name
+
+# Unfortunately, it's not possible to make comments in define directives unless
+# we like to see them on the console, so here it comes:
+# On debug builds (-DVTSS_SW_OPTION_DEBUG), we build statically with .a files,
+# a.o. because this allows us to backtrace into these libraries.
+# This also means that we don't create libvtss_basics.so, and the
+# api.so, and therefore don't install them to the rootfs.
+# On address sanitizer builds (-DVTSS_SW_OPTION_ASAN), we must prevent btsig.so
+# from being preloaded, because that will overwrite whatever exception signal
+# handler the address sanitizer has installed, so we use a different switch_app
+# service, and we install the address sanitizer .so file.
+# Note: The first line HAS to be blank below!
+
+# The "-Wl,-Bdynamic" and "-Wl,-Bstatic" tells the linker to link dynamically or
+# statically whatever comes after the directive. We need the last
+# "-Wl,-Bdynamic", because the linker adds libs itself after all the user-added
+# libs, and we need to link those as dynamic.
+
+# Notice: during build of .ext4 image a seperate application version_main_dummy
+# is built. This "application" does nothing but include the version-string in
+# a binary format. Explanation:
+# Prior to introduction of secure boot feature, the entire switch application
+# was contained in the file /usr/bin/switch_app. This binary executable contained
+# naturally the entire application and included the version string as plain text.
+# The version string is located *somewhere* in the application. When the switch
+# application was to determine the version string of the backup image, it would
+# simply browse through the entire binary file (for the backup image) and eventually
+# find the version string within that file. This was possible, since the backup image
+# binary was easily readable. After introduction of secure boot feature, the binary
+# (switch_app) is located within ext4.app, which needs to be remounted using hash and
+# roothash, and thus not very practical. To make this easier, an additional file is
+# therefore created (containing only the version-number). The application and
+# the "version-binary" are both generated during build. When the application is to
+# fetch/lookup version string, it will search through the "version-binary" instead
+# of the actual application and is able to find version string for that particular
+# partition without actually looking at the binary itself (which it not directly
+# readable anymore). The "version-binary" is called /usr/bin/switch_app. This may
+# seem unlogical, as this has not anything to do with the actual binary switch_app.
+# This is - however - due to being backward compatibility, as previous versions
+# of application will look for /usr/bin/switch_app. They will still find this
+# application, but the binary doesn't contain (nearly) anything but the version-string,
+# which is fine as nothing else is needed for that functionality.
+define ImageFactory
+
+$4.elf: compile $$(OBJECTS) $$(LIB_FILES)
+	$$(call what,Linking $$@)
+	$$(Q)$$(XLDXX) $$(LDFLAGS) -z noexecstack -L. -Wl,-Map -Wl,$$(basename $$@).txt \
+		$$(OBJECTS) $$(LIB_LINK_FLAGS) \
+		-L$$(API_LIB_DIR) -l$(cfg_api_$1) \
+		-Wl,-Bstatic \
+		-L$$(API_LIB_DIR)/meba -lmeba_$(cfg_meba_$1) \
+		-Wl,-Bdynamic \
+		-o $$@
+
+DTBS_$1 := $(addsuffix .dtb,$(subst :, ,$(cfg_dtb_$1)))
+
+$4.itb: WORKDIR=wd-$4-itb
+$4.itb: $4.app-rootfs $$(DTBS_$1) $3.dtbo $$(KERNEL_FILE_$2) \
+		$$(WEBCONTENT_SQUASHFS) build_stage2_loader/stage2-loader
+	$$(call what,Build $$@ on host `hostname`)
+	$$(Q)rm -fr $$(WORKDIR) $$@ $$(WORKDIR).squashfs
+	$$(Q)mkdir $$(WORKDIR)
+	$$(Q)([ -f $$(INITRD) ] && tar -C $$(WORKDIR) -xf $$(INITRD)) || echo "Skipping stage1 initrd"
+	$$(Q)tar -C $$(WORKDIR) -xf $(MSCC_SDK_ROOTFS)
+	$$(Q)cp $(DIR_main)/board_test/fa_loopback_test.sh $$(WORKDIR)/usr/bin
+	$$(Q)unsquashfs -f -d $$(WORKDIR) $4.app-rootfs 2> /dev/null > /dev/null
+ifneq ("$$(WEBCONTENT_SQUASHFS)","")
+	$$(Q)unsquashfs -f -d $$(WORKDIR) $$(WEBCONTENT_SQUASHFS) 2> /dev/null > /dev/null
+endif
+	$$(Q)install -m 755 build_stage2_loader/stage2-loader  $$(WORKDIR)/usr/bin/stage2-loader
+ifeq ("$(5)","bbb")
+	$$(Q)ln -sf ../bin/busybox $$(WORKDIR)/sbin/init
+else
+	$$(Q)ln -sf ../usr/bin/stage2-loader $$(WORKDIR)/sbin/init
+endif
+# Python3 is very large (~10MB) and shall only be included on targets
+# with eMMC where there is plenty of flash. itb is intended for NOR
+# flash that are somewhat more limited. Therefore, remove all the
+# python stuff. Itb is also used during debugging for netbooting
+# directly from uboot - In that case, comment out the following line
+# to leave python in the build
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/python* $$(WORKDIR)/usr/lib/libpython* $$(WORKDIR)/usr/bin/python*
+	$$(Q)mksquashfs $$(WORKDIR)/* $$(WORKDIR).squashfs -comp xz -all-root > /dev/null
+	$$(Q)$$(TOPABS)/build/tools/fit_file_builder.rb \
+		--arch $$(MSCC_SDK_ARCH) \
+		--board $(cfg_dtb_$1) \
+		--kernel-file $$(KERNEL_FILE_$2) \
+		--priv_key_path $$(MSCC_SDK_GNU)/bootloaders/release/keys \
+		--machine $5 \
+		--rootfs $$(WORKDIR).squashfs \
+		--dtb-path . \
+		--dtb-overlay ${3}.dtbo \
+		--version-string "$$(BUILD_ID) Config:$4 Profile:$1$(if $$(MSCC_SDK_VERSION), SDK:$$(MSCC_SDK_VERSION)-$$(MSCC_SDK_FLAVOR))" \
+		--rev-string "$$(CODE_REVISION)" \
+		--date-string "$$(CTIME)" \
+		--output $$@
+	$$(call copy-to-dir-and-link,/tftpboot/$$(USER),$$@,new.itb)
+
+$4.ext4: WORKDIR_PACKAGE=wd-$4-ext4
+$4.ext4: WORKDIR_APP_TMP=wd-new-$4-ext4
+$4.ext4: $4.app-rootfs ${3}.dtbo $$(KERNEL_FILE_$2) \
+		$$(WEBCONTENT_SQUASHFS) mmc-rootfs.squashfs build_stage2_loader/stage2-loader
+	$$(call what,Build $$@ on host `hostname`)
+	$$(Q)rm -fr $$(WORKDIR_PACKAGE) $$(WORKDIR_APP_TMP) $$@
+	$$(Q)mkdir $$(WORKDIR_PACKAGE)
+	$$(Q)mkdir -p $$(WORKDIR_PACKAGE)/usr/bin
+	$$(Q)mkdir $$(WORKDIR_APP_TMP)
+	$$(Q)$$(TOPABS)/build/tools/fit_file_builder.rb \
+		--arch $$(MSCC_SDK_ARCH) \
+		--board $(cfg_dtb_$1) \
+		--kernel-file $$(KERNEL_FILE_$2) \
+		--priv_key_path $$(MSCC_SDK_GNU)/bootloaders/release/keys \
+		--machine $5 \
+		--rootfs mmc-rootfs.squashfs \
+		--dtb-path . \
+		--dtb-overlay ${3}.dtbo \
+		--output $$(WORKDIR_PACKAGE)/Image.itb
+	$$(Q)tar -C $$(WORKDIR_APP_TMP) -xf $(MSCC_SDK_ROOTFS)
+	$$(Q)cp $(DIR_main)/board_test/fa_loopback_test.sh $$(WORKDIR_APP_TMP)/usr/bin
+	$$(Q)unsquashfs -f -d $$(WORKDIR_APP_TMP) $4.app-rootfs 2> /dev/null > /dev/null
+ifneq ("$$(WEBCONTENT_SQUASHFS)","")
+	$$(Q)unsquashfs -f -d $$(WORKDIR_APP_TMP) $$(WEBCONTENT_SQUASHFS) 2> /dev/null > /dev/null
+endif
+	$$(Q)install -m 755 build_stage2_loader/stage2-loader $$(WORKDIR_APP_TMP)/usr/bin/stage2-loader
+ifeq ("$(5)","bbb")
+	$$(Q)ln -sf ../bin/busybox $$(WORKDIR_APP_TMP)/sbin/init
+else
+	$$(Q)ln -sf ../usr/bin/stage2-loader $$(WORKDIR_APP_TMP)/sbin/init
+endif
+ifeq (,$(findstring -DVTSS_SW_OPTION_DEBUG,$(DEFINES)))
+	$$(Q)mke2fs -q -d $$(WORKDIR_APP_TMP) -b 4096 -r 1 -N 0 -m 5 -t ext4 -L "" -O ^64bit $$(WORKDIR_PACKAGE)/app.ext4 128M > /dev/null
+else
+	$$(Q)mke2fs -q -d $$(WORKDIR_APP_TMP) -b 4096 -r 1 -N 0 -m 5 -t ext4 -L "" -O ^64bit $$(WORKDIR_PACKAGE)/app.ext4 192M > /dev/null
+endif
+ifeq ($(MSCC_SDK_ARCH),arm64)
+	$$(Q)veritysetup format --hash=sha256 $$(WORKDIR_PACKAGE)/app.ext4 $$(WORKDIR_PACKAGE)/app.hash | grep Root | cut -d: -f2 | xargs | tr -d '\n' > $$(WORKDIR_PACKAGE)/app.roothash
+	$$(Q)chmod 664 $$(WORKDIR_PACKAGE)/app.hash
+endif
+	$$(Q)$$(XCC) -c $(DIR_main)/version_main_dummy.cxx -o ./version_main_dummy-$1.o
+	$$(Q)$$(XCC) -o $$(WORKDIR_PACKAGE)/usr/bin/switch_app ./version-$1.o ./version_main_dummy-$1.o
+	$$(Q)mke2fs -q -d $$(WORKDIR_PACKAGE) -r 1 -N 0 -m 5 -t ext4 -L "" -O ^64bit $$@ 128M > /dev/null
+
+$4.ext4.gz: $4.ext4
+	$$(call what,Compress $$<)
+	$$(Q)gzip < $$< > $$@
+	$$(call copy-to-dir-and-link,/tftpboot/$$(USER),$$@,new.ext4.gz)
+
+$4.ubifs: WORKDIR=wd-$4-ubifs
+$4.ubifs: $4.app-rootfs ${3}.dtbo $$(KERNEL_FILE_$2) \
+		$$(WEBCONTENT_SQUASHFS) build_stage2_loader/stage2-loader
+	$$(call what,Build $$@ on host `hostname`)
+	$$(Q)rm -fr $$(WORKDIR) $$@
+	$$(Q)mkdir $$(WORKDIR)
+	$$(Q)$$(TOPABS)/build/tools/fit_file_builder.rb \
+		--arch $$(MSCC_SDK_ARCH) \
+		--board $(cfg_dtb_$1) \
+		--kernel-file $$(KERNEL_FILE_$2) \
+		--machine $5 \
+		--dtb-path . \
+		--dtb-overlay ${3}.dtbo \
+		--output $$(WORKDIR)/Image.itb
+	$$(Q)tar -C $$(WORKDIR) -xf $(MSCC_SDK_ROOTFS)
+# Python3 is very large (~10MB) and shall only be included on targets
+# with eMMC where there is plenty of flash. Ubifs is intended for NAND
+# flash that are somewhat more limited. Therefore, remove all the
+# python stuff
+	$$(Q)rm -rf $$(WORKDIR)/usr/lib/python* $$(WORKDIR)/usr/lib/libpython* $$(WORKDIR)/usr/bin/python*
+	$$(Q)cp $(DIR_main)/board_test/fa_loopback_test.sh $$(WORKDIR)/usr/bin
+	$$(Q)unsquashfs -f -d $$(WORKDIR) $4.app-rootfs 2> /dev/null > /dev/null
+ifneq ("$$(WEBCONTENT_SQUASHFS)","")
+	$$(Q)unsquashfs -f -d $$(WORKDIR) $$(WEBCONTENT_SQUASHFS) 2> /dev/null > /dev/null
+endif
+	$$(Q)install -m 755 build_stage2_loader/stage2-loader  $$(WORKDIR)/usr/bin/stage2-loader
+ifeq ("$(5)","bbb")
+	$$(Q)ln -sf ../bin/busybox $$(WORKDIR)/sbin/init
+else
+	$$(Q)ln -sf ../usr/bin/stage2-loader $$(WORKDIR)/sbin/init
+endif
+	$$(Q)mkdir -p $4-ubimage
+	$$(Q)mkfs.ubifs -r $$(WORKDIR) -m 2048 -e 124KiB -c 512 -o $$@
+	$$(call copy-to-dir-and-link,/tftpboot/$$(USER),$$@,new.ubifs)
+
+$4.app-rootfs: DESTDIR=$4-rootfs
+
+ifeq (,$(findstring -DVTSS_SW_OPTION_DEBUG,$(DEFINES)))
+$4.app-rootfs: $4.elf $$(BTSIG_SO) $$(TARGETS_zls) $(call if-module,ssh,icli_ssh) $(call if-module,frr,build_frr_project) libvtss_basics.so | build_api
+else
+$4.app-rootfs: $4.elf $$(BTSIG_SO) $$(TARGETS_zls) $(call if-module,ssh,icli_ssh) $(call if-module,frr,build_frr_project) | build_api
+endif
+	$$(call what, Generate $$@)
+	$$(Q)rm -fr $$(DESTDIR) $$@
+	$$(Q)install -d $$(DESTDIR)/switch $$(DESTDIR)/etc/mscc $$(DESTDIR)/lib $$(DESTDIR)/usr/bin $$(DESTDIR)/bin
+	$$(Q)install -m 755 $4.elf $$(DESTDIR)/usr/bin/switch_app
+	$$(Q)$$(XSTRIP) $$(STRIP_FLAGS) $$(DESTDIR)/usr/bin/switch_app
+	$$(Q)install -m 755 $$(BTSIG_SO) $$(DESTDIR)/lib
+	$$(Q)install -m 664 -T $$(TOPABS)/licenses-$(MSCC_SDK_ARCH).txt $$(DESTDIR)/etc/mscc/licenses.txt
+	$$(Q)gzip $$(DESTDIR)/etc/mscc/licenses.txt
+ifeq (,$(findstring -DVTSS_SW_OPTION_DEBUG,$(DEFINES)))
+	$$(Q)install -m 755 $$(API_LIB_DIR)/lib$(cfg_api_$1).so $$(DESTDIR)/lib
+	$$(Q)install -m 755 libvtss_basics.so $$(DESTDIR)/lib
+endif
+ifneq (,$(findstring -DVTSS_SW_OPTION_ASAN,$(DEFINES)))
+ifeq ($(MSCC_SDK_ARCH),arm64)
+	$$(Q)cp $$(MSCC_TOOLCHAIN_BASE)/arm64-armv8_a-linux-gnu/aarch64-armv8_a-linux-gnu/lib64/libasan.so* $$(DESTDIR)/lib
+else ifeq ($(MSCC_SDK_ARCH),arm)
+	$$(Q)cp $$(MSCC_TOOLCHAIN_BASE)/arm-cortex_a8-linux-gnueabihf/arm-cortex_a8-linux-gnueabihf/lib/libasan.so* $$(DESTDIR)/lib
+endif
+	$$(Q)install -D -m 664 $$(TOPABS)/build/tools/address_sanitizer_options.sh $$(DESTDIR)/etc/profile.d/address_sanitizer_options.sh
+	$$(Q)install -D -m 664 $$(TOPABS)/build/tools/switch_app_asan.service $$(DESTDIR)/etc/mscc/service/switch_app.service
+else
+	$$(Q)install -D -m 664 $$(TOPABS)/build/tools/switch_app.service $$(DESTDIR)/etc/mscc/service/switch_app.service
+endif
+	$$(Q)mkdir -p $$(DESTDIR)/lib/phy_drivers
+	$$(Q)install -D -m 664 $$(ICFG_DEFAULT_CONFIG) $$(DESTDIR)/etc/mscc/icfg/default-config
+ifneq ("$$(TARGETS_zls)","")
+	$$(Q)install -m 755 $$(TARGETS_zls) $$(DESTDIR)/lib
+endif
+ifneq ("$$(DIR_ssh_platform)","")
+	$$(Q)install -D -m 644 $$(DIR_ssh_platform)/misc/shells $$(DESTDIR)/etc/shells
+	$$(Q)install -m 755 icli_ssh $$(DESTDIR)/bin/icli
+	$$(Q)$$(XSTRIP) $$(STRIP_FLAGS) $$(DESTDIR)/bin/icli
+endif
+ifneq ("$$(POE_FIRMWARE)","")
+	$$(Q)install -d $$(DESTDIR)/etc/mscc/poe/firmware
+	$$(Q)install -m 644 $$(POE_FIRMWARE) $$(DESTDIR)/etc/mscc/poe/firmware
+endif
+ifneq ("$$(DPLL_FIRMWARE)","")
+	$$(Q)install -d $$(DESTDIR)/etc/mscc/dpll/firmware
+	$$(Q)install -m 644 $$(DPLL_FIRMWARE) $$(DESTDIR)/etc/mscc/dpll/firmware
+endif
+ifneq ("$$(DPLL_CFG)", "")
+	$$(Q)install -d $$(DESTDIR)/etc/mscc/dpll/cfg
+	$$(Q)install -m 644 $$(DPLL_CFG) $$(DESTDIR)/etc/mscc/dpll/cfg
+endif
+ifneq ("$$(MISC_FILES)","")
+	$$(Q)install -d $$(DESTDIR)/etc/mscc/misc/
+	$$(Q)install -m 644 $$(MISC_FILES) $$(DESTDIR)/etc/mscc/misc
+endif
+ifneq ("$$(DPLL_SHOW_FW_VER)","") 
+	$$(Q)install -m 777 $$(DPLL_SHOW_FW_VER) $$(DESTDIR)/etc/mscc/dpll/firmware
+endif
+	$$(Q)$$(TOPABS)/build/tools/image_append.rb --ld $$(XLD) --strip $$(XSTRIP) -a $$(MSCC_SDK_ARCH) -t $$(TOPABS) -d $$(DESTDIR) -m $4 --api-build $$(API_LIB_DIR)
+	$$(Q)find $$(DESTDIR) -name "*.so" | xargs $$(XSTRIP) $$(STRIP_FLAGS)
+	$$(Q)mksquashfs $$(DESTDIR)/* $$@ -comp xz -all-root > /dev/null
+endef
+
+%.dtbo: $(BUILD)/make/meba/meba_%.dtso
+	$(call compile_dtc,$<,$@,$*)
+
+# Generic MEBA objects - IFF we need to compile MEBA
+MEBA_AUX    := meba/meba_aux.o meba/meba_generic.o
+MEBA_AUX_C  := $(patsubst meba/%.o,$(API_PATH)/meba/src/%.c,$(MEBA_AUX))
+MEBA_INCLUDE = -I$(API_BUILD_PATH)/include_common -I$(API_PATH)/meba/src
+
+$(MEBA_AUX): meba/%.o: $(API_PATH)/meba/src/%.c
+	$(call what, Compile MEBA helper $@)
+	$(Q)mkdir -p meba
+	$(Q)$(XCC) -c -o $@ -MD $(MEBA_INCLUDE) -fPIC $<
+
+$(MEBA_AUX_C): build_api
+
+# $1: MEBA
+# $2: src obj
+# $3: Target
+define MebaLibObj
+
+MEBA_OBJS_$(1) += $(3)
+$(3): $(2)
+	$$(call what, Compile MEBA: $(1) - $(2))
+	$$(Q)mkdir -p meba
+	$$(Q)$$(XCC) -c -o $$@ -MD $$(MEBA_INCLUDE) -fPIC $$<
+
+endef
+
+KERNELS  := $(sort $(foreach c,$(TARGET_LIST),$(KERNEL_$(cfg_chip_$(c)))))
+MEBALIBS := $(sort $(foreach c,$(TARGET_LIST),$(cfg_meba_$(c))))
+
+$(eval $(foreach k,$(KERNELS),$(call KernelFactory,$(k))))
+$(eval $(foreach c,$(TARGET_LIST),$(foreach d,$(subst :, ,$(cfg_dtb_$(c))),$(call MfiFactory,$(c),$(KERNEL_$(cfg_chip_$(c))),$(cfg_dtso_$(c)),$(cfg_tgtname_$(c)),$(d),$(cfg_chip_$(c))))))
+$(eval $(foreach c,$(TARGET_LIST),$(call ImageFactory,$(c),$(KERNEL_$(cfg_chip_$(c))),$(cfg_dtso_$(c)),$(cfg_tgtname_$(c)),$(MACHINE_$(cfg_chip_$(c))))))
+$(eval $(foreach m,$(MEBALIBS),$(foreach f,$(Custom/MebaSrc_$(m)),$(call MebaLibObj,$(m),$(f),meba/$(m)_$(notdir $(patsubst %.c,%.o,$(f)))))))
+
+# The TARGET_LIST contains (despite its name) a list of profile names to
+# compile. The resulting filename of the MFI/ITB file is that given in
+# targets.in's "Target filename" column.
+TARGETS_main := $(foreach t,$(IMAGETYPES),$(foreach c,$(TARGET_LIST),$(cfg_tgtname_$(c)).$(t)))
+
+# Search "custom" directory first
+vpath %.dts $(BUILD)/custom_device_tree
+vpath %.dts $(KERNEL_DTS_PATH)/arm64/microchip
+vpath %.dts $(KERNEL_DTS_PATH)/arm64/freescale
+vpath %.dts $(KERNEL_DTS_PATH)/arm/microchip
+vpath %.dts $(KERNEL_DTS_PATH)/mips/mscc
+
+# Libs
+LIB_LINK_FLAGS = $(patsubst lib%.a,-l%,$(LIB_FILES))
+LIB_LINK_FLAGS := $(patsubst lib%.so,-l%,$(LIB_LINK_FLAGS)) $(LIB_LINK_FLAGS_EXTERNAL)
+
+# Libs
+ICLI_LIB_LINK_FLAGS = $(patsubst lib%.a,-l%,$(LIB_FILES_ICLI))
+ICLI_LIB_LINK_FLAGS := $(patsubst lib%.so,-l%,$(ICLI_LIB_LINK_FLAGS))
+
+LIB_LINK_FLAGS      += -lpthread -lmbedtls -lxz-embedded -lmbedx509 -lmbedcrypto -lz -ldl -lcurl $(LIBS_$(MSCC_SDK_ARCH))
+ICLI_LIB_LINK_FLAGS += -lpthread -lz -lvtss_client
+
+compile_commands.json: $(OBJECTS) $(LIB_FILES)
+	$(Q)$(TOP)/build/make/compile-db-combine.rb
+
+# Built-in ICLI
+$(eval $(call add_icli,$(MODULE_ID_main),$(DIR_main)/main.icli))
+
+# Web Content Generation
+WEB_CONTENT += $(DIR_main)/html
+
+
+# $1 - target name
+# $2 - profile name
+define VersionCompile
+$1.elf: OBJECTS_main += version-$1.o
+$1.elf: version-$1.o
+version-$1.o: RELEASE_VERSION ?= $$(BUILD_ID) Config:$1 Profile:$2$(if $$(MSCC_SDK_VERSION), SDK:$$(MSCC_SDK_VERSION)-$$(MSCC_SDK_FLAVOR))
+# If BUILD_NUMBER is empty, it must be undefined for version.c to show correct version information.
+ifneq ($$(BUILD_NUMBER),)
+version-$1.o: CXXFLAGS += -DBUILD_NUMBER="$$(BUILD_NUMBER)"
+endif
+# The rest can be defined whether empty or not without problems.
+version-$1.o: CXXFLAGS += -DCODE_REVISION="$$(CODE_REVISION)" -DCOMPILE_TIME="$$(CTIME)" -DSW_RELEASE="$$(RELEASE_VERSION)"
+# Always compile version
+version-$1.o: always | build_api
+	$$(call compile_cxx,$$(MODULE_ID_main), $$@, $$(DIR_main)/version.cxx)
+
+endef
+
+$(eval $(foreach c,$(TARGET_LIST),$(call VersionCompile,$(cfg_tgtname_$(c)),$(c))))
+
+linux_clone:
+	$(TOPABS)/build/tools/linux_kernel_clone $(LINUX_SRC_PARENT_DIR)
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/defines.h $(DIR_APPL)/include/vtss/appl/module_id.h $(DIR_APPL)/include/vtss/appl/types.h
+
+VTSS_CODE_STYLE_CHK_FILES_main := $(DIR_main)/vtss_alloc.cxx

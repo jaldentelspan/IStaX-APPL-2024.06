@@ -1,0 +1,110 @@
+########################################################-*- mode: Makefile -*-
+#
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+# ------------------------------------------------------------------------
+DIR_xxrp          := $(DIR_APPL)/xxrp
+MODULE_ID_xxrp := 89 # VTSS_MODULE_ID_XXRP
+DIR_xxrp_base     := $(DIR_xxrp)/base
+DIR_xxrp_platform := $(DIR_xxrp)/platform
+DIR_xxrp_html     := $(DIR_xxrp_platform)/html
+
+OBJECTS_xxrp_base  :=                       \
+  vtss_xxrp.o vtss_xxrp_applications.o      \
+  $(call if-module,mvrp,vtss_xxrp_map.o)    \
+  $(call if-module,mvrp,vtss_xxrp_madtt.o)  \
+  $(call if-module,mvrp,vtss_xxrp_debug.o)  \
+  $(call if-module,mvrp,vtss_xxrp_timers.o) \
+  $(call if-module,gvrp,vtss_garptt.o)      \
+  $(call if-module,gvrp,vtss_gvrp.o)
+
+OBJECTS_xxrp_platform := xxrp.o xxrp_sys.o \
+  $(call if-module,web,  xxrp_web.o)
+
+OBJECTS_xxrp_cxx := \
+  $(call if-module,gvrp, $(call if-module,json_rpc,    gvrp_json.o))           \
+  $(call if-module,gvrp, $(call if-module,private_mib, gvrp_mib.o))            \
+  $(call if-module,gvrp, gvrp_mib_if.o)                                        \
+  $(call if-module,gvrp, $(call if-module,icli,        garp_icli_functions.o)) \
+  $(call if-module,mvrp, $(call if-module,icli,        mrp_icli_functions.o))  \
+  $(call if-module,icfg,                               xxrp_icfg.o)            \
+  $(call if-module,xxrp, xxrp_expose.o)                                        \
+  $(call if-module,xxrp, $(call if-module,json_rpc,    xxrp_json.o))           \
+  $(call if-module,xxrp, $(call if-module,private_mib, xxrp_mib.o))
+
+OBJECTS_xxrp_cxx_base := \
+  $(call if-module,mvrp, vtss_xxrp_mvrp.o) \
+  $(call if-module,mvrp,vtss_mrp_mad.o)    \
+  $(call if-module,mvrp,vtss_xxrp_types.o) \
+  $(call if-module,mvrp,vtss_mrp_frame.o)  \
+  $(call if-module,mvrp,vtss_mrp.o)
+
+OBJECTS_xxrp := $(OBJECTS_xxrp_platform) $(OBJECTS_xxrp_base) $(OBJECTS_xxrp_cxx) $(OBJECTS_xxrp_cxx_base)
+
+# Built-in ICLI
+$(eval $(call if-module,gvrp,$(call if-module,icli,$(call add_icli,$(MODULE_ID_xxrp),$(DIR_xxrp_platform)/gvrp.icli))))
+$(eval $(call if-module,mvrp,$(call if-module,icli,$(call add_icli,$(MODULE_ID_xxrp),$(DIR_xxrp_platform)/mvrp.icli))))
+
+$(OBJECTS_xxrp_platform): %.o: $(DIR_xxrp_platform)/%.cxx $(BUILD)/make/module_xxrp.in
+	$(call compile_cxx,$(MODULE_ID_xxrp), $@, $<)
+
+$(OBJECTS_xxrp_cxx): %.o: $(DIR_xxrp_platform)/%.cxx $(BUILD)/make/module_xxrp.in
+	$(call compile_cxx,$(MODULE_ID_xxrp), $@, $<)
+
+$(OBJECTS_xxrp_base): %.o: $(DIR_xxrp_base)/%.cxx $(BUILD)/make/module_xxrp.in
+	$(call compile_cxx,$(MODULE_ID_xxrp), $@, $<)
+
+$(OBJECTS_xxrp_cxx_base): %.o: $(DIR_xxrp_base)/%.cxx $(BUILD)/make/module_xxrp.in
+	$(call compile_cxx,$(MODULE_ID_xxrp), $@, $<)
+
+# Include files
+INCLUDES += -I$(DIR_xxrp_platform) -I$(DIR_xxrp_base)
+
+# Web Content Generation
+WEB_CONTENT += $(DIR_xxrp_html)
+
+# Files to be linted - lint is disabled now
+#LINT_FILES_xxrp += $(addprefix $(DIR_xxrp_base)/,$(OBJECTS_xxrp_base:.o=.c))
+#LINT_FILES_xxrp += $(addprefix $(DIR_xxrp_platform)/,$(OBJECTS_xxrp_platform:.o=.c))
+
+# S/W coding style check
+#VTSS_CODE_STYLE_CHK_FILES_xxrp += $(DIR_xxrp_base)/*.cxx
+#VTSS_CODE_STYLE_CHK_FILES_xxrp += $(DIR_xxrp_base)/*.hxx
+#VTSS_CODE_STYLE_CHK_FILES_xxrp += $(DIR_xxrp_base)/*.c
+VTSS_CODE_STYLE_CHK_FILES_xxrp += $(DIR_xxrp_base)/*.h
+#VTSS_CODE_STYLE_CHK_FILES_xxrp += $(DIR_xxrp_platform)/*.cxx
+#VTSS_CODE_STYLE_CHK_FILES_xxrp += $(DIR_xxrp_platform)/*.c
+VTSS_CODE_STYLE_CHK_FILES_xxrp += $(DIR_xxrp_platform)/*.h
+
+# Tidy files
+TIDY_FILES_xxrp += $(DIR_xxrp_html)/*.htm $(DIR_xxrp_html)/help/*.htm
+
+# JSlint files
+JSLINT_FILES_xxrp += $(TIDY_FILES_xxrp)
+
+# Public header files
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/gvrp.h
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/mrp.h
+PUBLIC_HEADERS += $(DIR_APPL)/include/vtss/appl/mvrp.h
