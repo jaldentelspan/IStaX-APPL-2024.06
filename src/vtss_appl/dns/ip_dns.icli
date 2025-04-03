@@ -1,0 +1,1036 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_DNS)
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "mgmt_api.h"
+#include "vtss/appl/dns.h"
+#if defined(VTSS_SW_OPTION_IP)
+#include "ip_utils.hxx"
+#endif /* defined(VTSS_SW_OPTION_IP) */
+INCLUDE_END
+
+FUNCTION_BEGIN
+static BOOL _icli_ip_dns_nameserver_range(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_dns_capabilities_t cap;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if (vtss_appl_dns_capabilities_get(&cap) != VTSS_RC_OK) {
+        return FALSE;
+    }
+
+    // Syntax for a range_list is to add one element and give that element
+    // the boundaries.
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = 0;
+    runtime->range.u.ur.range[0].max = cap.ns_cnt_max - 1;
+    return TRUE;
+}
+
+static BOOL _icli_ip_dns_chk_dhcp_support_ddn(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_dns_capabilities_t    dns_cap;
+
+    switch ( ask ) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = FALSE;
+        if (vtss_appl_dns_capabilities_get(&dns_cap) == VTSS_RC_OK &&
+            dns_cap.support_default_domain_name) {
+            runtime->present = (dns_cap.support_dhcp4_domain_name || dns_cap.support_dhcp6_domain_name);
+        }
+
+        return TRUE;
+    case ICLI_ASK_BYWORD:
+    case ICLI_ASK_HELP:
+    case ICLI_ASK_RANGE:
+    default:
+
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL _icli_ip_dns_chk_dhcpv4_support_ddn(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_dns_capabilities_t    dns_cap;
+
+    switch ( ask ) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = (vtss_appl_dns_capabilities_get(&dns_cap) == VTSS_RC_OK) ? dns_cap.support_dhcp4_domain_name : FALSE;
+
+        return TRUE;
+    case ICLI_ASK_BYWORD:
+    case ICLI_ASK_HELP:
+    case ICLI_ASK_RANGE:
+    default:
+
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL _icli_ip_dns_chk_dhcpv6_support_ddn(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_dns_capabilities_t    dns_cap;
+
+    switch ( ask ) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = (vtss_appl_dns_capabilities_get(&dns_cap) == VTSS_RC_OK) ? dns_cap.support_dhcp6_domain_name : FALSE;
+
+        return TRUE;
+    case ICLI_ASK_BYWORD:
+    case ICLI_ASK_HELP:
+    case ICLI_ASK_RANGE:
+    default:
+
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL _icli_ip_dns_chk_dhcpv6_present(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    switch ( ask ) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = vtss_ip_hasdhcpv6();
+
+        return TRUE;
+    case ICLI_ASK_BYWORD:
+    case ICLI_ASK_HELP:
+    case ICLI_ASK_RANGE:
+    default:
+
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL _icli_ip_dns_chk_egress_intf_present(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_dns_capabilities_t    cap;
+
+    switch ( ask ) {
+    case ICLI_ASK_PRESENT:
+        if (vtss_appl_dns_capabilities_get(&cap) != VTSS_RC_OK) {
+            return FALSE;
+        }
+        runtime->present = cap.support_mcast_anycast_ll_dns;
+
+        return TRUE;
+    case ICLI_ASK_BYWORD:
+    case ICLI_ASK_HELP:
+    case ICLI_ASK_RANGE:
+    default:
+
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL _icli_ip_dns_proxy_state_set(u32 session_id, BOOL state)
+{
+    vtss_appl_dns_proxy_conf_t  entry;
+
+    entry.proxy_admin_state = state;
+    return (vtss_appl_dns_proxy_config_set(&entry) == VTSS_RC_OK);
+}
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = debug ip dns capability
+
+DOC_CMD_DESC    = Use this command to show the supported capabilities of DNS.
+DOC_CMD_DEFAULT = No form of this command is not available.
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = icli_dns_service_capability
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! 1: debug
+! 2: ip
+! 3: dns
+! 4: capability
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_DNS
+HELP = Display DNS Capabilities
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+    mesa_rc                         cmd_rc = ICLI_RC_OK;
+    vtss_appl_dns_capabilities_t    cap;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((cmd_rc = vtss_appl_dns_capabilities_get(&cap)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("\n\rDNS Support Default DomainName   : %s\n", cap.support_default_domain_name ? "Yes" : "No");
+    ICLI_PRINTF("DHCPv4 Support Setting DNS Server: %s\n", cap.support_dhcp4_config_server ? "Yes" : "No");
+    ICLI_PRINTF("DHCPv6 Support Setting DNS Server: %s\n", cap.support_dhcp6_config_server ? "Yes" : "No");
+    ICLI_PRINTF("DHCPv4 Support Setting DomainName: %s\n", cap.support_dhcp4_domain_name ? "Yes" : "No");
+    ICLI_PRINTF("DHCPv6 Support Setting DomainName: %s\n", cap.support_dhcp6_domain_name ? "Yes" : "No");
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = ip name-server [ <0-3> ] { <ipv4_ucast> | { <ipv6_ucast> [ interface vlan <vlan_id> ] } | dhcp [ ipv4 | ipv6 ] [ interface vlan <vlan_id> ] }
+
+DOC_CMD_DESC    = Set the DNS server for resolving domain names
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When the DNS is required by system, add or update the \
+                  server's IP address for access
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config all-defaults
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = no ip name-server
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config)# ip name-server 168.95.1.1
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = ip name-server 168.95.1.1
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = icli_ip_dns_server_set
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+! 1: ip
+! 2: name-server
+! 3: <0-3>
+! 4: <ipv4_ucast>
+! 5: <ipv6_ucast>
+! 6: interface
+! 7: vlan
+! 8: <vlan_id>
+! 9: dhcp
+! 10: ipv4
+! 11: ipv6
+! 12: interface
+! 13: vlan
+! 14: <vlan_id>
+
+RUNTIME =
+RUNTIME =
+RUNTIME = _icli_ip_dns_nameserver_range
+RUNTIME =
+RUNTIME =
+RUNTIME = _icli_ip_dns_chk_egress_intf_present
+RUNTIME = _icli_ip_dns_chk_egress_intf_present
+RUNTIME = _icli_ip_dns_chk_egress_intf_present
+RUNTIME =
+RUNTIME =
+RUNTIME = _icli_ip_dns_chk_dhcpv6_present
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = order
+CMD_VAR = v_ipv4_ucast
+CMD_VAR = v_ipv6_ucast
+CMD_VAR = has_interface_static
+CMD_VAR =
+CMD_VAR = v_vlan_id_static
+CMD_VAR = has_dhcp
+CMD_VAR = has_ipv4
+CMD_VAR = has_ipv6
+CMD_VAR = has_interface_dhcp
+CMD_VAR =
+CMD_VAR = v_vlan_id_dhcp
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_DNS
+HELP = Preference of DNS server. Default selection is 0
+HELP = A valid IPv4 unicast address
+HELP = A valid IPv6 unicast address
+HELP = ##ICLI_HELP_INTERFACE
+HELP = VLAN Interface
+HELP = VLAN identifier (VID)
+HELP = ##ICLI_HELP_DHCP
+HELP = DNS setting is derived from DHCPv4; Default selection
+HELP = DNS setting is derived from DHCPv6
+HELP = ##ICLI_HELP_INTERFACE
+HELP = VLAN Interface
+HELP = VLAN identifier (VID)
+
+BYWORD =
+BYWORD =
+BYWORD = <Order : 0-2>
+BYWORD =
+BYWORD =
+BYWORD = interface : Option
+BYWORD =
+BYWORD =
+BYWORD = dhcp : Option
+BYWORD = ipv4 : Option
+BYWORD = ipv6 : Option
+BYWORD = interface : Option
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    mesa_rc                     cmd_rc = ICLI_RC_OK;
+    vtss_appl_dns_server_conf_t dns_srv;
+
+    /* If iCLI engine detects user input, this variable will be updated accordingly */
+    order = 0;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((cmd_rc = vtss_appl_dns_server_config_get(&order, &dns_srv)) == VTSS_RC_OK) {
+        memset(&dns_srv, 0x0, sizeof(vtss_appl_dns_server_conf_t));
+        if (has_dhcp) {
+            if (has_interface_dhcp) {
+                if (has_ipv6) {
+                    dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_VLAN;
+                } else if (has_ipv4) {
+                    dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_VLAN;
+                } else {
+                    dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_VLAN;
+                }
+
+                if (vtss_ifindex_from_vlan(v_vlan_id_dhcp, &dns_srv.static_ifindex) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Invalid interface vlan %u.\n\n", v_vlan_id_dhcp);
+                    return ICLI_RC_ERROR;
+                }
+            } else {
+                if (has_ipv6) {
+                    dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_ANY;
+                } else if (has_ipv4) {
+                    dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_ANY;
+                } else {
+                    dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_ANY;
+                }
+            }
+        } else if (v_ipv4_ucast) {
+            dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_STATIC;
+            dns_srv.static_ip_address.type = MESA_IP_TYPE_IPV4;
+            dns_srv.static_ip_address.addr.ipv4 = v_ipv4_ucast;
+        } else if (vtss_ipv6_addr_is_mgmt_support(&v_ipv6_ucast)) {
+            vtss_appl_dns_capabilities_t    cap;
+
+            if (vtss_appl_dns_capabilities_get(&cap) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Invalid operation.\n\n");
+                return ICLI_RC_ERROR;
+            }
+
+            if (vtss_ipv6_addr_is_multicast(&v_ipv6_ucast) && !cap.support_mcast_anycast_ll_dns) {
+                ICLI_PRINTF("%% Static IPv6 multicast/anycast address is not supported.\n\n");
+                return ICLI_RC_ERROR;
+            }
+
+            if (vtss_ipv6_addr_is_zero(&v_ipv6_ucast)) {
+                ICLI_PRINTF("%% Please use no command to negate DNS IPv6 server address.\n\n");
+                return ICLI_RC_ERROR;
+            }
+
+            if (v_ipv6_ucast.addr[0] == 0xfe && (v_ipv6_ucast.addr[1] >> 6) == 0x2) {
+                if (cap.support_mcast_anycast_ll_dns) {
+                    if (has_interface_static && v_vlan_id_static) {
+                        if (vtss_ifindex_from_vlan(v_vlan_id_static, &dns_srv.static_ifindex) != VTSS_RC_OK) {
+                            ICLI_PRINTF("%% Invalid interface vlan %u.\n\n", v_vlan_id_static);
+                            return ICLI_RC_ERROR;
+                        }
+                    } else {
+                        ICLI_PRINTF("%% Please specify correct egress IPv6 interface.\n\n");
+                        return ICLI_RC_ERROR;
+                    }
+                } else {
+                    ICLI_PRINTF("%% Static IPv6 linklocal address is not supported.\n\n");
+                    return ICLI_RC_ERROR;
+                }
+            }
+
+            dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_STATIC;
+            dns_srv.static_ip_address.type = MESA_IP_TYPE_IPV6;
+            memcpy(&dns_srv.static_ip_address.addr.ipv6, &v_ipv6_ucast, sizeof(mesa_ipv6_t));
+        } else {
+            ICLI_PRINTF("%% Invalid operation.\n\n");
+            return ICLI_RC_ERROR;
+        }
+
+        if ((cmd_rc = vtss_appl_dns_server_config_set(&order, &dns_srv)) != VTSS_RC_OK) {
+            char adrString[40];
+
+            if (v_ipv4_ucast) {
+                (void) icli_ipv4_to_str(v_ipv4_ucast, adrString);
+                ICLI_PRINTF("%% Failed to set DNS server %s.\n\n", adrString);
+            } else if (vtss_ipv6_addr_is_mgmt_support(&v_ipv6_ucast)) {
+                (void) icli_ipv6_to_str(v_ipv6_ucast, adrString);
+                ICLI_PRINTF("%% Failed to set DNS server %s.\n\n", adrString);
+            } else {
+                if (has_interface_dhcp && v_vlan_id_dhcp) {
+                    ICLI_PRINTF("%% Failed to set DNS server via DHCP VLAN %u.\n\n", v_vlan_id_dhcp);
+                } else {
+                    ICLI_PRINTF("%% Failed to set DNS server via DHCP.\n\n");
+                }
+            }
+
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        ICLI_PRINTF("%% Invalid operation.\n\n");
+    }
+
+    if (cmd_rc != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+        return cmd_rc;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = no ip name-server [<0-3>]
+
+DOC_CMD_DESC    = Stop resolving domain names by accessing DNS server
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When the DNS is no longer required by system, use this \
+                  command to stop accessing DNS
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ip name-server 168.95.1.1
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = ip name-server 168.95.1.1
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config)# no ip name-server 168.95.1.1
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config all-defaults
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = no ip name-server
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = icli_ip_dns_server_clear
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+RUNTIME = 
+RUNTIME =
+RUNTIME =
+RUNTIME = _icli_ip_dns_nameserver_range
+
+! 1: no
+! 2: ip
+! 3: name-server
+! 4: <0-2>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = order
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_DNS
+HELP = Preference of DNS server
+
+BYWORD = <HasNo : option>
+BYWORD = <HasIp : option>
+BYWORD = <HasNameServer : option>
+BYWORD = <Order : 0-3>
+
+VARIABLE_BEGIN
+    vtss_appl_dns_server_conf_t dns_srv;
+
+    /* If iCLI engine detects user input, this variable will be updated accordingly */
+    order = 0xFF;
+VARIABLE_END
+
+CODE_BEGIN
+    if (order == 0xFF) {
+        BOOL    has_err = FALSE;
+        u32     nxt, idx, *ref = NULL;
+
+        while (vtss_appl_dns_server_config_itr(ref, &nxt) == VTSS_RC_OK) {
+            idx = nxt;
+            ref = &idx;
+
+            if (vtss_appl_dns_server_config_get(&idx, &dns_srv) == VTSS_RC_OK) {
+                memset(&dns_srv, 0x0, sizeof(vtss_appl_dns_server_conf_t));
+                dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_NONE;
+                if (vtss_appl_dns_server_config_set(&idx, &dns_srv) != VTSS_RC_OK) {
+                    has_err = TRUE;
+                }
+            } else {
+                has_err = TRUE;
+            }
+        }
+
+        if (has_err) {
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        if (vtss_appl_dns_server_config_get(&order, &dns_srv) == VTSS_RC_OK) {
+            memset(&dns_srv, 0x0, sizeof(vtss_appl_dns_server_conf_t));
+            dns_srv.server_type = VTSS_APPL_DNS_CONFIG_TYPE_NONE;
+            if (vtss_appl_dns_server_config_set(&order, &dns_srv) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Failed to clear DNS server.\n\n");
+                return ICLI_RC_ERROR;
+            }
+        } else {
+            ICLI_PRINTF("%% Invalid operation.\n\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show ip name-server
+
+DOC_CMD_DESC    = Display the active domain name server information
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = Use this command to see the current DNS server address
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ip name-server 168.95.1.1
+DOC_CMD_EXAMPLE = Switch(config)# exit
+DOC_CMD_EXAMPLE = Switch# show ip name
+DOC_CMD_EXAMPLE = 
+DOC_CMD_EXAMPLE = Current DNS server is 168.95.1.1 set by STATIC.
+DOC_CMD_EXAMPLE = Switch#
+
+FUNC_NAME = icli_ip_dns_server_display
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: show
+! 2: ip
+! 3: name-server
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_DNS
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+    u32                             *ref, nxt, idx;
+    vtss_appl_dns_server_status_t   entry;
+    vtss_ifindex_elm_t              ife;
+    mesa_vid_t                      vidx;
+    char                            adrString[40];
+VARIABLE_END
+
+CODE_BEGIN
+    ref = NULL;
+    ICLI_PRINTF("\n\r");
+    while (vtss_appl_dns_server_status_itr(ref, &nxt) == VTSS_RC_OK) {
+        idx = nxt;
+        ref = &idx;
+
+        if (vtss_appl_dns_server_status_get(&idx, &entry) == VTSS_RC_OK) {
+            /* get VID from given IfIndex */
+            if (vtss_ifindex_decompose(entry.reference_ifindex, &ife) != VTSS_RC_OK ||
+                ife.iftype != VTSS_IFINDEX_TYPE_VLAN) {
+                vidx = VTSS_VID_NULL;
+            } else {
+                vidx = (mesa_vid_t)ife.ordinal;
+            }
+
+            switch ( entry.configured_type ) {
+            case VTSS_APPL_DNS_CONFIG_TYPE_STATIC:
+                ICLI_PRINTF("Configured DNS server %u is set by STATIC:\n\r", idx);
+                break;
+            case VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_ANY:
+                ICLI_PRINTF("Configured DNS server %u is set by DHCPv4:\n\r", idx);
+                break;
+            case VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_VLAN:
+                ICLI_PRINTF("Configured DNS server %u is set by DHCPv4 VLAN %u:\n\r",
+                            idx, vidx);
+                break;
+            case VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_ANY:
+                ICLI_PRINTF("Configured DNS server %u is set by DHCPv6:\n\r", idx);
+                break;
+            case VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_VLAN:
+                ICLI_PRINTF("Configured DNS server %u is set by DHCPv6 VLAN %u:\n\r",
+                            idx, vidx);
+                break;
+            default:
+                ICLI_PRINTF("Configured DNS server %u is set by NONE:\n\r", idx);
+                break;
+            }
+
+            memset(adrString, 0x0, sizeof(adrString));
+            if (entry.ip_address.type == MESA_IP_TYPE_IPV4) {
+                (void) icli_ipv4_to_str(entry.ip_address.addr.ipv4, adrString);
+            } else if (entry.ip_address.type == MESA_IP_TYPE_IPV6) {
+                (void) icli_ipv6_to_str(entry.ip_address.addr.ipv6, adrString);
+            }
+
+            if (vidx != VTSS_VID_NULL) {
+                ICLI_PRINTF("%s is used for DNS lookup on IP VLAN %u.\n\r",
+                            strlen(adrString) > 0 ? adrString : "No address", vidx);
+            } else {
+                ICLI_PRINTF("%s is used for DNS lookup.\n\r",
+                            strlen(adrString) > 0 ? adrString : "No address");
+            }
+        } else {
+            ICLI_PRINTF("Configured DNS server %u is not available.\n\r", idx);
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = ip dns proxy
+
+DOC_CMD_DESC    = Enable DNS proxy service
+DOC_CMD_DEFAULT = DNS proxy is disabled by default
+DOC_CMD_USAGE   = When the DNS proxy is required, use this command to \
+                  enable the DNS proxy service.
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config all-defaults
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = no ip dns proxy
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config)# ip dns proxy
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = ip dns proxy
+DOC_CMD_EXAMPLE = ...
+
+NO_FORM_DOC_CMD_DESC    = Disable DNS proxy service
+NO_FORM_DOC_CMD_DEFAULT = DNS proxy is disabled by default
+NO_FORM_DOC_CMD_DEFAULT = When the DNS proxy is no longer required, use \
+                          this command to disable the DNS proxy service.
+NO_FORM_DOC_CMD_EXAMPLE = Switch# configure terminal
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# ip dns proxy
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = ip dns proxy
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# no ip dns proxy
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# do show running-config all-defaults
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = no ip dns proxy
+NO_FORM_DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = icli_ip_dns_proxy_state_set
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: ip
+! 2: dns
+! 3: proxy
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_DNS
+HELP = DNS proxy service
+
+BYWORD = <HasIp : option>
+BYWORD = <HasDns : option>
+BYWORD = <HasProxy : option>
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (!_icli_ip_dns_proxy_state_set(session_id, TRUE)) {
+        ICLI_PRINTF("%% Failed to enable DNS proxy.\n\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (!_icli_ip_dns_proxy_state_set(session_id, FALSE)) {
+        ICLI_PRINTF("%% Failed to disable DNS proxy.\n\n");
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = ip domain name { <domain_name> | dhcp [ ipv4 | ipv6 ] [ interface vlan <vlan_id> ] }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_ip_dns_default_domainname_set
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: ip
+! 2: domain
+! 3: name
+! 4: <domain_name>
+! 5: dhcp
+! 6: ipv4
+! 7: ipv6
+! 8: interface
+! 9: vlan
+!10: <vlan_id>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_domain_name
+CMD_VAR = has_dhcp
+CMD_VAR = has_ipv4
+CMD_VAR = has_ipv6
+CMD_VAR = has_interface_dhcp
+CMD_VAR =
+CMD_VAR = v_vlan_id_dhcp
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = _icli_ip_dns_chk_dhcp_support_ddn
+RUNTIME = _icli_ip_dns_chk_dhcpv4_support_ddn
+RUNTIME = _icli_ip_dns_chk_dhcpv6_support_ddn
+RUNTIME = _icli_ip_dns_chk_dhcp_support_ddn
+RUNTIME = _icli_ip_dns_chk_dhcp_support_ddn
+RUNTIME = _icli_ip_dns_chk_dhcp_support_ddn
+
+HELP = ##ICLI_HELP_IP
+HELP = IP DNS Resolver
+HELP = Define the default domain name
+HELP = Default domain name
+HELP = ##ICLI_HELP_DHCP
+HELP = DNS setting is derived from DHCPv4
+HELP = DNS setting is derived from DHCPv6; Default selection
+HELP = ##ICLI_HELP_INTERFACE
+HELP = VLAN Interface
+HELP = VLAN identifier (VID)
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    mesa_rc                     cmd_rc = ICLI_RC_OK;
+    vtss_appl_dns_name_conf_t   my_dn;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_ipv6) {}    /* avoid warning */
+    if ((cmd_rc = vtss_appl_dns_domain_name_config_get(&my_dn)) == VTSS_RC_OK &&
+        vtss_appl_dns_domain_name_config_default(&my_dn) == VTSS_RC_OK) {
+        if (has_dhcp) {
+            if (has_interface_dhcp) {
+                (void) vtss_ifindex_from_vlan(v_vlan_id_dhcp, &my_dn.dhcp_ifindex);
+                my_dn.domainname_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_VLAN;
+                if (has_ipv4) {
+                    my_dn.domainname_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_VLAN;
+                }
+            } else {
+                my_dn.domainname_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_ANY;
+                if (has_ipv4) {
+                    my_dn.domainname_type = VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_ANY;
+                }
+            }
+        } else {
+            if (v_domain_name && strlen(v_domain_name)) {
+                strncpy(my_dn.static_domain_name, v_domain_name, strlen(v_domain_name));
+            }
+            my_dn.domainname_type = VTSS_APPL_DNS_CONFIG_TYPE_STATIC;
+        }
+
+        cmd_rc = vtss_appl_dns_domain_name_config_set(&my_dn);
+    } else {
+        ICLI_PRINTF("%% Invalid operation.\n\n");
+    }
+
+    if (cmd_rc != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to set default domain name: %s\n\n", error_txt(cmd_rc));
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no ip domain name
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_ip_dns_default_domainname_clr
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: no
+! 2: ip
+! 3: domain
+! 4: name
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = IP DNS Resolver
+HELP = Define the default domain name
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    mesa_rc                     cmd_rc = ICLI_RC_OK;
+    vtss_appl_dns_name_conf_t   my_dn;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((cmd_rc = vtss_appl_dns_domain_name_config_default(&my_dn)) == VTSS_RC_OK) {
+        cmd_rc = vtss_appl_dns_domain_name_config_set(&my_dn);
+    }
+
+    if (cmd_rc != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to clear default domain name.\n\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show ip domain
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_ip_dns_default_domainname_get
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: show
+! 2: ip
+! 3: domain
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = Default domain name
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    mesa_rc                     cmd_rc = ICLI_RC_OK;
+    vtss_appl_dns_name_conf_t   my_dn;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((cmd_rc = vtss_appl_dns_domain_name_config_get(&my_dn)) == VTSS_RC_OK) {
+        vtss_appl_dns_domainname_status_t   curr;
+
+        memset(&curr, 0x0, sizeof(vtss_appl_dns_domainname_status_t));
+        (void) vtss_appl_dns_domainname_status_get(&curr);
+        switch ( my_dn.domainname_type ) {
+        case VTSS_APPL_DNS_CONFIG_TYPE_STATIC:
+        case VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_ANY:
+        case VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_ANY:
+            ICLI_PRINTF("\n\rCurrent domain name is %s (managed by %s%s).\n",
+                        strlen(curr.default_domain_name) > 0 ? curr.default_domain_name : "not available",
+                        my_dn.domainname_type == VTSS_APPL_DNS_CONFIG_TYPE_STATIC ? "STATIC" : "DHCP",
+                        my_dn.domainname_type == VTSS_APPL_DNS_CONFIG_TYPE_STATIC
+                        ? ""
+                        : (my_dn.domainname_type == VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_ANY ? "v4" : "v6"));
+            break;
+        case VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_VLAN:
+        case VTSS_APPL_DNS_CONFIG_TYPE_DHCP6_VLAN:
+            ICLI_PRINTF("\n\rCurrent domain name is %s (managed by DHCP%s VLAN %u).\n",
+                        strlen(curr.default_domain_name) > 0 ? curr.default_domain_name : "not available",
+                        my_dn.domainname_type == VTSS_APPL_DNS_CONFIG_TYPE_DHCP4_VLAN ? "v4" : "v6",
+                        vtss_ifindex_cast_to_u32(my_dn.dhcp_ifindex));
+            break;
+        default:
+            ICLI_PRINTF("\n\rCurrent domain name is not configured.\n");
+            break;
+        }
+    }
+
+    if (cmd_rc != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to get default domain name.\n\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END

@@ -1,0 +1,553 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>ERPS Detailed Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="cfm_lib.js"></script>
+ <script type="text/javascript" src="erps_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_erps_edit.htm";
+
+// Page Argument
+var pageArgs = searchArgs(window.location.search);
+var erpsId = 0;
+if (pageArgs["erpsid"]) {
+    erpsId = parseInt(pageArgs["erpsid"], 10);
+}
+
+// Global variables
+var configDynamicTable, sfTriggerDynamicTable, vlanDynamicTable, rplDynamicTable, myCapabilities, myPortInfo;
+var oTPort = Array(), oVPort = Array();
+var oTPcp = genArrayStr(0, 7);
+var oVPcp = genArrayInt(0, 7);
+var oTLevel = genArrayStr(0, 7);
+var oVLevel = genArrayInt(0, 7);
+
+
+function redirectPage(recv_json)
+{
+    document.location.href = "erps_ctrl.htm";
+}
+
+function isDuplicatedRowKey()
+{
+    var new_key_fld = $("erpsId");
+
+    if (!new_key_fld) { // Ignore the check if new key doesn't exist.
+        return false;
+    }
+
+    // Lookup original entries
+    var recv_json = configDynamicTable.getRecvJson("config");
+    for (var i = 0; i < recv_json.length; i++) {
+        if (new_key_fld.value == recv_json[i].key) {
+            // Found duplicated key
+            return !alert("The ERPS ID " + new_key_fld.value + " already exists.");
+        }
+    }
+
+    return false;
+}
+
+
+function checkMep(trigger, field, maxlen, what)
+{
+    if (typeof (trigger) == "string") {
+        trigger = document.getElementById(trigger);
+    }
+    if (trigger.value == "link") {
+        // Dont care about MEP domain and service names.
+        return true;
+    } else {
+        // trigger.value == "mep"
+        // Check MEP domain and service names.
+        // isValidDomainOrServiceName imported from cfm by "cfm_lib.js"
+        return isValidDomainOrServiceName(field, maxlen, what);
+    }
+} 
+
+function checkMepId(trigger, field, min, max, what)
+{
+    if (typeof (trigger) == "string") {
+        trigger = document.getElementById(trigger);
+    }
+    if (trigger.value == "link") {
+        // Don't care about MEPId value
+        return true;
+    } else {
+        // trigger.value == "mep"
+        // Check MEPId value 1..8091
+        return isWithinRange(field, min, max, what);
+    }
+} 
+
+function geRowDefaultValue()
+{
+    var def_val =  {"AdminActive":false,"Version":"v2","RingType":"major",
+                    "VirtualChannel":true,"ConnectedRingId":0,"ConnectedRingPropagate":false,"RingId":1,"NodeId":"00:00:00:00:00:00","Level":7,"ControlVlan":1,"Pcp":7,
+                    "Port0SfTrigger":"link","Port0If":"Gi 1/1","Port0MEPDomain":"","Port0MEPService":"","Port0MEPId":0,"Port0Smac":"00:00:00:00:00:00",
+                    "Port1SfTrigger":"link","Port1If":"Gi 1/1","Port1MEPDomain":"","Port1MEPService":"","Port1MEPId":0,"Port1Smac":"00:00:00:00:00:00",
+                    "Revertive":true,"WaitToRestoreTime":300,"GuardTime":500,"HoldOffTime":0,"RplMode":"none","RplPort":"ringPort0","ProtectedVlans":[]};
+
+    return def_val;
+}
+
+function addHeader(table_rows, name)
+{
+    var row;
+
+    if (name == "config") {
+        // 1st row
+        row = {fields:[
+                 {type:"disp_hdr", params:["ERPS #", 1, 2]},
+                 {type:"disp_hdr", params:["Version", 1, 2]},
+                 {type:"disp_hdr", params:["Type", 1, 2]},
+                 {type:"disp_hdr", params:["VC", 1, 2]},
+                 {type:"disp_hdr", params:["Interconnect", 2]},
+                 {type:"disp_hdr", params:["Port If", 2]},
+                 {type:"disp_hdr", params:["RingId", 1, 2]},
+                 {type:"disp_hdr", params:["NodeId", 1, 2]},
+                 {type:"disp_hdr", params:["Level", 1, 2]},
+                 {type:"disp_hdr", params:["Control", 2]},
+                 {type:"disp_hdr", params:["Rev", 1, 2]},
+                 {type:"disp_hdr", params:["Guard", 1, 2]},
+                 {type:"disp_hdr", params:["WTR", 1, 2]},
+                 {type:"disp_hdr", params:["HoldOff", 1, 2]},
+                 {type:"disp_hdr", params:["Enable", 1, 2]}
+
+                ]
+              };
+        table_rows.push(row);
+
+        row = {fields:[
+                {type:"disp_hdr", params:["Instance"]},
+                {type:"disp_hdr", params:["Prop"]},
+                {type:"disp_hdr", params:["Port0"]},
+                {type:"disp_hdr", params:["Port1"]},
+                {type:"disp_hdr", params:["VLAN", 1, 2]},
+                {type:"disp_hdr", params:["PCP", 1, 2]}
+                ]
+              };
+
+        table_rows.push(row);
+        
+
+    } else if (name == "sfTrigger") {
+
+        row = {fields:[
+                 {type:"disp_hdr", params:["Port0", 4]},
+                 {type:"disp_hdr", params:["Port1", 4]}
+                ]
+              };
+        table_rows.push(row);
+
+        // 2nd row
+        row = {fields:[
+                 {type:"disp_hdr", params:["Type"]},
+                 {type:"disp_hdr", params:["Domain"]},
+                 {type:"disp_hdr", params:["Service"]},
+                 {type:"disp_hdr", params:["MEPID"]},
+                 {type:"disp_hdr", params:["Type"]},
+                 {type:"disp_hdr", params:["Domain"]},
+                 {type:"disp_hdr", params:["Service"]},
+                 {type:"disp_hdr", params:["MEPID"]}
+                ]
+              };
+        table_rows.push(row);
+
+
+    } else if (name == "vlan") {
+        // No header wanted
+    } else if (name == "rpl") {
+        // 1st row
+        row = {fields:[
+                 {type:"disp_hdr", params:["RPL Mode"]},
+                 {type:"disp_hdr", params:["RPL Port"]}
+                ]
+              };
+        table_rows.push(row);
+
+
+    }
+}
+
+
+function addConfigRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"digit",      params:[key]},
+            {type:"select",     params:[oTVersion, oVVersion, val.Version, "c", "Version"]},
+            {type:"select",     params:[oTRingType, oVRingType, val.RingType, "c", "RingType"]},
+            {type:"chkbox",     params:[val.VirtualChannel, "cr", "VirtualChannel"]},
+            {type:"input",      params:[val.ConnectedRingId, "cr", "ConnectedRingId", 2, 2],
+                                    validate:{func:isWithinRange, params:["ConnectedRingId", 0, myCapabilities.InstanceMax,"ConnectedRing Id" ]}},
+            {type:"chkbox",     params:[val.ConnectedRingPropagate, "cr", "ConnectedRingPropagate"]},
+            {type:"select",     params:[oTPort, oVPort, val.Port0If, "cr", "Port0If"]},
+            {type:"select",     params:[oTPort, oVPort, val.Port1If, "cr", "Port1If"]},
+            {type:"input",      params:[val.RingId, "cr", "RingId", 4, 4],
+                                    validate:{func:isWithinRange, params:["RingId", 1, 239, "Ring Id"]}},
+            {type:"input",      params:[val.NodeId, "cr", "NodeId", 17, 17],
+                                  validate:{func:IsValidMacAddress, params:["NodeId"]}},
+            {type:"select",     params:[oTLevel, oVLevel, val.Level, "cr", "Level"]},            
+            {type:"input",      params:[val.ControlVlan, "cr", "ControlVlan", 4, 4],
+                                    validate:{func:isWithinRange, params:["ControlVlan", 0, configVlanIdMax, "Control Vlan"]}},
+            {type:"select",     params:[oTPcp, oVPcp, val.Pcp, "cr", "Pcp"]},            
+            {type:"chkbox",     params:[val.Revertive, "cr", "Revertive"]},
+            {type:"input",      params:[val.GuardTime, "cr", "GuardTime", 4, 4],
+                                    validate:{func:isWithinRange, params:["GuardTime", 0, myCapabilities.GuardTimeMsecsMax,"Guard Time" ]}},
+            {type:"input",      params:[val.WaitToRestoreTime, "cr", "WaitToRestoreTime", 3, 3],
+                                    validate:{func:isWithinRange, params:["WaitToRestoreTime", 0, myCapabilities.WtrSecsMax,"WTR" ]}},
+            {type:"input",      params:[val.HoldOffTime, "cr", "HoldOffTime", 5, 5],
+                                    validate:{func:isWithinRange, params:["HoldOffTime", 0, myCapabilities.HoldOffMsecsMax, "HoldOff" ]}},
+            {type:"chkbox",     params:[val.AdminActive, "cr", "AdminActive"]}
+           ]
+    };
+
+    // Change field for new entry
+    if (parseInt(key, 10) === 0) {
+        // Use <input> for new key
+        row.fields[0] = {type:"input", params:[0, "cr", "erpsId", 2],
+                                       validate:{func:isWithinRange, params:["erpsId", 1, myCapabilities.InstanceMax, "ERPS #"]}};
+    }
+
+    return row;
+
+}
+
+function addSfTriggerRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"select",     params:[oTSfTrigger, oVSfTrigger, val.Port0SfTrigger, "c", "Port0SfTrigger"]},
+            {type:"input",      params:[val.Port0MEPDomain, "cl", "Port0MEPDomain", 10, 15],
+                                    validate:{func:checkMep, params:["Port0SfTrigger","Port0MEPDomain", 15,"Port0 Domain" ]}},
+            {type:"input",      params:[val.Port0MEPService, "cl", "Port0MEPService", 10, 15],
+                                    validate:{func:checkMep, params:["Port0SfTrigger","Port0MEPService", 15,"Port0 Service" ]}},
+            {type:"input",      params:[val.Port0MEPId, "cr", "Port0MEPId", 4, 4],
+                                    validate:{func:checkMepId, params:["Port0SfTrigger", "Port0MEPId", 1, 8191, "Port0 MEPID"]}},
+            {type:"select",     params:[oTSfTrigger, oVSfTrigger, val.Port1SfTrigger, "c", "Port1SfTrigger"]},
+            {type:"input",      params:[val.Port1MEPDomain, "cl", "Port1MEPDomain", 10, 15],
+                                    validate:{func:checkMep, params:["Port1SfTrigger","Port1MEPDomain", 15,"Port1 Domain" ]}},
+            {type:"input",      params:[val.Port1MEPService, "cl", "Port1MEPService", 10, 15],
+                                    validate:{func:checkMep, params:["Port1SfTrigger","Port1MEPService", 15,"Port1 Service" ]}},
+            {type:"input",      params:[val.Port1MEPId, "cr","Port1MEPId", 4, 4],
+                                    validate:{func:checkMepId, params:["Port1SfTrigger", "Port1MEPId", 1, 8191, "Port1 MEPID"]}}
+           ]
+    };
+
+    return row;
+
+}
+
+function changeProtectedVlans() {
+    var vlan_list = $("internalProtectedVlans").value.split(",");
+    var json_vlan_list = "";
+    var tmp;
+
+    Object.each(vlan_list, function(record, idx) {
+        tmp = record.split("-");
+        if (tmp.length > 2) {
+            alert("input error");
+            return false;
+        }
+        if (tmp.length == 1) {
+            json_vlan_list = json_vlan_list.concat(record, idx == vlan_list.length - 1 ? "" : ",");
+        } else {
+            var i = 0, start = parseInt(tmp[0], 10), end = parseInt(tmp[1], 10);
+            for (i = start; i <= end; i++) {
+                json_vlan_list = json_vlan_list.concat(i, (i == end && idx == vlan_list.length - 1) ? "" : ",");
+            }
+        }
+        $("ProtectedVlans").value = [json_vlan_list];
+        return true;
+    });
+
+}
+
+function addVlanRow(key, val)
+{
+    var vlan_list = val.ProtectedVlans.sort(function(a, b){return a-b;});
+    var vlan_str = "";
+    var vlan_id_start = Array(), vlan_id_end = Array();
+
+    Object.each(vlan_list, function(vlan_id, idx) {
+        var offset = parseInt(idx, 10);
+        if(offset === 0 || vlan_list[offset - 1] != vlan_list[offset] - 1) {
+            vlan_id_start.push(vlan_id);
+        }
+        if(offset == vlan_list.length - 1 || vlan_list[offset + 1] != vlan_list[offset] + 1) {
+            vlan_id_end.push(vlan_id);
+        }
+    });
+
+    if (vlan_id_start.length != vlan_id_end.length) {
+        alert("BUG!!! vlan_id_start.length = " + vlan_id_start.length + " vlan_id_end.length = " + vlan_id_end.length);
+    }
+
+    Object.each(vlan_id_start, function(vlan_id, idx) {
+        if(vlan_id_start[idx] == vlan_id_end[idx]) {
+            vlan_str = vlan_str.concat(vlan_id, idx == vlan_id_start.length - 1 ? "" : ",");
+        } else if (vlan_id_start[idx] < vlan_id_end[idx]) {
+            vlan_str = vlan_str.concat(vlan_id_start[idx],"-",vlan_id_end[idx], idx == vlan_id_start.length - 1 ? "" : ",");
+        } else {
+            alert("BUG!!! vlan_id_start[" + idx + "] = " + vlan_id_start[idx] + " vlan_id_end[" + idx + "] = " + vlan_id_end[idx]);
+        }
+    });
+
+    row = {fields:[
+            {type:"conf_hdr",       params:["VLAN ID"]},
+            {type:"input",          params:[vlan_str, "cl", "internalProtectedVlans", 15, 45, null, null, null, changeProtectedVlans]},
+            {type:"hidden_input",   params:[val.ProtectedVlans, "ProtectedVlans"]}
+            ]
+          };
+
+    return row;
+}
+
+function addRplRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"select",     params:[oTRplMode, oVRplMode, val.RplMode, "c", "RplMode"]},
+            {type:"select",     params:[oTRingPort, oVRingPort, val.RplPort, "c", "RplPort"]}
+           ]
+    };
+
+    return row;    
+}
+
+function addRows(recv_json, name)
+{
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows, name);
+
+    // Add single row
+    if (name == "config") {
+        table_rows.push(addConfigRow(recv_json.key, recv_json.val));
+    } else if (name == "sfTrigger") {
+        table_rows.push(addSfTriggerRow(recv_json.key, recv_json.val));
+    } else if (name == "vlan") {
+        table_rows.push(addVlanRow(recv_json.key, recv_json.val));
+    } else if (name == "rpl") {
+        table_rows.push(addRplRow(recv_json.key, recv_json.val));
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    var record = null;
+    var i;
+
+    configDynamicTable.restore();
+    sfTriggerDynamicTable.restore();
+    vlanDynamicTable.restore();
+    rplDynamicTable.restore();
+
+    // Save the received JSON data
+    configDynamicTable.saveRecvJson("config", recv_json);
+
+    if (erpsId) {
+        // Redirect page if this ID doesn't exist.
+        for (i = 0; i < recv_json.length; i++) {
+            if (erpsId == recv_json[i].key) {
+                record = recv_json[i];
+                break;
+            }
+        }
+        if (!record) {
+            alert("ERPS #" + erpsId + " does not exist.");
+            redirectPage();
+            return;
+        }
+    } else { // when erpsId = 0 it means new entry
+        record = {"key":0,"val":geRowDefaultValue()};
+    }
+
+    // One record inclues 5 tables
+    configDynamicTable.addRows(addRows(record, "config")); 
+    configDynamicTable.update();
+    sfTriggerDynamicTable.addRows(addRows(record, "sfTrigger"));
+    sfTriggerDynamicTable.update();
+    vlanDynamicTable.addRows(addRows(record, "vlan"));
+    vlanDynamicTable.update();
+    rplDynamicTable.addRows(addRows(record, "rpl"));
+    rplDynamicTable.update();
+
+}
+
+function submitForms()
+{
+    var json_array;
+    // Validate row data
+    if (!configDynamicTable.validate() ||
+        !sfTriggerDynamicTable.validate() ||
+        !vlanDynamicTable.validate() ||
+        !rplDynamicTable.validate() ||
+        isDuplicatedRowKey()) {
+        return;
+    }
+
+    // Fill unnecessary fileds
+    var trim_ids = Array();
+
+    trim_ids.push("internalProtectedVlans");
+
+    // Convert HTML object to JSON
+    var json_obj = html2Json(myTablesForm, trim_ids);
+
+    json_array                          = $("ProtectedVlans").value.split(",");
+    json_obj.ProtectedVlans             = json_array[0].length ? json_array.map(Number) : [];
+
+    // Submit data with JSON format
+    var key = erpsId ? erpsId : $("erpsId").value;
+    var submit_json = [key, json_obj];
+    requestJsonDoc("erps.config." + (erpsId ? "set" : "add"), submit_json, redirectPage);
+}
+
+function resetForms()
+{
+    configDynamicTable.resetEvent();
+    sfTriggerDynamicTable.resetEvent();
+    vlanDynamicTable.resetEvent();
+    rplDynamicTable.resetEvent();
+}
+
+function clickCancel()
+{
+    document.location.href="erps_ctrl.htm";
+}
+
+function clickBack()
+{
+    document.location.href = sourceLink;
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = configDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myCapabilities && myPortInfo) {
+        requestJsonDoc("erps.config.get", null, processUpdate, "config");
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    configDynamicTable      = new DynamicTable("configTableContent", "config");
+    sfTriggerDynamicTable   = new DynamicTable("sfTriggerTableContent", "config");
+    vlanDynamicTable        = new DynamicTable("vlanTableContent", "config");
+    rplDynamicTable         = new DynamicTable("rplTableContent", "config");
+
+    // This table requires two JSON data(capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requrested only one time.
+    requestJsonDoc("erps.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>ERPS Configuration</h1>
+
+<div class="refreshbar">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<form id="myTablesForm" action="">
+
+<h2>Configuration</h2>
+<div id="configTableContent"></div>
+        
+<h2>Signal Fail Trigger</h2>
+<div id="sfTriggerTableContent"></div>
+
+<h2>Protected VLANs</h2>
+<div id="vlanTableContent"></div>
+
+<h2>Ring Protection Link</h2>
+<div id="rplTableContent"></div>
+
+<p>
+<input type="button" value="Save" onclick="submitForms();">
+<input type="button" value="Reset" onclick="resetForms();">
+<input type="button" value="Cancel" onclick="clickCancel();">
+</p>
+
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</form>
+
+</body>
+</html>

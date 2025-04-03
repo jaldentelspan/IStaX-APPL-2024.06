@@ -1,0 +1,53 @@
+diff --git a/ripd/rip_peer.c b/ripd/rip_peer.c
+index ccd3273c0..740819974 100644
+--- a/ripd/rip_peer.c
++++ b/ripd/rip_peer.c
+@@ -107,6 +107,24 @@ static struct rip_peer *rip_peer_get(struct in_addr *addr)
+ 	return peer;
+ }
+ 
++void rip_peer_clean(void)
++{
++	struct rip_peer *peer;
++	struct listnode *node, *nnode;
++
++	for (ALL_LIST_ELEMENTS(peer_list, node, nnode, peer)) {
++		if (peer) {
++			if (peer->t_timeout) {
++				thread_cancel(peer->t_timeout);
++			}
++			listnode_delete(peer_list, peer);
++			rip_peer_free(peer);
++		}
++	}
++	return;
++}
++
++
+ void rip_peer_update(struct sockaddr_in *from, uint8_t version)
+ {
+ 	struct rip_peer *peer;
+diff --git a/ripd/ripd.c b/ripd/ripd.c
+index 3a00bf20c..7d66632e6 100644
+--- a/ripd/ripd.c
++++ b/ripd/ripd.c
+@@ -4181,6 +4181,7 @@ void rip_clean(void)
+ 	rip_interfaces_clean();
+ 	rip_distance_reset();
+ 	rip_redistribute_clean();
++	rip_peer_clean();
+ }
+ 
+ /* Reset all values to the default settings. */
+diff --git a/ripd/ripd.h b/ripd/ripd.h
+index a47e62660..3b6d65ad8 100644
+--- a/ripd/ripd.h
++++ b/ripd/ripd.h
+@@ -409,6 +409,7 @@ extern void rip_peer_bad_packet(struct sockaddr_in *);
+ extern void rip_peer_display(struct vty *, json_object *, uint8_t);
+ extern struct rip_peer *rip_peer_lookup(struct in_addr *);
+ extern struct rip_peer *rip_peer_lookup_next(struct in_addr *);
++extern void rip_peer_clean(void);
+ 
+ extern int rip_offset_list_apply_in(struct prefix_ipv4 *, struct interface *,
+ 				    uint32_t *);

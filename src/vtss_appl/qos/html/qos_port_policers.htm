@@ -1,0 +1,246 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Rate Limit Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/qos_util.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_qos_port_policers.htm";
+
+var oTRateUnit = ["kbps", "Mbps", "fps", "kfps"];
+var oVRateUnit = [0, 1, 2, 3]; /* Must correspond to the enum returned by qos_display_rate_unit() */
+
+var portCnt = 0; // The number of ports shown on the web page are determined at runtime
+
+function addHeader(fc)
+{
+    var thead;
+    var frag = document.createDocumentFragment();
+    var tr   = CreateStyledElement("tr", "config_header");
+    addTextHeaderCell(tr, "Port");
+    addTextHeaderCell(tr, "Enable");
+    addTextHeaderCell(tr, "Rate");
+    addTextHeaderCell(tr, "Unit");
+    if (fc) {
+        addTextHeaderCell(tr, "Flow Control");
+    }
+    frag.appendChild(tr);
+    thead = document.getElementById('policer_thead');
+    clearChildNodes(thead);
+    thead.appendChild(frag);
+}
+
+function addRow(index, frag, values) {
+    var pdata   = values.split("/");
+    var portno  = parseInt(pdata[0], 10);
+    var enabled = parseInt(pdata[1], 10);
+    var fps     = parseInt(pdata[2], 10);
+    var rate    = parseInt(pdata[3], 10);
+    var fc_mode = parseInt(pdata[4], 10);
+    var fc      = parseInt(pdata[5], 10);
+    var tr;
+    
+    // The "fps_n" (frame_rate in the policer API) and "rate_n" is not shown directly on the user interface
+    // Instead we convert these two values to the more user friendly "display_rate_n" and display_rate_unit_n"
+    // When the form is submitted the values are converted back to the ones that the API expects
+    tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    addHiddenInputCell(tr, fps, "cr", "fps_" + index);
+    addHiddenInputCell(tr, rate, "cr", "rate_" + index);
+    frag.appendChild(tr);       // Add (hidden) row to fragment
+
+    tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    addTextCell(tr, configPortName(pdata[0], 0), "cr");
+    addCheckBoxCell(tr, enabled, "c", "enabled_" + index);
+    addInputCell(tr, qos_display_rate(rate), "cr", "display_rate_" + index, 8, 8);
+    addSelectCell(tr, oTRateUnit, oVRateUnit, qos_display_rate_unit(rate, fps), "cr", "display_rate_unit_" + index);
+    if (fc_mode) {
+        if (fc_mode == 2) {
+            addCheckBoxCell(tr, fc, "c", "flow_control_" + index);
+        } else {
+            addTextCell(tr, " ", "c");
+        }
+    }
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+/* Format: 
+ * <port 1>,<port 2>,<port 3>,...<port n>
+ * 
+ * port x :== <port_no>/<enabled>/<fps>/<rate>/<fc_mode>/<flow_control>
+ *   port_no      :== 1..max
+ *   enabled      :== 0..1           // 0: no, 1: yes
+ *   fps          :== 0..1           // 0: unit for rate is kilobits pr seconds (kbps), 1: unit for rate is frames pr second (fps) 
+ *   rate         :== 0..0xffffffff  // actual bit or frame rate
+ *   fc_mode      :== 0..2           // 0: No ports has fc (don't show fc column), 1: This port has no fc, 2: This port has fc
+ *   flow_control :== 0..1           // flow control is enabled
+ */
+function processUpdate(req, ref)
+{
+    if (redirectOnError(req)) {
+        return;
+    }
+
+    if (req.responseText) {
+        var values  = req.responseText.split(",");
+        var pdata   = values[0].split("/");
+        var fc_mode = parseInt(pdata[4], 10);
+        var frag    = document.createDocumentFragment();
+        var i;
+        var tbody;
+        var cBar;
+
+        portCnt = values.length;
+        addHeader(fc_mode);
+        for (i = 0; i < portCnt; i++) {
+            addRow(i, frag, values[i]);
+        }
+        tbody = document.getElementById(ref);
+        clearChildNodes(tbody);
+        tbody.appendChild(frag);
+        cBar = new HeaderControlBar([{text: "*", className: "cr"},
+                                     {name: "enabled_"},
+                                     {name: "display_rate_"},
+                                     {name: "display_rate_unit_"}]);
+        if (fc_mode) {
+            cBar.extend([{name: "flow_control_"}]);
+        }
+        cBar.construct(ref);
+    } else {
+        SpomHandleError();
+    }
+}
+
+function requestUpdate() {
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    loadXMLDoc(SpomAddSidArg("/config/qos_port_policers"), processUpdate, 'policer_tbody');
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function checkForm(form)
+{
+    // Validate rate_n and rate_unit_n and convert back to the values expected by the API
+
+    var i, frame_rate, rate;
+    var min = qos_rate_min(configQosPortPolicerBitRateMin, configQosPortPolicerFrameRateMin);
+    var max = qos_rate_max(configQosPortPolicerBitRateMax, configQosPortPolicerFrameRateMax);
+
+    for (i = 0; i < portCnt; i++) {
+        rate = document.getElementById("display_rate_" + i).value;
+        switch (document.getElementById("display_rate_unit_" + i).value) {
+        case "0": // kbps
+            frame_rate = 0;
+            if (!isWithinRange("display_rate_" + i, min, max, "'Rate'", " kbps.")) {
+                return false;
+            }
+            break;
+        case "1": // Mbps
+            rate *= 1000;
+            frame_rate = 0;
+            if (!isWithinRange("display_rate_" + i, 1, Math.floor(max / 1000), "'Rate'", " Mbps.")) {
+                return false;
+            }
+            break;
+        case "2": // fps
+            frame_rate = 1;
+            if (!isWithinRange("display_rate_" + i, min, max, "'Rate'", " fps.")) {
+                return false;
+            }
+            break;
+        case "3": // kfps
+            rate *= 1000;
+            frame_rate = 1;
+            if (!isWithinRange("display_rate_" + i, 1, Math.floor(max / 1000), "'Rate'", " kfps.")) {
+                return false;
+            }
+            break;
+        default:
+            // Shall never hapen
+            return GiveAlert("Invalid 'Unit'", document.getElementById("display_rate_unit_" + i));
+        }
+        document.getElementById("rate_" + i).value = rate;
+        document.getElementById("fps_" + i).value = frame_rate;
+    }
+    return true;
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    requestUpdate();            // Update page to reflect selector
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<h1>QoS Ingress Port Policers <span id="display_sid"></span></h1>
+
+<form method="POST" action="/config/qos_port_policers" onsubmit="return checkForm(this);"> 
+
+<table summary="Switch Rate Limit Configuration" cellspacing="0" class="config">
+ <thead id="policer_thead">
+ </thead>
+ <tbody id="policer_tbody">
+ </tbody>
+</table>
+
+<p>
+<input type="hidden" id="submit_sid" name="sid">    
+<input type="submit" value="Save">
+<input type="reset" value="Reset">
+</p>
+
+</form>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

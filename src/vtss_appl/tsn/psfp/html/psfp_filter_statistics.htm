@@ -1,0 +1,195 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>PSFP Stream Filter Statistics</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="psfp_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_psfp_filter_statistics.htm";
+
+// Global variables
+var statisticsTable, variables;
+
+/******************************************************************************/
+// on_submit_clear_done()
+/******************************************************************************/
+function on_submit_clear_done(inst, err_msg, last)
+{
+    if (err_msg) {
+        alert("Stream Filter ID #" + inst + ": " + err_msg);
+    }
+
+    if (last) {
+        // Done with all of them. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_clear_button_click()
+/******************************************************************************/
+function on_clear_button_click(inst)
+{
+    var insts;
+
+    insts = [];
+
+    if (inst == "all") {
+        variables.filter_stati.forEach(function(key) {
+           insts.push([key.key, true]);
+        });
+    } else {
+        insts.push([inst, true]);
+    }
+
+    psfp_lib_json_submit("psfp.control.filter_statistics_clear.set", insts, on_submit_clear_done);
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Clear",            1, 1]},
+        {type: "disp_hdr", params: ["Stream Filter ID", 1, 1]},
+        {type: "disp_hdr", params: ["Matching",         1, 1, "128px"]},
+        {type: "disp_hdr", params: ["Passing",          1, 1, "128px"]},
+        {type: "disp_hdr", params: ["Not Passing",      1, 1, "128px"]},
+        {type: "disp_hdr", params: ["Passing SDU",      1, 1, "128px"]},
+        {type: "disp_hdr", params: ["Not Passing SDU",  1, 1, "128px"]},
+        {type: "disp_hdr", params: ["Red",              1, 1, "128px"]}]
+    });
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(filter_id, stati)
+{
+    psfp_lib_disable_button_add("Clear_" + filter_id);
+
+    return {fields: [
+        {type: "button", params: ["Clear", "c", "Clear_" + filter_id, function() {on_clear_button_click(filter_id);}]},
+        {type: "digit",  params:[filter_id]},
+        {type: "digit",  params:[stati.Matching]},
+        {type: "digit",  params:[stati.Passing]},
+        {type: "digit",  params:[stati.NotPassing]},
+        {type: "digit",  params:[stati.PassingSDU]},
+        {type: "digit",  params:[stati.NotPassingSDU]},
+        {type: "digit",  params:[stati.Red]}]
+    };
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows = new Array();
+
+    add_header(table_rows);
+
+    // Add data rows
+    Object.each(variables.filter_stati, function(record) {
+        table_rows.push(add_row(record.key, record.val));
+    });
+
+    // Empty row
+    if (!variables.filter_stati.length) {
+        table_rows.push({fields: [{type: "empty_row", params:[8, "No PSFP Stream Filter instances"]}]});
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Add table rows
+    statisticsTable.addRows(add_rows());
+
+    // Update this dynamic table
+    statisticsTable.update();
+
+    // Refresh timer
+    psfp_lib_autorefresh_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {filter_stati: {}};
+    psfp_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    statisticsTable = new DynamicTable("statisticsTableContent", "display");
+
+    psfp_lib_disable_button_add("autorefresh");
+    psfp_lib_disable_button_add("refresh_button");
+    psfp_lib_disable_button_add("clear_all_button");
+    requestUpdate();
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>PSFP Stream Filter Statistics </h1>
+
+  <div class="refreshbar">
+    <label for="autorefresh">Auto-refresh</label>
+    <input type="checkbox" name="autorefresh" id="autorefresh"   onclick="psfp_lib_on_autorefresh_click();">
+    <input type="button" id="refresh_button"   value="Refresh"   onclick="requestUpdate();              this.blur();">
+    <input type="button" id="clear_all_button" value="Clear All" onclick="on_clear_button_click('all'); this.blur();">
+    <img id="psfp_update" alt="" src="images/updating.gif">
+  </div>
+
+  <div id="statisticsTableContent"></div>
+</body>
+</html>
+

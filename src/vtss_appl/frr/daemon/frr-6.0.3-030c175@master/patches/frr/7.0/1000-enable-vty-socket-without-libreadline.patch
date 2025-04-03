@@ -1,0 +1,81 @@
+commit 6777f9f4a0916bb1625ba5dba751a115039ae65e
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Thu Oct 22 10:38:42 2020 +0200
+
+    7.0-1000
+
+diff --git a/lib/vty.c b/lib/vty.c
+index 8450922c2..6e2a8adc1 100644
+--- a/lib/vty.c
++++ b/lib/vty.c
+@@ -56,11 +56,9 @@ enum event {
+ 	VTY_READ,
+ 	VTY_WRITE,
+ 	VTY_TIMEOUT_RESET,
+-#ifdef VTYSH
+ 	VTYSH_SERV,
+ 	VTYSH_READ,
+ 	VTYSH_WRITE
+-#endif /* VTYSH */
+ };
+ 
+ static void vty_event(enum event, int, struct vty *);
+@@ -1941,7 +1939,6 @@ static void vty_serv_sock_addrinfo(const char *hostname, unsigned short port)
+ 	freeaddrinfo(ainfo_save);
+ }
+ 
+-#ifdef VTYSH
+ /* For sockaddr_un. */
+ #include <sys/un.h>
+ 
+@@ -2186,8 +2183,6 @@ static int vtysh_write(struct thread *thread)
+ 	return 0;
+ }
+ 
+-#endif /* VTYSH */
+-
+ /* Determine address family to bind. */
+ void vty_serv_sock(const char *addr, unsigned short port, const char *path)
+ {
+@@ -2195,9 +2190,7 @@ void vty_serv_sock(const char *addr, unsigned short port, const char *path)
+ 	if (port)
+ 		vty_serv_sock_addrinfo(addr, port);
+ 
+-#ifdef VTYSH
+ 	vty_serv_un(path);
+-#endif /* VTYSH */
+ }
+ 
+ static void vty_error_delete(void *arg)
+@@ -2488,7 +2481,6 @@ bool vty_read_config(struct nb_config *config, const char *config_file,
+ 
+ 		host_config_set(config_default_dir);
+ 
+-#ifdef VTYSH
+ 		int ret;
+ 		struct stat conf_stat;
+ 
+@@ -2513,7 +2505,6 @@ bool vty_read_config(struct nb_config *config, const char *config_file,
+ 				goto tmp_free_and_out;
+ 			}
+ 		}
+-#endif /* VTYSH */
+ 		confp = fopen(config_default_dir, "r");
+ 		if (confp == NULL) {
+ 			flog_err(
+@@ -2683,7 +2674,6 @@ static void vty_event(enum event event, int sock, struct vty *vty)
+ 						  sock, NULL);
+ 		vector_set_index(Vvty_serv_thread, sock, vty_serv_thread);
+ 		break;
+-#ifdef VTYSH
+ 	case VTYSH_SERV:
+ 		vty_serv_thread = thread_add_read(vty_master, vtysh_accept, vty,
+ 						  sock, NULL);
+@@ -2699,7 +2689,6 @@ static void vty_event(enum event event, int sock, struct vty *vty)
+ 		thread_add_write(vty_master, vtysh_write, vty, sock,
+ 				 &vty->t_write);
+ 		break;
+-#endif /* VTYSH */
+ 	case VTY_READ:
+ 		vty->t_read = NULL;
+ 		thread_add_read(vty_master, vty_read, vty, sock, &vty->t_read);

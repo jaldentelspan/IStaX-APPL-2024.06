@@ -1,0 +1,346 @@
+commit 64d52e4cdf01240fbf560b406b74a88d24bec4bb
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Thu Oct 8 09:57:40 2020 +0200
+
+    5.0-1130
+
+diff --git a/ripd/ripd.c b/ripd/ripd.c
+index 286ccc2bc..3a00bf20c 100644
+--- a/ripd/ripd.c
++++ b/ripd/ripd.c
+@@ -3410,7 +3410,7 @@ DEFUN (no_rip_allow_ecmp,
+ }
+ 
+ /* Print out routes update time. */
+-static void rip_vty_out_uptime(struct vty *vty, struct rip_info *rinfo)
++static void rip_vty_out_uptime(struct vty *vty, struct rip_info *rinfo, json_object *json, uint8_t use_json)
+ {
+ 	time_t clock;
+ 	struct tm *tm;
+@@ -3421,29 +3421,59 @@ static void rip_vty_out_uptime(struct vty *vty, struct rip_info *rinfo)
+ 	if ((thread = rinfo->t_timeout) != NULL) {
+ 		clock = thread_timer_remain_second(thread);
+ 		tm = gmtime(&clock);
+-		strftime(timebuf, TIME_BUF, "%M:%S", tm);
+-		vty_out(vty, "%5s", timebuf);
++		/* Timer display issue.
++		 * The maximum valid range of timer is '2147483647'(more than one year)
++		 * Original format only support less than 1 hour (MM:SS), now extend to
++		 * less than 1 year days.
++		 * The new format as follows:
++		 * if timer larger than 1 day
++		 *      DDDd HH:MM:SS - 21d 03:12:56
++		 * else
++		 *      HH:MM:SS - 23:58:01
++		 */
++		if (clock < ONE_DAY_SECOND) {
++			sprintf(timebuf, "%02d:%02d:%02d",
++				tm->tm_hour, tm->tm_min, tm->tm_sec);
++		} else {
++			sprintf(timebuf, "%dd %02d:%02d:%02d",
++				tm->tm_yday, tm->tm_hour, tm->tm_min, tm->tm_sec);
++		}
++		if (use_json) {
++			json_object_string_add(json, "time", timebuf);
++		} else {
++			vty_out(vty, "%5s", timebuf);
++		}
+ 	} else if ((thread = rinfo->t_garbage_collect) != NULL) {
+ 		clock = thread_timer_remain_second(thread);
+ 		tm = gmtime(&clock);
+-		strftime(timebuf, TIME_BUF, "%M:%S", tm);
+-		vty_out(vty, "%5s", timebuf);
++		if (clock < ONE_DAY_SECOND) {
++			sprintf(timebuf, "%02d:%02d:%02d",
++				tm->tm_hour, tm->tm_min, tm->tm_sec);
++		} else {
++			sprintf(timebuf, "%dd %02d:%02d:%02d",
++				tm->tm_yday, tm->tm_hour, tm->tm_min, tm->tm_sec);
++		}
++		if (use_json) {
++			json_object_string_add(json, "time", timebuf);
++		} else {
++			vty_out(vty, "%5s", timebuf);
++		}
+ 	}
+ }
+ 
+-static const char *rip_route_type_print(int sub_type)
++static const char *rip_route_type_print(int sub_type, uint8_t is_short)
+ {
+ 	switch (sub_type) {
+ 	case RIP_ROUTE_RTE:
+-		return "n";
++		return is_short ? "n" : "normal";
+ 	case RIP_ROUTE_STATIC:
+-		return "s";
++		return is_short ? "s" : "static";
+ 	case RIP_ROUTE_DEFAULT:
+-		return "d";
++		return is_short ? "d" : "default";
+ 	case RIP_ROUTE_REDISTRIBUTE:
+-		return "r";
++		return is_short ? "r" : "redistribute";
+ 	case RIP_ROUTE_INTERFACE:
+-		return "i";
++		return is_short ? "i" : "interface";
+ 	default:
+ 		return "?";
+ 	}
+@@ -3451,103 +3481,196 @@ static const char *rip_route_type_print(int sub_type)
+ 
+ DEFUN (show_ip_rip,
+        show_ip_rip_cmd,
+-       "show ip rip",
++       "show ip rip [json]",
+        SHOW_STR
+        IP_STR
+-       "Show RIP routes\n")
++       "Show RIP routes\n"
++       JSON_STR)
+ {
+ 	struct route_node *np;
+ 	struct rip_info *rinfo = NULL;
+ 	struct list *list = NULL;
+ 	struct listnode *listnode = NULL;
++	uint8_t uj = use_json(argc, argv);
++	json_object *json = NULL, *json_route = NULL;
++	json_object *json_array_nexthop = NULL, *json_nexthop = NULL;
+ 
+ 	if (!rip)
+ 		return CMD_SUCCESS;
+ 
+-	vty_out(vty,
+-		"Codes: R - RIP, C - connected, S - Static, O - OSPF, B - BGP\n"
+-		"Sub-codes:\n"
+-		"      (n) - normal, (s) - static, (d) - default, (r) - redistribute,\n"
+-		"      (i) - interface\n\n"
+-		"     Network            Next Hop         Metric From            Tag Time\n");
++	if (uj) {
++		json = json_object_new_object();
++	} else {
++		vty_out(vty,
++			"Codes: R - RIP, C - connected, S - Static, O - OSPF, B - BGP\n"
++			"Sub-codes:\n"
++			"      (n) - normal, (s) - static, (d) - default, (r) - redistribute,\n"
++			"      (i) - interface\n\n"
++			"     Network            Next Hop         Metric From            Tag Time\n");
++	}
+ 
+-	for (np = route_top(rip->table); np; np = route_next(np))
+-		if ((list = np->info) != NULL)
++	for (np = route_top(rip->table); np; np = route_next(np)) {
++		if ((list = np->info) != NULL) {
++			if (uj) {
++				json_route = json_object_new_object();
++			}
+ 			for (ALL_LIST_ELEMENTS_RO(list, listnode, rinfo)) {
+-				int len;
+-
+-				len = vty_out(
+-					vty, "%c(%s) %s/%d",
+-					/* np->lock, For debugging. */
+-					zebra_route_char(rinfo->type),
+-					rip_route_type_print(rinfo->sub_type),
+-					inet_ntoa(np->p.u.prefix4),
+-					np->p.prefixlen);
+-
+-				len = 24 - len;
+-
+-				if (len > 0)
+-					vty_out(vty, "%*s", len, " ");
++				int len = 0;
++				if (uj) {
++					if (!json_array_nexthop) {
++						json_array_nexthop = json_object_new_array();
++					}
++					json_nexthop = json_object_new_object();
++					json_object_string_add(json_route, "type", zebra_route_string(rinfo->type));
++					json_object_string_add(json_route, "subType", rip_route_type_print(rinfo->sub_type, 0));
++				} else {
++					len = vty_out(
++						vty, "%c(%s) %s/%d",
++						/* np->lock, For debugging. */
++						zebra_route_char(rinfo->type),
++						rip_route_type_print(rinfo->sub_type, 1),
++						inet_ntoa(np->p.u.prefix4),
++						np->p.prefixlen);
++
++					len = 24 - len;
++
++					if (len > 0) {
++						vty_out(vty, "%*s", len, " ");
++					}
++				}
+ 
+ 				switch (rinfo->nh.type) {
+ 				case NEXTHOP_TYPE_IPV4:
+ 				case NEXTHOP_TYPE_IPV4_IFINDEX:
+-					vty_out(vty, "%-20s %2d ",
+-						inet_ntoa(rinfo->nh.gate.ipv4),
+-						rinfo->metric);
++					if (uj) {
++						json_object_string_add(json_nexthop, "nextHopType", "ipv4");
++						json_object_string_add(json_nexthop, "nextHop", inet_ntoa(rinfo->nh.gate.ipv4));
++						json_object_int_add(json_nexthop, "nextHopMetric", rinfo->metric);
++					} else {
++						vty_out(vty, "%-20s %2d ",
++							inet_ntoa(rinfo->nh.gate.ipv4),
++							rinfo->metric);
++					}
+ 					break;
+ 				case NEXTHOP_TYPE_IFINDEX:
+-					vty_out(vty,
+-						"0.0.0.0              %2d ",
+-						rinfo->metric);
++					if (uj) {
++						json_object_string_add(json_nexthop, "nextHopType", "ifindex");
++						json_object_string_add(json_nexthop, "nextHop", "0.0.0.0");
++						json_object_int_add(json_nexthop, "nextHopMetric", rinfo->metric);
++					} else {
++						vty_out(vty,
++							"0.0.0.0              %2d ",
++							rinfo->metric);
++					}
+ 					break;
+ 				case NEXTHOP_TYPE_BLACKHOLE:
+-					vty_out(vty,
+-						"blackhole            %2d ",
+-						rinfo->metric);
++					if (uj) {
++						json_object_string_add(json_nexthop, "nextHopType", "blackhole");
++						json_object_int_add(json_nexthop, "nextHopMetric", rinfo->metric);
++					} else {
++						vty_out(vty,
++							"blackhole            %2d ",
++							rinfo->metric);
++					}
+ 					break;
+ 				case NEXTHOP_TYPE_IPV6:
+ 				case NEXTHOP_TYPE_IPV6_IFINDEX:
+-					vty_out(vty,
+-						"V6 Address Hidden    %2d ",
+-						rinfo->metric);
++					if (uj) {
++						json_object_string_add(json_nexthop, "nextHopType", "ipv6");
++						json_object_string_add(json_nexthop, "nextHop", inet6_ntoa(rinfo->nh.gate.ipv6));
++						json_object_int_add(json_nexthop, "nextHopMetric", rinfo->metric);
++					} else {
++						vty_out(vty,
++							"V6 Address Hidden    %2d ",
++							rinfo->metric);
++					}
+ 					break;
+ 				}
+ 
++				if (uj) {
++					json_object_array_add(json_array_nexthop, json_nexthop);
++				}
++
+ 				/* Route which exist in kernel routing table. */
+ 				if ((rinfo->type == ZEBRA_ROUTE_RIP)
+ 				    && (rinfo->sub_type == RIP_ROUTE_RTE)) {
+-					vty_out(vty, "%-15s ",
+-						inet_ntoa(rinfo->from));
+-					vty_out(vty, "%3" ROUTE_TAG_PRI " ",
+-						(route_tag_t)rinfo->tag);
+-					rip_vty_out_uptime(vty, rinfo);
++					if (uj) {
++						json_object_boolean_false_add(json_route, "self");
++						json_object_string_add(json_route, "from", inet_ntoa(rinfo->from));
++						json_object_int_add(json_route, "tag", (route_tag_t)rinfo->tag);
++					} else {
++						vty_out(vty, "%-15s ",
++							inet_ntoa(rinfo->from));
++						vty_out(vty, "%3" ROUTE_TAG_PRI " ",
++							(route_tag_t)rinfo->tag);
++					}
++					rip_vty_out_uptime(vty, rinfo, json_route, uj);
+ 				} else if (rinfo->metric
+ 					   == RIP_METRIC_INFINITY) {
+-					vty_out(vty, "self            ");
+-					vty_out(vty, "%3" ROUTE_TAG_PRI " ",
+-						(route_tag_t)rinfo->tag);
+-					rip_vty_out_uptime(vty, rinfo);
++					if (uj) {
++						json_object_boolean_true_add(json_route, "self");
++						json_object_int_add(json_route, "tag", (route_tag_t)rinfo->tag);
++					} else {
++						vty_out(vty, "self            ");
++						vty_out(vty, "%3" ROUTE_TAG_PRI " ",
++							(route_tag_t)rinfo->tag);
++					}
++					rip_vty_out_uptime(vty, rinfo, json_route, uj);
+ 				} else {
+ 					if (rinfo->external_metric) {
+-						len = vty_out(
+-							vty, "self (%s:%d)",
+-							zebra_route_string(
+-								rinfo->type),
+-							rinfo->external_metric);
+-						len = 16 - len;
+-						if (len > 0)
+-							vty_out(vty, "%*s", len,
+-								" ");
+-					} else
+-						vty_out(vty,
+-							"self            ");
+-					vty_out(vty, "%3" ROUTE_TAG_PRI,
+-						(route_tag_t)rinfo->tag);
++						if (uj) {
++							json_object_boolean_true_add(json_route, "self");
++							json_object_int_add(json_route, "externalMetric", rinfo->external_metric);
++						} else {
++							len = vty_out(
++								vty, "self (%s:%d)",
++								zebra_route_string(
++									rinfo->type),
++								rinfo->external_metric);
++							len = 16 - len;
++							if (len > 0)
++								vty_out(vty, "%*s", len,
++									" ");
++						}
++					} else {
++						if (uj) {
++							json_object_boolean_true_add(json_route, "self");
++						} else {
++							vty_out(vty,
++								"self            ");
++						}
++					}
++
++					if (uj) {
++						json_object_int_add(json_route, "tag", (route_tag_t)rinfo->tag);
++					} else {
++						vty_out(vty, "%3" ROUTE_TAG_PRI,
++							(route_tag_t)rinfo->tag);
++					}
++				}
++
++				if (!uj) {
++					vty_out(vty, "\n");
+ 				}
++			}
+ 
+-				vty_out(vty, "\n");
++			if (uj) {
++				char ipaddr_str_buf[BUFSIZ];
++				sprintf(ipaddr_str_buf, "%s/%d", inet_ntoa(np->p.u.prefix4),
++						np->p.prefixlen);
++				json_object_object_add(json_route, "nextHops", json_array_nexthop);
++				json_object_object_add(json, ipaddr_str_buf, json_route);
++				json_array_nexthop = NULL;
+ 			}
++		}
++	}
++
++	if (uj) {
++		vty_out(vty, "%s\n", json_object_to_json_string_ext(json,
++						JSON_C_TO_STRING_PRETTY));
++		json_object_free(json);
++	}
++
+ 	return CMD_SUCCESS;
+ }
+ 

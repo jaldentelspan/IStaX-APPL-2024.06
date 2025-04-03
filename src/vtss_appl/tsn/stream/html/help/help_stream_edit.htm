@@ -1,0 +1,698 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Stream Configuration Help</title>
+ <link href="/lib/help.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="/lib/mootools-core.js"></script>
+ <script type="text/javascript" src="/lib/json.js"></script>
+ <script type="text/javascript" src="../stream_lib.js"></script>
+ <script type="text/javascript" language="JavaScript">
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    var str;
+
+    // Possible configurational warnings
+    str = "<ul>";
+
+    Object.values(stream_lib_oper_warnings_map).forEach(function(val) {
+        if (val != "None") {
+            str += "<li>" + val + "</" + "li>"; // Trick to avoid Tidy error
+        }
+    });
+
+    str += "</" + "ul>"; // Trick to avoid Tidy error
+
+    $("configurational_warnings").innerHTML = str;
+});
+ </script>
+</head>
+
+<body>
+<h1>Stream Configuration Help</h1>
+
+This page allows for editing existing or new streams.<br/>
+
+At the top right corner, the page offers a drop-down list, where any of the
+existing streams can be selected. Notice that if you have changed contents of a
+stream without saving and then change to another stream, the changes will be
+lost without confirmation.<br/>
+
+Besides all the existing streams, the selector has one last item, which allows
+for creating a new stream.<br/><br/>
+
+The page is divided into sections corresponding to fields in a frame, starting
+with Layer 2 fields (MAC addresses, possible VLAN tags, and EtherType) and
+followed by Layer 3 and Layer 4 fields.
+
+<h2>Stream ID</h2>
+<dl>
+  <dt><a name="stream_id">Stream ID</a></dt>
+  <dd>
+    The ID of the stream. The lower the ID, the higher precedence when matching.
+    For example, if Stream #1 matches all frames with a multicast DMAC and
+    Stream #2 matches a particular multicast DMAC, Stream #2 will never be hit.
+    <br/>
+
+    If editing an existing stream, this field is not editable, but it is if
+    adding a new.<br/>
+
+    If attempting to save a new stream with an ID already in use, a confirmation
+    box will be shown.
+  </dd>
+
+  <dt>Attached Clients</dt>
+  <dd>
+    Streams don't do anything by themselves. They are utilized by PSFP and FRER
+    for matching particular flows. This field indicates which of those two
+    protocols - if any - are utilizing a particular stream. The number in
+    parenthesis shows the PSFP or FRER instance the stream is used on.<br/>
+
+    A stream may be part of a stream collection, in which case no clients can be
+    attached directly to the stream itself. They must attach to the stream
+    collection. In this case, this fields shows a dash ("-"). See also next help
+    topic.<br/>
+
+    If no clients are attached to a stream, the stream will be installed into
+    hardware anyway. This allows the user to create two streams, where the first
+    e.g. matches a particular range of MAC address and the second matches the
+    same range of MAC addresses plus some more. The second stream can them be
+    used in FRER or PSFP to match all the MAC addresses of the second stream,
+    except that from the first.
+  </dd>
+
+  <dt>Stream Collection</dt>
+  <dd>
+    If a stream is part of a stream collection, this shows the ID of the stream
+    collection. The ID is a hyperlink to the stream collection configuration
+    page. If the stream is not part of a stream collection, the field just shows
+    "None".
+  </dd>
+
+  <dt><a name="warnings">Warnings</a></dt>
+  <dd>
+    Configuration of a stream may result in configurational warnings.<br/>
+
+    For instance, if a stream is not instantiated on any ports, it is not of
+    any use, and a warning will appear.<br/>
+
+    A color indicates the warning state as follows:
+    <ul>
+      <li>
+         <img src="../images/led-off.gif" alt="gray"/>:
+         The stream is not yet created
+       </li>
+
+      <li>
+        <img src="../images/led-up.gif" alt="green"/>:
+        The stream has no configurational warnings
+      </li>
+
+      <li>
+        <img src="../images/led-yellow.gif" alt="yellow"/>:
+        The stream has configurational warnings
+      </li>
+    </ul>
+
+    When yellow, hover the mouse over the image to see a list of
+    configurational warnings. The possible warnings are as follows:
+    <span id="configurational_warnings">?</span><br/>
+
+    It is important to note that not all configurational errors are detected. An
+    example of configurational errors that are not detected includes the case
+    described under <a href="#stream_id">Stream ID</a>, where stream #2 cannot
+    be hit.
+  </dd>
+</dl>
+
+<h2>MAC Addresses</h2>
+Besides the heading row, this table holds one row for Destination MAC (DMAC)
+address matching and another for Source MAC (SMAC) address matching.
+
+<dl>
+  <dt>DMAC/SMAC</dt>
+  <dd>
+    Indicates whether this row in the table is for DMAC or SMAC matching.
+  </dd>
+
+  <dt>Type</dt>
+  <dd>
+    The drop-down list for the DMAC offers the following options:
+    <ul>
+      <li>Any: Match on any DMAC (default)</li>
+      <li>Multicast: Match on multicast (but not broadcast) frames</li>
+      <li>Broadcast: Match on broadcast frames</li>
+      <li>Unicast: Match on unicast frames</li>
+      <li>Not Broadcast: Match on unicast and multicast frames</li>
+      <li>Not Unicast: Match on multicast and broadcast frames</li>
+      <li>MAC/Mask: Match on a particular DMAC address with mask. The 'MAC' and
+          'Mask' fields will become available for editing when this is selected
+      </li>
+    </ul>
+
+    The drop-down list for the SMAC offers only the following options:
+    <ul>
+      <li>Any: Match on any SMAC (default)</li>
+      <li>MAC/Mask: Match on a particular SMAC address with mask. The 'MAC' and
+          'Mask' fields will become available for editing when this is selected
+      </li>
+    </ul>
+  </dd>
+
+  <dt>MAC</dt>
+  <dd>
+    This field is only available when Type is set to 'MAC/Mask'.<br/>
+
+    MAC address used in the matching along with the mask. See 'Mask' below for
+    a description.
+  </dd>
+
+  <dt>Mask</dt>
+  <dd>
+    This field is only available when Type is set to 'MAC/Mask'.<br/>
+
+    Mask to be used in the matching along with the MAC address. This cannot be
+    all-zeros.<br/>
+
+    Suppose you want to match on a particular OUI (the three most significant
+    bytes of a MAC address), and suppose the OUI is <samp>00:01:C1</samp>. In
+    that case, you will set 'MAC' to <samp>00:01:C1:00:00:00</samp> and 'Mask'
+    to <samp>FF:FF:FF:00:00:00</samp>.
+    <br/>
+
+    When the configuration gets saved, bits in the 'MAC' address where
+    the corresponding 'Mask' bits are zero will be cleared automatically.
+  </dd>
+</dl>
+
+<h2>VLAN Tags</h2>
+Besides the heading row, this table holds one row for outer VLAN tag matching
+and another for inner VLAN tag matching.
+
+<dl>
+  <dt>Outer/Inner</dt>
+  <dd>
+    Indicates whether this row in the table is for outer or inner VLAN tag
+    matching.
+  </dd>
+
+  <dt>Presence</dt>
+  <dd>
+    This drop-down list controls whether the VLAN tag must be present
+    ('Required'), must not be present ('Not Allowed'), or it doesn't matter
+    whether the frame is VLAN tagged or not ('Optional').<br/>
+
+    If the Outer VLAN Tag's presence is set to 'Not Allowed', it is not possible
+    to set the Inner VLAN Tag's presence to 'Required', because that doesn't
+    make sense.<br/>
+
+    Only when 'Presence' is set to 'Required' will the remaining fields of the
+    row become available.
+  </dd>
+
+  <dt>Tag Type</dt>
+  <dd>
+    This field is only available when Presence is set to 'Required'.<br/><br/>
+
+    If set to 'C-tag', only frames with EtherType (TPID) 0x8100 are matched.
+    <br/>
+    If set to 'S-tag', only frames with EtherTYpe (TPID) 0x88a8 are matched.
+    <br/>
+    If set to 'Any', both frames with EtherType (TPID) 0x8100 and 0x88a8 are
+    matched.
+  </dd>
+
+  <dt>VLAN</dt>
+  <dd>
+    This field is only available when Presence is set to 'Required'.<br/>
+
+    VLAN ID used in the matching along with the VLAN mask. See 'VLAN Mask' below
+    for a description. Valid values are in the range [0-4095].
+  </dd>
+
+  <dt>VLAN Mask</dt>
+  <dd>
+    This field is only available when Presence is set to 'Required'.<br/>
+
+    Mask to be used in the matching along with the VLAN ID. This is shown in
+    hexadecimal notation but both hexadecimal and decimal values can be used
+    when editing it.</br>
+
+    A mask of all-zeros means that any VLAN ID is matched. A mask of all-ones
+    means that only the specified VLAN ID is matched. Any mask value in the
+    range [0x000-0xFFF] is accepted.<br/>
+
+    When the configuration gets saved, bits in the 'VLAN' where the
+    corresponding 'VLAN Mask' bits are zero will be cleared automatically.
+  </dd>
+
+  <dt>PCP</dt>
+  <dd>
+    This field is only available when Presence is set to 'Required'.<br/>
+
+    PCP value used in the matching along with the PCP mask. See 'PCP Mask' below
+    for a description.
+  </dd>
+
+  <dt>PCP Mask</dt>
+  <dd>
+    This field is only available when Presence is set to 'Required'.<br/>
+
+    Mask to be used in the matching along with the PCP value.</br>
+
+    A mask of all-zeros means that any PCP value is matched. A mask of all-ones
+    (0x7) means that only the specified PCP value is matched.<br/>
+
+    When the configuration gets saved, bits in 'PCP' where the corresponding
+    'PCP Mask' bits are zero will be cleared automatically.
+  </dd>
+
+  <dt>DEI</dt>
+  <dd>
+    This field is only available when Presence is set to 'Required'.<br/>
+
+    If set to '0', only frames with DEI = 0 are matched.<br/>
+    If set to '1', only frames with DEI = 1 are matched.<br/>
+    If set to 'Any', the frame's DEI value is not used in the matching.
+  </dd>
+</dl>
+
+<h2>Protocol</h2>
+This section allows for configuring properties in frames beyond VLAN tags.
+<br/>
+
+Use the Type drop-down list to select what properties to configure. The following
+are supported:
+<ul>
+   <li>Any: Don't use properties beyond VLAN tags for matching</li>
+   <li>EtherType: Match on the frame's EtherType</li>
+   <li>LLC: Match on LLC frames</li>
+   <li>SNAP: Match on SNAP frames</li>
+   <li>IPv4: Match on IPv4 frames</li>
+   <li>IPv6: Match on IPv6 frames</li>
+</ul>
+
+Each of these types (except Any) have associated configurable parametrs. These
+are outlined below per type.
+
+<h2>EtherType</h2>
+<dl>
+  <dt>EtherType</dt>
+  <dd>
+    A hexadecimal (or decimal) value ranging from 0x600 to 0xffff indicating the
+    frame's EtherType, e.g. 0x800 for IPv4 (notice that IP has better matching
+    properties than just the EtherType, so this was just an example).
+  </dd>
+</dl>
+
+<h2>LLC</h2>
+LLC (Logical Link Control) frames are frames with an EtherType/TypeLength field
+&lt; 0x600.<br/>
+
+The LLC header carries two mandatory fields: DSAP and SSAP, whose values are
+used in the matching.
+
+<dl>
+  <dt>DSAP</dt>
+  <dd>
+    The one-byte Destination Service Access Point to match.
+  </dd>
+
+  <dt>SSAP</dt>
+  <dd>
+    The one-byte Source Service Access Point to match.
+  </dd>
+</dl>
+
+<h2>SNAP</h2>
+SNAP frames are LLC frames with DSAP = 0xAA, SSAP = 0xAA and control field =
+0x03.
+
+The LLC fields are implicitly matched, while the SNAP protocol fields must be
+explicitly configured.
+
+<dl>
+  <dt>SNAP Type</dt>
+  <dd>
+    This drop-down list holds the following selections:
+    <ul>
+      <li>RFC1042. If selected, the OUI will be set to 00:00:00</li>
+      <li>802.1H. If selected, the OUI will be set to 00:00:F8</li>
+      <li>Custom. If selected, the OUI can be specified directly in the OUI
+          field</li>
+    </ul>
+
+    The primary purpose of providing this list of options is that people tend to
+    forget often-used protocol OUIs. One may also simply select Custom and type
+    e.g. the 802.1H OUI directly into the OUI field. But notice, that once this
+    gets saved, the SNAP Type will change to 802.1H.
+  </dd>
+
+  <dt>OUI</dt>
+  <dd>
+    Only when the SNAP Type is set to Custom, will this field be editable. Type
+    the OUI you with to match on as six hexadecimal digits, but omit the colon.
+    All six characters must be specified.
+  </dd>
+
+  <dt>Protocol ID</dt>
+  <dd>
+     The SNAP header's Protocol ID (a.k.a. PID) is a 16-bit integer that can be
+     entered as both a decimal and hexadecimal value.<br/>
+
+     If SNAP Type is RFC1042, the Protocol ID must be an EtherType, that is, a
+     value &gt;= 0x600.
+  </dd>
+</dl>
+
+<h2>IPv4</h2>
+IPv4 frames are identified by hardware by having an EtherType of 0x800.
+
+With the IPv4 type, any IPv4 frame can be matched or one or more fields from the
+IPv4 header and (in case of UDP/TCP frames), also the UDP/TCP destination port
+can be matched. The fields are:
+
+<dl>
+  <dt>Source IP Address</dt>
+  <dd>
+    Specify an IPv4 address in dotted decimal format to match aginst the frames'
+    IPv4 header's SIP field.<br/>
+
+    Only if the Source IP Prefix Length is non-zero, will the frame be matched
+    against a source IP address.
+  </dd>
+
+ <dt>Source IP Prefix Length</dt>
+ <dd>
+   Sets the number of bits in the Source IP address to match.<br/>
+
+   If set to 0, no source IP matching will occur.<br/>
+   If set to 32, all bits in the Source IP Address will be used.<br/>
+   Otherwise, only the N first bits will be used in the matching, and the
+   remaining bits will be cleared<br/>.
+
+   The latter rule means that if you e.g. set the Source IP address to 1.2.3.4
+   and the Prefix Length to 16 and hit the Save button, the ".3.4" part will be
+   cleared, so that the IP address will be shown as 1.2.0.0.<br/>
+
+   Many tend to forget to set the prefix length after having specified an IP
+   address. Therefore, if the prefix length is zero while the IP address is
+   non-zero, a confirmation dialog will be shown asking whether this is really
+   what the user wants.
+ </dd>
+
+  <dt>Destination IP Address</dt>
+  <dd>
+    This is where you will specify the IPv4 header's DIP to match again.<br/>
+
+    See Source IP Address above for details.
+  </dd>
+
+ <dt>Destination IP Prefix Length</dt>
+ <dd>
+   Sets the number of bits in the Destination IP address to match.<br/>
+
+   See Source IP Prefix Length for details.
+ </dd>
+
+ <dt>DSCP Match</dt>
+ <dd>
+   One can choose to match on either any DSCP value, a given DSCP value, or a
+   range of DSCP values. Which selection is chosen determines the editability of
+   the following two inputs.
+ </dd>
+
+ <dt>DSCP Minimum</dt>
+ <dd>
+    If DSCP Match is set to Value, this input determines the DSCP value to use
+    in the matching.<br/>
+
+    If DSCP Match is set to Range, this input determines the lower value in the
+    range used in the matching.<br/>
+
+    Valid values are 0-63.<br/>
+
+    If DSCP Match is set to Any, this input cannot be modified.
+ </dd>
+
+ <dt>DSCP Maximum</dt>
+ <dd>
+    If DSCP Match is set to Range, this input determines the higher value in the
+    range used in the matching.<br/>
+
+    Valid values are 0-63.<br/>
+
+    If DSCP Match is set to Any or Value, this input cannot be modified.
+ </dd>
+
+ <dt>Fragment</dt>
+ <dd>
+   If the IPv4 headers MF (More Fragments) bit is set, or the Fragment Offset is
+   non-zero, the IPv4 frame is considered a fragment.<br/>
+
+   Set this drop-down list to Any to not using the fragment info for anything in
+   the matching<br/>
+
+   Set it to No to match IPv4 frames not considered fragments.<br/>
+
+   Set it to Yes to match IPv4 frames considered fragments.
+ </dd>
+
+ <dt>Protocol Type</dt>
+ <dd>
+   The IPv4 header contains a one-byte Protocol field, which can be matched upon
+   with this section.<br/>
+
+   Set the drop-down list to Any to match any protocol field value.<br/>
+   Set it to TCP to match on protocol field value 6.<br/>
+   Set it to UDP to match on protocol field value 17.<br/>
+   Set it to Custom to match on a custom protocol field value, which is input
+   in the next field.</br>
+ </dd>
+
+ <dt>Protocol Value</dt>
+ <dd>
+   If the Protocol Type is set to Custom, this one-byte field is used to input
+   the protocol fiel value to match against.<br/>
+
+   This may also be set to the value of TCP (6) or UDP (17). Doing so and
+   saving, causes the Protocol Type to change to the relevant value.
+ </dd>
+
+ <dt>TCP/UDP Destination Port Match</dt>
+ <dd>
+   In case the Protocol Type is set to UDP or TCP, it is also possible to match
+   on these two protocols' 16-bit destination port fields.<br/>
+
+   Set the drop-down list value to Any to match all destination ports<br/>
+   Set it to Value to match a particular destination port.<br/>
+   Set it to Range to match a range of destination ports.
+ </dd>
+
+ <dt>TCP/UDP Destination Port Minimum</dt>
+ <dd>
+    If TCP/UDP Destination Port Match is set to Value, this input determines the
+    destination port value to use in the matching.
+    in the matching.<br/>
+
+    If it is set to Range, this input determines the lower value in the range
+    used in the matching.<br/>
+
+    Valid values are 0-65535.<br/>
+
+    If The Match drop-down list is set to Any, this input cannot be modified.
+ </dd>
+
+ <dt>TCP/UDP Destination Port Maximum</dt>
+ <dd>
+    If TCP/UDP Destination Port Match is set to Range, this input determines the
+    higher value in the range used in the matching.<br/>
+
+    Valid values are 0-65535.<br/>
+
+    If The Match drop-down list is set to Any or Value, this input cannot be
+    modified.
+ </dd>
+</dl>
+
+<h2>IPv6</h2>
+IPv6 frames are identified by hardware by having an EtherType of 0x86dd.
+
+With the IPv6 type, any IPv6 frame can be matched or one or more fields from the
+IPv6 header and (in case of UDP/TCP frames), also the UDP/TCP destination port
+can be matched. The fields are:
+
+<dl>
+  <dt>Source IP Address</dt>
+  <dd>
+    Specify an IPv6 address in standard IPv6 representation notations to match
+    aginst the frames' IPv6 header's SIP field.<br/>
+
+    Only if the Source IP Prefix Length is non-zero, will the frame be matched
+    against a source IP address.
+  </dd>
+
+ <dt>Source IP Prefix Length</dt>
+ <dd>
+   Sets the number of bits in the Source IP address to match.<br/>
+
+   If set to 0, no source IP matching will occur.<br/>
+   If set to 128, all bits in the Source IP Address will be used.<br/>
+   Otherwise, only the N first bits will be used in the matching, and the
+   remaining bits will be cleared<br/>.
+
+   The latter rule means that if you e.g. set the Source IP address to
+   2001:db8::1 and the Prefix Length to 64 and hit the Save button, the ::1 part
+   will be cleared, so that the IP address will be shown as 2001:db8::<br/>
+
+   Many tend to forget to set the prefix length after having specified an IP
+   address. Therefore, if the prefix length is zero while the IP address is
+   non-zero, a confirmation dialog will be shown asking whether this is really
+   what the user wants.
+ </dd>
+
+  <dt>Destination IP Address</dt>
+  <dd>
+    This is where you will specify the IPv6 header's DIP to match again.<br/>
+
+    See Source IP Address above for details.
+  </dd>
+
+ <dt>Destination IP Prefix Length</dt>
+ <dd>
+   Sets the number of bits in the Destination IP address to match.<br/>
+
+   See Source IP Prefix Length for details.
+ </dd>
+
+ <dt>DSCP Match</dt>
+ <dd>
+   One can choose to match on either any DSCP value, a given DSCP value, or a
+   range of DSCP values. Which selection is chosen determines the editability of
+   the following two inputs.
+ </dd>
+
+ <dt>DSCP Minimum</dt>
+ <dd>
+    If DSCP Match is set to Value, this input determines the DSCP value to use
+    in the matching.<br/>
+
+    If DSCP Match is set to Range, this input determines the lower value in the
+    range used in the matching.<br/>
+
+    Valid values are 0-63.<br/>
+
+    If DSCP Match is set to Any, this input cannot be modified.
+ </dd>
+
+ <dt>DSCP Maximum</dt>
+ <dd>
+    If DSCP Match is set to Range, this input determines the higher value in the
+    range used in the matching.<br/>
+
+    Valid values are 0-63.<br/>
+
+    If DSCP Match is set to Any or Value, this input cannot be modified.
+ </dd>
+
+ <dt>Protocol Type</dt>
+ <dd>
+   The IPv6 header contains a one-byte Protocol field, which can be matched upon
+   with this section.<br/>
+
+   Set the drop-down list to Any to match any protocol field value.<br/>
+   Set it to TCP to match on protocol field value 6.<br/>
+   Set it to UDP to match on protocol field value 17.<br/>
+   Set it to Custom to match on a custom protocol field value, which is input
+   in the next field.</br>
+ </dd>
+
+ <dt>Protocol Value</dt>
+ <dd>
+   If the Protocol Type is set to Custom, this one-byte field is used to input
+   the protocol fiel value to match against.<br/>
+
+   This may also be set to the value of TCP (6) or UDP (17). Doing so and
+   saving, causes the Protocol Type to change to the relevant value.
+ </dd>
+
+ <dt>TCP/UDP Destination Port Match</dt>
+ <dd>
+   In case the Protocol Type is set to UDP or TCP, it is also possible to match
+   on these two protocols' 16-bit destination port fields.<br/>
+
+   Set the drop-down list value to Any to match all destination ports<br/>
+   Set it to Value to match a particular destination port.<br/>
+   Set it to Range to match a range of destination ports.
+ </dd>
+
+ <dt>TCP/UDP Destination Port Minimum</dt>
+ <dd>
+    If TCP/UDP Destination Port Match is set to Value, this input determines the
+    destination port value to use in the matching.
+    in the matching.<br/>
+
+    If it is set to Range, this input determines the lower value in the range
+    used in the matching.<br/>
+
+    Valid values are 0-65535.<br/>
+
+    If The Match drop-down list is set to Any, this input cannot be modified.
+ </dd>
+
+ <dt>TCP/UDP Destination Port Maximum</dt>
+ <dd>
+    If TCP/UDP Destination Port Match is set to Range, this input determines the
+    higher value in the range used in the matching.<br/>
+
+    Valid values are 0-65535.<br/>
+
+    If The Match drop-down list is set to Any or Value, this input cannot be
+    modified.
+ </dd>
+</dl>
+
+<h2>Port Members</h2>
+Check the ports on which this stream must be instantiated. By default, no ports
+are included.<br/>
+Hover the mouse over a given port number of checkbox to see the port number as
+an interface name.
+
+<h2>Buttons</h2>
+<p><input type="button" value="Save">: Click to save changes.</p>
+<p><input type="button" value="Reset">: Click to undo any changes made locally and revert to previously saved values.</p>
+<p><input type="button" value="Back">: Return to the previous page. Any changes made locally will be lost.</p>
+<p><input type="button" value="Refresh">: Click to refresh the page immediately. Any changes made locally will be lost. This is useful if the stream configuration has been changed from e.g. CLI.</p>
+
+</body>
+</html>
+

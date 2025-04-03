@@ -1,0 +1,671 @@
+#
+# Copyright (c) 2006-2019 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "psec_limit_icli_functions.h"
+#include <vtss/appl/psec.h>
+INCLUDE_END
+
+FUNCTION_BEGIN
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define PSEC_RC(expr) {if ((expr) != VTSS_RC_OK) {return ICLI_RC_ERROR;}}
+
+typedef enum {
+    PSEC_ICLI_RUNTIME_AGE_TIME,
+    PSEC_ICLI_RUNTIME_HOLD_TIME,
+    PSEC_ICLI_RUNTIME_LIMIT,
+    PSEC_ICLI_RUNTIME_VIOLATE_LIMIT
+} psec_icli_runtime_t;
+
+/******************************************************************************/
+// PSEC_ICLI_runtime_range()
+/******************************************************************************/
+static BOOL PSEC_ICLI_runtime_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, psec_icli_runtime_t what)
+{
+    vtss_appl_psec_capabilities_t cap;
+    mesa_rc                       rc;
+    u32                           min, max;
+
+    if ((rc = vtss_appl_psec_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("Unable to get PSEC capabilities (%s)", error_txt(rc));
+        return FALSE;
+    }
+
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1; // One valid range
+        switch (what) {
+        case PSEC_ICLI_RUNTIME_AGE_TIME:
+            min = cap.age_time_min;
+            max = cap.age_time_max;
+            break;
+
+        case PSEC_ICLI_RUNTIME_HOLD_TIME:
+            min = cap.hold_time_min;
+            max = cap.hold_time_max;
+            break;
+
+        case PSEC_ICLI_RUNTIME_LIMIT:
+            min = cap.limit_min;
+            max = cap.limit_max;
+            break;
+
+        case PSEC_ICLI_RUNTIME_VIOLATE_LIMIT:
+            min = cap.violate_limit_min;
+            max = cap.violate_limit_max;
+            break;
+
+        default:
+            return FALSE;
+        }
+
+        runtime->range.u.sr.range[0].min = min;
+        runtime->range.u.sr.range[0].max = max;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/******************************************************************************/
+// PSEC_ICLI_runtime_age_time_range()
+/******************************************************************************/
+static BOOL PSEC_ICLI_runtime_age_time_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSEC_ICLI_runtime_range(session_id, ask, runtime, PSEC_ICLI_RUNTIME_AGE_TIME);
+}
+
+/******************************************************************************/
+// PSEC_ICLI_runtime_hold_time_range()
+/******************************************************************************/
+static BOOL PSEC_ICLI_runtime_hold_time_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSEC_ICLI_runtime_range(session_id, ask, runtime, PSEC_ICLI_RUNTIME_HOLD_TIME);
+}
+
+/******************************************************************************/
+// PSEC_ICLI_runtime_limit_range()
+/******************************************************************************/
+static BOOL PSEC_ICLI_runtime_limit_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSEC_ICLI_runtime_range(session_id, ask, runtime, PSEC_ICLI_RUNTIME_LIMIT);
+}
+
+/******************************************************************************/
+// PSEC_ICLI_runtime_violate_limit_range()
+/******************************************************************************/
+static BOOL PSEC_ICLI_runtime_violate_limit_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSEC_ICLI_runtime_range(session_id, ask, runtime, PSEC_ICLI_RUNTIME_VIOLATE_LIMIT);
+}
+
+FUNCTION_END
+
+PORT_SECURITY_HELP = Port Security
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+
+COMMAND = port-security aging
+
+PORT_SECURITY_AGING_HELP = Enable/disable port security aging.
+
+DOC_CMD_DESC    = ##PORT_SECURITY_AGING_HELP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##PORT_SECURITY_AGING_HELP
+DOC_CMD_EXAMPLE = port-security aging
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: port-security
+! 2: aging
+
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PORT_SECURITY_AGING_HELP
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_aging(session_id, FALSE));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    PSEC_RC(psec_limit_icli_aging(session_id, TRUE));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = port-security aging time <uint>
+
+PORT_SECURITY_AGING_TIME_HELP = Time in seconds between check for activity on learned MAC addresses.
+
+DOC_CMD_DESC    = ##PORT_SECURITY_AGING_TIME_HELP
+DOC_CMD_DEFAULT = Default aging time is 3600 seconds
+DOC_CMD_USAGE   = ##PORT_SECURITY_AGING_TIME_HELP
+DOC_CMD_EXAMPLE = port-security aging time 100
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: port-security
+! 2: aging
+! 3: time
+! 4: <uint>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = aging_time
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = PSEC_ICLI_runtime_age_time_range
+
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PORT_SECURITY_AGING_TIME_HELP
+HELP = ##PORT_SECURITY_AGING_TIME_HELP
+HELP = Hold time in seconds
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_aging_time(session_id, aging_time, FALSE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = no port-security aging time
+DOC_CMD_DESC    = ##PORT_SECURITY_AGING_TIME_HELP
+DOC_CMD_DEFAULT = Default aging time is 3600 seconds.
+DOC_CMD_USAGE   = ##PORT_SECURITY_AGING_TIME_HELP
+DOC_CMD_EXAMPLE = no port-security aging time
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: no
+! 2: port-security
+! 3: aging
+! 4: time
+
+HELP =
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PORT_SECURITY_AGING_TIME_HELP
+HELP = ##PORT_SECURITY_AGING_TIME_HELP
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_aging_time(session_id, 0, TRUE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = port-security hold time <uint>
+
+PORT_SECURITY_HOLD_HELP = Configure hold options
+PORT_SECURITY_HOLD_TIME_HELP = Violating MAC addresses are held non-forwarding for this amount of seconds
+
+DOC_CMD_DESC    = ##PORT_SECURITY_HOLD_TIME_HELP
+DOC_CMD_DEFAULT = Default hold time is 300 seconds
+DOC_CMD_USAGE   = ##PORT_SECURITY_HOLD_TIME_HELP
+DOC_CMD_EXAMPLE = port-security hold time 10
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: port-security
+! 2: hold
+! 3: time
+! 4: <uint>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = hold_time
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = PSEC_ICLI_runtime_hold_time_range
+
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PORT_SECURITY_HOLD_HELP
+HELP = ##PORT_SECURITY_HOLD_TIME_HELP
+HELP = Hold time in seconds
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_hold_time(session_id, hold_time, FALSE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = no port-security hold time
+
+PORT_SECURITY_NO_HOLD_TIME_HELP = Violating MAC addresses are held non-forwarding for 300 seconds
+
+DOC_CMD_DESC    = ##PORT_SECURITY_NO_HOLD_TIME_HELP
+DOC_CMD_DEFAULT = Default hold time is 300 seconds
+DOC_CMD_USAGE   = ##PORT_SECURITY_NO_HOLD_TIME_HELP
+DOC_CMD_EXAMPLE = no port-security hold time
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: no
+! 2: port-security
+! 3: hold
+! 4: time
+
+HELP =
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PORT_SECURITY_HOLD_HELP
+HELP = ##PORT_SECURITY_NO_HOLD_TIME_HELP
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_hold_time(session_id, 0, TRUE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = port-security
+PSEC_LIMIT_PORT_SECURITY_HELP = Enable/disable port security per interface.
+
+DOC_CMD_DESC    = ##PSEC_LIMIT_PORT_SECURITY_HELP
+DOC_CMD_DEFAULT = Port security is disabled on all interfaces
+DOC_CMD_USAGE   = ##PSEC_LIMIT_PORT_SECURITY_HELP
+DOC_CMD_EXAMPLE = port-security
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: port-security
+
+HELP = ##PSEC_LIMIT_PORT_SECURITY_HELP
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_enable(session_id, plist, FALSE));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    PSEC_RC(psec_limit_icli_enable(session_id, plist, TRUE));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = port-security maximum <uint>
+PORT_SECURITY_MAXIMUM_HELP = Maximum number of MAC addresses that can be learned on this set of interfaces.
+
+DOC_CMD_DESC    = ##PORT_SECURITY_MAXIMUM_HELP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##PORT_SECURITY_MAXIMUM_HELP
+DOC_CMD_EXAMPLE =
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: port-security
+! 2: maximum
+! 3: <uint>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = limit
+
+RUNTIME = icli_is_switchport_runtime
+RUNTIME =
+RUNTIME = PSEC_ICLI_runtime_limit_range
+
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PORT_SECURITY_MAXIMUM_HELP
+HELP = Number of addresses
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_maximum(session_id, plist, limit, FALSE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = no port-security maximum
+DOC_CMD_DESC    = ##PORT_SECURITY_MAXIMUM_HELP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##PORT_SECURITY_MAXIMUM_HELP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+HELP =
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PORT_SECURITY_MAXIMUM_HELP
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_maximum(session_id, plist, 0, TRUE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = port-security maximum-violation <uint>
+PSEC_MAXIMUM_VIOLATION_HELP = Maximum number of violating MAC addresses (used when violation is restrict)
+
+DOC_CMD_DESC    = ##PSEC_MAXIMUM_VIOLATION_HELP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##PSEC_MAXIMUM_VIOLATION_HELP
+DOC_CMD_EXAMPLE =
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: port-security
+! 2: maximum-violation
+! 3: <uint>
+
+RUNTIME = icli_is_switchport_runtime
+RUNTIME =
+RUNTIME = PSEC_ICLI_runtime_violate_limit_range
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = violate_limit
+
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PSEC_MAXIMUM_VIOLATION_HELP
+HELP = Maximum number of violation MAC addresses
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_maximum_violation(session_id, plist, violate_limit, FALSE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = no port-security maximum-violation
+DOC_CMD_DESC    = ##PSEC_MAXIMUM_VIOLATION_HELP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##PSEC_MAXIMUM_VIOLATION_HELP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+HELP =
+HELP = ##PORT_SECURITY_HELP
+HELP = ##PSEC_MAXIMUM_VIOLATION_HELP
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_maximum_violation(session_id, plist, 0, TRUE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = port-security violation { protect | restrict | shutdown }
+
+PORT_SECURITY_VIOLATION_HELP = The action taken if limit is exceeded.
+
+DOC_CMD_DESC    = ##PORT_SECURITY_VIOLATION_HELP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##PORT_SECURITY_VIOLATION_HELP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: port-security
+! 2: violation
+! 3: protect
+! 4: restrict
+! 6: shutdown
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_protect
+CMD_VAR = has_restrict
+CMD_VAR = has_shutdown
+
+HELP =
+HELP = ##PORT_SECURITY_VIOLATION_HELP
+HELP = Don't do anything
+HELP = Keep recording violating MAC addresses
+HELP = Shutdown the port
+
+BYWORD =
+BYWORD =
+BYWORD = <Protect  : option>
+BYWORD = <Restrict : option>
+BYWORD = <Shutdown : option>
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_violation(session_id, has_protect, has_restrict, has_shutdown, plist, FALSE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = no port-security violation
+PORT_SECURITY_NO_VIOLATION_HELP = Set violation mode to protect
+
+DOC_CMD_DESC    = ##PORT_SECURITY_NO_VIOLATION_HELP
+DOC_CMD_DEFAULT = Default violation mode is protect.
+DOC_CMD_USAGE   = ##PORT_SECURITY_NO_VIOLATION_HELP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+! 1: no
+! 2: port-security
+! 3: violation
+
+HELP =
+HELP =
+HELP = ##PORT_SECURITY_NO_VIOLATION_HELP
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_violation(session_id, FALSE, FALSE, FALSE, plist, TRUE));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = port-security mac-address {[sticky] [<mac_ucast> [vlan <vlan_id>]]}*1
+PORT_SECURITY_MAC_ADDRESS_HELP = Add a static (or sticky, though not recommended) MAC address on interface
+
+DOC_CMD_DESC    = ##PORT_SECURITY_MAC_ADDRESS_HELP
+DOC_CMD_DEFAULT = No static nor sticky addresses
+DOC_CMD_USAGE   = ##PORT_SECURITY_MAC_ADDRESS_HELP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: port-security
+! 2: mac-address
+! 3: sticky
+! 4: <mac_ucast>
+! 5: vlan
+! 6: <vlan_id>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_sticky
+CMD_VAR = mac
+CMD_VAR = has_vlan
+CMD_VAR = vlan_id
+
+HELP =
+HELP = ##PORT_SECURITY_MAC_ADDRESS_HELP
+HELP = Add a sticky MAC address (not recommended to do so manually)
+HELP = Unicast MAC address to add
+HELP = Optional VLAN. If not specified, using and following native VLAN
+HELP = VLAN ID
+
+VARIABLE_BEGIN
+    vtss_appl_psec_mac_conf_t mac_conf;
+    mesa_mac_t                bpdu_mac = {0x01, 0x80, 0xc2, 0x00, 0x00, 0x00};
+    BOOL                      has_mac;
+    memcpy(&mac, &bpdu_mac, sizeof(mac));
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psec_mac_conf_t mac_conf;
+    mesa_mac_t                bpdu_mac = {0x01, 0x80, 0xc2, 0x00, 0x00, 0x00};
+    BOOL                      has_mac;
+    memcpy(&mac, &bpdu_mac, sizeof(mac));
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    // Unfortunately, it's impossible to say whether a MAC address has been
+    // specified or not, so by initializing it to an (in this context) invalid
+    // MAC, we can "cheat".
+    has_mac = has_vlan || memcmp(&mac, &bpdu_mac, sizeof(mac)) != 0;
+
+    if (has_mac) {
+        mac_conf.mac = mac;
+        mac_conf.vlan = has_vlan ? vlan_id : VTSS_VID_NULL;
+        mac_conf.mac_type = has_sticky ? VTSS_APPL_PSEC_MAC_TYPE_STICKY : VTSS_APPL_PSEC_MAC_TYPE_STATIC;
+    }
+
+    PSEC_RC(psec_limit_icli_mac_address(session_id, plist, has_mac ? &mac_conf : NULL, FALSE));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    has_mac = has_vlan || memcmp(&mac, &bpdu_mac, sizeof(mac)) != 0;
+
+    if (has_mac) {
+        mac_conf.mac = mac;
+        mac_conf.vlan = has_vlan ? vlan_id : VTSS_VID_NULL;
+        mac_conf.mac_type = has_sticky ? VTSS_APPL_PSEC_MAC_TYPE_STICKY : VTSS_APPL_PSEC_MAC_TYPE_STATIC;
+    }
+
+    PSEC_RC(psec_limit_icli_mac_address(session_id, plist, has_mac ? &mac_conf : NULL, TRUE));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSEC_LIMIT)
+COMMAND = debug show port-security ref-cnt [interface <port_type_list>]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2: show
+! 3: port-security
+! 4: ref-cnt
+! 5: interface
+! 6: <port_type_list>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = plist
+
+CODE_BEGIN
+    PSEC_RC(psec_limit_icli_debug_ref_cnt(session_id, plist));
+CODE_END
+CMD_END
+

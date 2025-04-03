@@ -1,0 +1,368 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>GCL Configuration </title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="tsn_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_tsn_port_tas_gcl.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities, interfaceTasParams;
+
+var port_no = configPortMin;
+var intf    = "Gi";
+var max_gcl = 0;
+var interface_param;
+var cycleTimeNanoSeconds;
+
+// This piece of code makes sure that a specific instance can be selected
+// directly, when navigating from a hyperlink on a different page.
+var arg_idx = document.URL.indexOf('?');
+if(arg_idx != -1) {
+    var args = document.URL.substring(arg_idx+1, document.URL.length);
+    var tup = args.split('=');
+    if(tup.length == 2) {
+        if(tup[0] == 'port') {
+            var split_val = tup[1].split("/");
+            port_no = parseInt(split_val[1], 10);
+            split_val = tup[1].split("%");
+            intf    = split_val[0];
+            interface_param = [intf + " 1/" + port_no]; // This will be used as parameter to json get
+        }
+    }
+}
+
+function checkForm()
+{
+    var gcl_id, queue;
+    var time_total = 0;
+    var opened = [false,false,false,false,false,false,false,false];
+
+    if (!myDynamicTable.validate()) {
+        return false;
+    }
+
+    // Go through list of all GCEs and collect details for sanity check
+    for (gcl_id = 0; gcl_id < max_gcl; gcl_id++) {
+        var time_key_fld = $("TimeInterval_" + gcl_id);
+        if (!time_key_fld) {
+            return alert("The GCL TimeInterval for GCL index: " + gcl_id + " not configured correct");
+        }
+
+        time_total += parseInt(time_key_fld.value, 10);
+
+        for (queue = 0; queue < 8; queue++) {
+            var gate_fld = $("gate_statesq" + queue + gcl_id);
+            if (!gate_fld) {
+                alert("The GCL Gate State for GCL index: "  + gcl_id + "not configured correct");
+            }
+            if (gate_fld.checked) {
+                opened[queue] = true;
+            }
+        }
+    }
+
+    if (cycleTimeNanoSeconds < time_total ) {
+        return alert("The GCL total time " + time_total + " must be less or equal to cycle_time:" + cycleTimeNanoSeconds);
+    }
+
+    if (max_gcl > 0) { // Only check if there are elements in the QCL
+        for (queue = 0; queue < 8; queue++) {
+            if (opened[queue] === false) {
+                return alert("The queue: " + queue + " is not open at least once during cycle.");
+            }
+        }
+    }
+
+    return true;
+}
+
+function addHeader(table_rows)
+{
+    var row;
+
+    row = {fields:[
+                   {type:"disp_hdr", params:["GCE ID", 1, 2]},
+                   {type:"disp_hdr", params:["Gate State", 8, 1]},
+                   {type:"disp_hdr", params:["Time Interval",1,1]}
+                  ]
+          };
+
+    table_rows.push(row);
+
+    row = {fields:[
+                   {type:"disp_hdr", params:["Q0"]},
+                   {type:"disp_hdr", params:["Q1"]},
+                   {type:"disp_hdr", params:["Q2"]},
+                   {type:"disp_hdr", params:["Q3"]},
+                   {type:"disp_hdr", params:["Q4"]},
+                   {type:"disp_hdr", params:["Q5"]},
+                   {type:"disp_hdr", params:["Q6"]},
+                   {type:"disp_hdr", params:["Q7"]},
+                   {type:"disp_hdr", params:["nanoseconds"]}
+                  ]
+          };
+    table_rows.push(row);
+}
+
+function validate_hex(fld_id, minimum, maximum, id)
+{
+    var fld = document.getElementById(fld_id);
+
+    if(!fld) {
+        // Programming error
+        return GiveAlert("No such field: " + fld_id, fld);
+    }
+
+    var val = fld.value;
+    var ValueIsHex = val.match(/^[0-9a-f]+$/i);
+
+    if (!ValueIsHex) {
+        alert ("Value " + val + " is not a valid hex number");
+    }
+
+    return ValueIsHex;
+
+}
+
+function addRow(key, val)
+{
+    var bits = new Array();
+    var gateStates = parseInt(val.GateState, 16);
+    stringToBits(gateStates, bits);
+
+    var gcl_id = key[1];
+    var row = {
+        "key":key,
+        fields:[
+            {type:"text",  params:[gcl_id, "cr"]},
+            {type:"chkbox",  params:[bits[0], "cr", "gate_statesq0" + gcl_id, 8, 8]},
+            {type:"chkbox",  params:[bits[1], "cr", "gate_statesq1" + gcl_id, 8, 8]},
+            {type:"chkbox",  params:[bits[2], "cr", "gate_statesq2" + gcl_id, 8, 8]},
+            {type:"chkbox",  params:[bits[3], "cr", "gate_statesq3" + gcl_id, 8, 8]},
+            {type:"chkbox",  params:[bits[4], "cr", "gate_statesq4" + gcl_id, 8, 8]},
+            {type:"chkbox",  params:[bits[5], "cr", "gate_statesq5" + gcl_id, 8, 8]},
+            {type:"chkbox",  params:[bits[6], "cr", "gate_statesq6" + gcl_id, 8, 8]},
+            {type:"chkbox",  params:[bits[7], "cr", "gate_statesq7" + gcl_id, 8, 8]},
+            {type:"input",  params:[val.TimeInterval, "cr", "TimeInterval_" + gcl_id, 10, 10],
+                 validate:{func:isWithinRange, params:["TimeInterval_" + gcl_id, 0, myCapabilities.TasMaxCycleTime, "Time Interval"]}}
+           ]
+    };
+
+    max_gcl++;
+
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var row, empty_colspan = 21;
+    var table_rows = new Array();
+
+    addHeader(table_rows);
+
+    max_gcl = 0;
+
+    // Add data rows
+    Object.each(recv_json, function(record) {
+            table_rows.push(addRow(record.key, record.val));
+        }
+    );
+
+    // Empty row
+    if (!recv_json.length) {
+        table_rows.push({fields:[{type:"empty_row", params:[empty_colspan]}]});
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    var reduced_recv_json = Array();
+    Object.each(recv_json, function(record) {
+        var recv_port = record.key[0];
+        var res = recv_port.split("/");
+        var interf = recv_port.split(" ");
+        var port_id = parseInt(res[1], 10);
+        if (port_id == port_no) {
+            if (intf == interf[0]) {
+                reduced_recv_json.push(record);
+            }
+        }
+    });
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson("config", reduced_recv_json);
+
+    // Add table rows
+    myDynamicTable.addRows(addRows(reduced_recv_json));
+
+    // Update this dynamic table
+    myDynamicTable.update();
+    var cBar = new HeaderControlBar([
+                                    { text: "*", className: "c" },
+                                    { name: "gate_statesq0" },
+                                    { name: "gate_statesq1" },
+                                    { name: "gate_statesq2" },
+                                    { name: "gate_statesq3" },
+                                    { name: "gate_statesq4" },
+                                    { name: "gate_statesq5" },
+                                    { name: "gate_statesq6" },
+                                    { name: "gate_statesq7" },
+                                    { name: "TimeInterval_" }
+                                    ]);
+
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+}
+
+function resetForms()
+{
+    myDynamicTable.resetEvent();
+}
+
+function submitForms()
+{
+
+    if (!checkForm()) {
+        return;
+    }
+
+    var recv_json = myDynamicTable.getRecvJson("config");
+    var val = 0, val_hex;
+    var queueNo;
+    var bit = new Array();
+    // Values in this structure doesn't matter. Will be assigned values later
+    json_obj = {"GateState":"ff","TimeInterval":0};
+
+    resetPending();
+
+    Object.each(recv_json, function(record) {
+        var gcl_id = record.key[1];
+        // Convert internal fields value
+        val = 0;
+        for( queueNo = 0; queueNo < 8; queueNo ++) {
+            bit[queueNo] = $("gate_statesq" + queueNo + gcl_id).checked ? 1 : 0;
+            val = val + (bit[queueNo] * Math.pow(2, queueNo));
+        }
+        val_hex = val.toString(16);
+        if (val_hex.length < 2) {
+            val_hex = "0" + val_hex; // Must be mapping to OctetString of length 1 byte, i.e. : "xx"
+        }
+
+        json_obj["GateState"]               = val_hex;
+        json_obj["TimeInterval"]            = parseInt($("TimeInterval_" + gcl_id).value,10);
+
+        // Only submit tsn.config.interface.tas.gclEntry.set if there are changes.
+        // record.val is the value retrieved by the latest get command
+        // json_obj is calculated based on the values on Web page
+        if (JSON.stringify(record.val) != JSON.stringify(json_obj)) {
+            var submit_json = [record.key[0], record.key[1], json_obj];
+            // This record changed, update with new values
+            incrementPending();
+            requestJsonDoc("tsn.config.interface.tas.gclEntry.set", submit_json, decrementPending);
+        }
+
+    });
+
+    // Wait until all json requests have returned, but max 800 ms.
+    requestUpdateWhenDone(800);
+}
+
+function clickBack()
+{
+    document.location.href="tsn_port_tas_config.htm";
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+    requestJsonDoc("tsn.config.interface.tas.gclEntry.get", null, processUpdate, "config");
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "capabilities") {
+        myCapabilities = recv_json;
+    } else if (name == "interfaceParams") {
+        interfaceTasParams = recv_json;
+        cycleTimeNanoSeconds = interfaceTasParams.AdminCycleTimeNumerator/interfaceTasParams.AdminCycleTimeDenominator * 1000000000;
+    }
+    if (myCapabilities && interfaceTasParams) {
+        requestUpdate();
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config");
+    requestJsonDoc("tsn.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("tsn.config.interface.tas.params.get", interface_param, requestUpdateGlobals, "interfaceParams");
+});
+
+ </script>
+</head>
+
+<body class="content">
+<h1>GCL Configuration</h1>
+
+<div class="refreshbar">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+<p>
+<input type="button" value="Save" onclick="submitForms();">
+<input type="button" value="Reset" onclick="resetForms();">
+<input type="button" value="Back" onclick="clickBack();">
+<input type="button" value="Check" onclick="checkForm();">
+</p>
+
+</body>
+</html>

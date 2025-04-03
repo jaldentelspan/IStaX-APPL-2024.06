@@ -1,0 +1,497 @@
+# Copyright (c) 2006-2019 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "afi_api.h"           /* For ourselves                  */
+#include "mgmt_api.h"          /* For mgmt_long2str_float()      */
+#include "icli_porting_util.h" /* For icli_port_info_txt_short() */
+#include "misc_api.h"          /* For iport2uport()              */
+
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_AFI
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+/****************************************************************************/
+// AFI_ICLI_runtime_id_range()
+/****************************************************************************/
+static BOOL AFI_ICLI_runtime_id_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    icli_variable_value_t *v;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1; // One valid range
+    runtime->range.u.sr.range[0].min = 1;
+    runtime->range.u.sr.range[0].max = AFI_MULTI_CNT;
+
+    if ((v = (icli_variable_value_t *)VTSS_MALLOC(sizeof(*v))) == NULL) {
+        return TRUE; // Default to using AFI_MULTI_CNT if allocation fails.
+    }
+
+    // Check to see if user has specified 'single' or 'multi' on command line.
+    if (icli_session_cmd_value_get(session_id, 2, v) == ICLI_RC_OK) {
+        // User has specified 'single' on the command line.
+        runtime->range.u.sr.range[0].max = AFI_SINGLE_CNT;
+    }
+
+    VTSS_FREE(v);
+    return TRUE;
+}
+
+/****************************************************************************/
+// AFI_ICLI_single_list()
+/****************************************************************************/
+static mesa_rc AFI_ICLI_single_list(u32 session_id)
+{
+    u32                 cnt = 0, single_id = AFI_ID_NONE;
+    afi_single_status_t status;
+    mesa_rc             rc;
+
+    ICLI_PRINTF("ID  Module Owner          Admin State Oper. State Req [fph]     Act [fph]     Ingr. I/F Egr. I/F  Active Time [ms] Frame Size\n");
+    ICLI_PRINTF("--- --------------------- ----------- ----------- ------------- ------------- --------- --------- ---------------- ----------\n");
+
+    while ((rc = afi_single_status_get(&single_id, &status, TRUE)) == VTSS_RC_OK) {
+        char igr_str[50], egr_str[50];
+
+        cnt++;
+        if (status.dst_port == VTSS_PORT_NO_NONE) {
+            (void)icli_port_info_txt_short(VTSS_USID_START, iport2uport(status.masquerade_port), igr_str);
+            strcpy(egr_str, "Switched");
+        } else {
+            strcpy(igr_str, "<None>");
+            (void)icli_port_info_txt_short(VTSS_USID_START, iport2uport(status.dst_port), egr_str);
+        }
+
+        ICLI_PRINTF("%3u %-21s %-11s %-11s " VPRI64Fu("13") " " VPRI64Fu("13") " %-9s %-9s " VPRI64Fu("16") " %10u\n", single_id, vtss_module_names[status.module_id], status.admin_up ? "Started" : "Paused", status.oper_up ? "Active" : "Inactive", status.params.fph, status.fph_act, igr_str, egr_str, status.active_time_ms, status.frm_sz_bytes);
+    }
+
+    if (rc != AFI_RC_NO_MORE_SINGLE_ENTRIES) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    if (cnt == 0) {
+        ICLI_PRINTF("<No single-frame flows found>\n");
+    }
+
+    ICLI_PRINTF("\n");
+
+    return VTSS_RC_OK;
+}
+
+/****************************************************************************/
+// AFI_ICLI_trace_frame()
+/****************************************************************************/
+static mesa_rc AFI_ICLI_trace_frame(u32 session_id, BOOL has_all, u32 id, bool multi)
+{
+    u32     cnt = 0;
+    mesa_rc rc;
+
+    if (has_all) {
+        id = AFI_ID_NONE;
+    }
+
+    if (multi) {
+        while ((rc = afi_multi_trace_frame(&id, has_all ? TRUE : FALSE)) == VTSS_RC_OK) {
+            cnt++;
+
+            if (!has_all) {
+                break;
+            }
+        }
+    } else {
+        while ((rc = afi_single_trace_frame(&id, has_all ? TRUE : FALSE)) == VTSS_RC_OK) {
+            cnt++;
+
+            if (!has_all) {
+                break;
+            }
+        }
+    }
+
+    if (rc != VTSS_RC_OK && rc != AFI_RC_NO_MORE_SINGLE_ENTRIES && rc != AFI_RC_NO_MORE_MULTI_ENTRIES) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    if (cnt == 0) {
+        ICLI_PRINTF("<No %s-frame flows found>\n", multi ? "multi" : "single");
+    }
+
+    ICLI_PRINTF("\n");
+
+    return VTSS_RC_OK;
+}
+
+/****************************************************************************/
+// AFI_ICLI_single_pause_resume()
+/****************************************************************************/
+static mesa_rc AFI_ICLI_single_pause_resume(u32 session_id, BOOL has_all, BOOL has_force, u32 single_id, BOOL pause)
+{
+    afi_single_status_t status;
+    mesa_rc             rc;
+
+    if (has_all) {
+        single_id = AFI_ID_NONE;
+    }
+
+    while ((rc = afi_single_status_get(&single_id, &status, has_all ? TRUE : FALSE)) == VTSS_RC_OK) {
+        if (!has_force && status.module_id != VTSS_MODULE_ID_PACKET) {
+            if (!has_all) {
+                ICLI_PRINTF("%% Can only %s single-frame flows initiated by the packet module, unless 'force' keyword is used\n", pause ? "pause" : "resume");
+                return VTSS_RC_ERROR; // Discussable whether this is an error or not.
+            }
+
+            continue;
+        }
+
+        if ((status.admin_up && pause) || (!status.admin_up && !pause)) {
+            ICLI_PRINTF("%sing single-frame flow %u...", pause ? "Paus" : "Resum", single_id);
+            if ((rc = afi_single_pause_resume(single_id, pause)) != VTSS_RC_OK) {
+                ICLI_PRINTF("\n%% %s\n", error_txt(rc));
+                return rc;
+            }
+
+            ICLI_PRINTF("done.\n");
+        }
+
+        if (!has_all) {
+            break;
+        }
+    }
+
+    if (rc != VTSS_RC_OK && rc != AFI_RC_NO_MORE_SINGLE_ENTRIES) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    ICLI_PRINTF("\n");
+
+    return VTSS_RC_OK;
+}
+
+/****************************************************************************/
+// AFI_ICLI_single_cancel()
+/****************************************************************************/
+static mesa_rc AFI_ICLI_single_cancel(u32 session_id, BOOL has_all, BOOL has_force, u32 single_id)
+{
+    afi_single_status_t status;
+    mesa_rc             rc;
+    u64                 active_time_ms;
+
+    if (has_all) {
+        single_id = AFI_ID_NONE;
+    }
+
+    while ((rc = afi_single_status_get(&single_id, &status, has_all ? TRUE : FALSE)) == VTSS_RC_OK) {
+        if (!has_force && status.module_id != VTSS_MODULE_ID_PACKET) {
+            if (!has_all) {
+                ICLI_PRINTF("%% Can only cancel single-frame flows initiated by the packet module, unless 'force' keyword is used\n");
+                return VTSS_RC_ERROR; // Discussable whether this is an error or not.
+            }
+
+            continue;
+        }
+
+        ICLI_PRINTF("Cancelling single-frame flow %u...", single_id);
+        if ((rc = afi_single_free(single_id, &active_time_ms)) != VTSS_RC_OK) {
+            ICLI_PRINTF("\n%% %s\n", error_txt(rc));
+            return rc;
+        }
+
+        ICLI_PRINTF("done (flow was active for " VPRI64u " ms).\n", active_time_ms);
+
+        if (!has_all) {
+            break;
+        }
+    }
+
+    if (rc != VTSS_RC_OK && rc != AFI_RC_NO_MORE_SINGLE_ENTRIES) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    ICLI_PRINTF("\n");
+
+    return VTSS_RC_OK;
+}
+
+/****************************************************************************/
+// AFI_ICLI_multi_list()
+/****************************************************************************/
+static mesa_rc AFI_ICLI_multi_list(u32 session_id)
+{
+    u32                cnt = 0, multi_id = AFI_ID_NONE;
+    afi_multi_status_t status;
+    mesa_rc            rc;
+
+    ICLI_PRINTF("ID  Module Owner          Admin State Oper. State Req [Mbps]  Act [Mbps]  Rate Type Ingr. I/F Egr. I/F  Active Time [ms] Frame Sizes\n");
+    ICLI_PRINTF("--- --------------------- ----------- ----------- ----------- ----------- --------- --------- --------- ---------------- -----------\n");
+
+    while ((rc = afi_multi_status_get(&multi_id, &status, TRUE)) == VTSS_RC_OK) {
+        u32  i;
+        char req_rate_str[50], act_rate_str[50], igr_str[50], egr_str[50];
+
+        // Print rate in Mbps with 3 decimals.
+        // Divide by 1,000,000 to get from bps to Mbps. Then multiply by 1000 to get it printed correctly with 3 decimals => divide by 1000
+        mgmt_long2str_float(req_rate_str, status.params.bps / 1000LLU, 3);
+        mgmt_long2str_float(act_rate_str, status.bps_act    / 1000LLU, 3);
+
+        cnt++;
+
+        if (status.dst_port == VTSS_PORT_NO_NONE) {
+            (void)icli_port_info_txt_short(VTSS_USID_START, iport2uport(status.masquerade_port), igr_str);
+            strcpy(egr_str, "Switched");
+        } else {
+            strcpy(igr_str, "<None>");
+            (void)icli_port_info_txt_short(VTSS_USID_START, iport2uport(status.dst_port), egr_str);
+        }
+
+        ICLI_PRINTF("%3u %-21s %-11s %-11s %11s %11s %-9s %-9s %-9s " VPRI64Fu("16"), multi_id, vtss_module_names[status.module_id], status.admin_up ? "Started" : "Paused", status.oper_up ? "Active" : "Inactive", req_rate_str, act_rate_str, status.params.line_rate ? "Line" : "Data", igr_str, egr_str, status.active_time_ms);
+        for (i = 0; i < status.frm_sz_bytes.size(); i++) {
+            if (status.frm_sz_bytes[i]) {
+                ICLI_PRINTF(" %u", status.frm_sz_bytes[i]);
+            } else {
+                break;
+            }
+        }
+
+        ICLI_PRINTF("\n");
+    }
+
+    if (rc != AFI_RC_NO_MORE_MULTI_ENTRIES) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    if (cnt == 0) {
+        ICLI_PRINTF("<No multi-frame flows found>\n");
+    }
+
+    ICLI_PRINTF("\n");
+
+    return VTSS_RC_OK;
+}
+
+/****************************************************************************/
+// AFI_ICLI_multi_pause_resume()
+/****************************************************************************/
+static mesa_rc AFI_ICLI_multi_pause_resume(u32 session_id, BOOL has_all, BOOL has_force, u32 multi_id, BOOL pause)
+{
+    afi_multi_status_t status;
+    mesa_rc            rc;
+
+    if (has_all) {
+        multi_id = AFI_ID_NONE;
+    }
+
+    while ((rc = afi_multi_status_get(&multi_id, &status, has_all ? TRUE : FALSE)) == VTSS_RC_OK) {
+        if (!has_force && status.module_id != VTSS_MODULE_ID_PACKET) {
+            if (!has_all) {
+                ICLI_PRINTF("%% Can only %s multi-frame flows initiated by the packet module, unless 'force' keyword is used\n", pause ? "pause" : "resume");
+                return VTSS_RC_ERROR; // Discussable whether this is an error or not.
+            }
+
+            continue;
+        }
+
+        if ((status.admin_up && pause) || (!status.admin_up && !pause)) {
+            ICLI_PRINTF("%sing multi-frame flow %u...", pause ? "Paus" : "Resum", multi_id);
+            if ((rc = afi_multi_pause_resume(multi_id, pause)) != VTSS_RC_OK) {
+                ICLI_PRINTF("\n%% %s\n", error_txt(rc));
+                return rc;
+            }
+
+            ICLI_PRINTF("done.\n");
+        }
+
+        if (!has_all) {
+            break;
+        }
+    }
+
+    if (rc != VTSS_RC_OK && rc != AFI_RC_NO_MORE_MULTI_ENTRIES) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    ICLI_PRINTF("\n");
+
+    return VTSS_RC_OK;
+}
+
+/****************************************************************************/
+// AFI_ICLI_multi_cancel()
+/****************************************************************************/
+static mesa_rc AFI_ICLI_multi_cancel(u32 session_id, BOOL has_all, BOOL has_force, u32 multi_id)
+{
+    afi_multi_status_t status;
+    mesa_rc            rc;
+    u64                active_time_ms;
+
+    if (has_all) {
+        multi_id = AFI_ID_NONE;
+    }
+
+    while ((rc = afi_multi_status_get(&multi_id, &status, has_all ? TRUE : FALSE)) == VTSS_RC_OK) {
+        if (!has_force && status.module_id != VTSS_MODULE_ID_PACKET) {
+            if (!has_all) {
+                ICLI_PRINTF("%% Can only cancel multi-frame flows initiated by the packet module, unless 'force' keyword is used\n");
+                return VTSS_RC_ERROR; // Discussable whether this is an error or not.
+            }
+
+            continue;
+        }
+
+        ICLI_PRINTF("Cancelling multi-frame flow %u...", multi_id);
+        if ((rc = afi_multi_free(multi_id, &active_time_ms)) != VTSS_RC_OK) {
+            ICLI_PRINTF("\n%% %s\n", error_txt(rc));
+            return rc;
+        }
+
+        ICLI_PRINTF("done (flow was active for " VPRI64u " ms).\n", active_time_ms);
+
+        if (!has_all) {
+            break;
+        }
+    }
+
+    if (rc != VTSS_RC_OK && rc != AFI_RC_NO_MORE_MULTI_ENTRIES) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    ICLI_PRINTF("\n");
+
+    return VTSS_RC_OK;
+}
+
+FUNCTION_END
+
+!==============================================================================
+
+CMD_BEGIN
+# The "10" below is just a place-holder and will be changed runtime depending
+# on platform and whether 'single' or 'multi' is specified in the command.
+COMMAND   = debug afi [{single | multi}] {{pause | resume | cancel | print} {all | <1-10>} [force] | list}
+IF_FLAG   =
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = Automatic Frame Injector
+HELP      = Single-frame flow (one frame repeated continuously at a certain rate)
+HELP      = Multi-frame flow (sequence of one or more frames, e.g. EMIX)
+HELP      = Pause transmission of one or all single- or multi-frame flows initiated with 'debug frame tx'
+HELP      = Resume transmission of one or all single- or multi-frame flows initiated with 'debug frame tx'
+HELP      = Cancel transmission of one or all single- or multi-frame flows initiated with 'debug frame tx'
+HELP      = Print frame as trace on a special trace group that is debug-enabled by default
+HELP      = All flows
+HELP      = Particular flow
+HELP      = Force pausing/resuming/cancelling even though it's not owned by the packet module (use at own risk).
+HELP      = List single- or multi-frame flows currently created
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_single
+CMD_VAR   = has_multi
+CMD_VAR   = has_pause
+CMD_VAR   =
+CMD_VAR   = has_cancel
+CMD_VAR   = has_print
+CMD_VAR   = has_all
+CMD_VAR   = id
+CMD_VAR   = has_force
+CMD_VAR   = has_list
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = AFI_ICLI_runtime_id_range
+
+CODE_BEGIN
+    if (has_list) {
+        if (has_single || !has_multi) {
+            if (AFI_ICLI_single_list(session_id) != VTSS_RC_OK) {
+                return ICLI_RC_ERROR;
+            }
+        }
+
+        if (has_multi || !has_single) {
+            if (AFI_ICLI_multi_list(session_id) != VTSS_RC_OK) {
+                return ICLI_RC_ERROR;
+            }
+        }
+    } else if (has_print) {
+        if (has_single || !has_multi) {
+            if (AFI_ICLI_trace_frame(session_id, has_all, id, false) != VTSS_RC_OK) {
+                return ICLI_RC_ERROR;
+            }
+        }
+
+        if (has_multi || !has_single) {
+            if (AFI_ICLI_trace_frame(session_id, has_all, id, true) != VTSS_RC_OK) {
+                return ICLI_RC_ERROR;
+            }
+        }
+    } else {
+        if (has_single || !has_multi) {
+            if (has_cancel) {
+                if (AFI_ICLI_single_cancel(session_id, has_all, has_force, id) != VTSS_RC_OK) {
+                    return ICLI_RC_ERROR;
+                }
+            } else {
+                if (AFI_ICLI_single_pause_resume(session_id, has_all, has_force, id, has_pause) != VTSS_RC_OK) {
+                    return ICLI_RC_ERROR;
+                }
+            }
+        }
+
+        if (has_multi || !has_single) {
+            if (has_cancel) {
+                if (AFI_ICLI_multi_cancel(session_id, has_all, has_force, id) != VTSS_RC_OK) {
+                    return ICLI_RC_ERROR;
+                }
+            } else {
+                if (AFI_ICLI_multi_pause_resume(session_id, has_all, has_force, id, has_pause) != VTSS_RC_OK) {
+                    return ICLI_RC_ERROR;
+                }
+            }
+        }
+    }
+CODE_END
+CMD_END
+

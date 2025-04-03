@@ -1,0 +1,3979 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_IPMC)
+
+INCLUDE_BEGIN
+#include "icli_api.h"
+#include "icli_porting_util.h"
+#include "icfg_api.h"         /* For vtss_icfg_XXX()     */
+#include "ipmc_lib_utils.hxx" /* For ipmc_lib_util_XXX() */
+#include "misc_api.h"         /* For uport2iport()       */
+#include "mgmt_api.h"         /* For MGMT_PORT_BUF_SIZE  */
+#include "standalone_api.h"   /* For topo_usid2isid()    */
+#include <functional>         /* For std::function<>     */
+#include <vtss/appl/ipmc_lib.h>
+#include "ipmc_lib_trace.hxx"
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include IPMC's trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "ipmc_trace.h"
+
+// Simple way of ICLI printing to both avoid session_id and to void the return
+// value of icli_session_self_printf()
+#define IPMC_ICLI_PRINTF(...) (void)icli_session_self_printf(__VA_ARGS__)
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define IPMC_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {IPMC_ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_global_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_global_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result, bool is_ipv4)
+{
+    vtss_appl_ipmc_lib_key_t         key = {};
+    vtss_appl_ipmc_lib_global_conf_t global_conf, global_default_conf;
+    vtss_icfg_conf_print_t           conf_print;
+    char                             protocol_buf[20];
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+    char                             cmd_buf[50], ip_buf[40];
+#endif
+
+    // Commands in ICLI_CMD_MODE_GLOBAL_CONFIG mode:
+    //  [no] {ip igmp | ipv6 mld} ssm-range [{<ipv4_mcast> | <ipv6_mcast>}] [{<4-32> | <8-128>}] (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} host-proxy leave-proxy                                         (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} host-proxy                                                     (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} unknown-flooding
+    //  [no] {ip igmp | ipv6 mld} snooping
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+    conf_print.force_no_keyword   = true;
+
+    key.is_mvr  = false;
+    key.is_ipv4 = is_ipv4;
+    VTSS_RC(vtss_appl_ipmc_lib_global_conf_get(        key, &global_conf));
+    VTSS_RC(vtss_appl_ipmc_lib_global_conf_default_get(key, &global_default_conf));
+
+    sprintf(protocol_buf, "%s", is_ipv4 ? "ip igmp" : "ipv6 mld");
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+    //  [no] {ip igmp | ipv6 mld} host-proxy leave-proxy
+    conf_print.is_default = global_conf.leave_proxy_enable == global_default_conf.leave_proxy_enable;
+    sprintf(cmd_buf, "%s host-proxy leave-proxy", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%s", ""));
+
+    //  [no] {ip igmp | ipv6 mld} host-proxy
+    conf_print.is_default = global_conf.proxy_enable == global_default_conf.proxy_enable;
+    sprintf(cmd_buf, "%s host-proxy", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%s", ""));
+#endif
+
+    //  [no] {ip igmp | ipv6 mld} unknown-flooding
+    // Cannot use vtss_icfg_conf_print(), because the non-no-form is default.
+    if (req->all_defaults || global_conf.unregistered_flooding_enable != global_default_conf.unregistered_flooding_enable) {
+        VTSS_RC(vtss_icfg_printf(result, "%s%s unknown-flooding\n", global_conf.unregistered_flooding_enable ? "" : "no ", protocol_buf));
+    }
+
+    //  [no] {ip igmp | ipv6 mld} snooping
+    // Cannot use vtss_icfg_conf_print(), because the non-no-form is default.
+    if (req->all_defaults || global_conf.admin_active != global_default_conf.admin_active) {
+        VTSS_RC(vtss_icfg_printf(result, "%s%s snooping\n", global_conf.admin_active ? "" : "no ", protocol_buf));
+    }
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+    //  [no] {ip igmp | ipv6 mld} ssm-range [{<ipv4_mcast> | <ipv6_mcast>}] [{<4-32> | <8-128>}]
+    if (req->all_defaults || global_conf.ssm_prefix != global_default_conf.ssm_prefix || global_conf.ssm_prefix_len != global_default_conf.ssm_prefix_len) {
+        VTSS_RC(vtss_icfg_printf(result, "%s ssm-range %s %u\n", protocol_buf, global_conf.ssm_prefix.print(ip_buf), global_conf.ssm_prefix_len));
+    }
+#endif
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_port_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_port_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result, bool is_ipv4)
+{
+    vtss_appl_ipmc_lib_key_t       key = {};
+    vtss_appl_ipmc_lib_port_conf_t conf, conf_default;
+    vtss_icfg_conf_print_t         conf_print;
+    mesa_port_no_t                 port_no;
+    char                           protocol_buf[20], cmd_buf[50];
+
+    // Commands in ICLI_CMD_MODE_INTERFACE_PORT_LIST mode:
+    //  [no] {ip igmp | ipv6 mld} snooping filter [<word16>]   (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping max-groups [<1-10>] (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping mrouter
+    //  [no] {ip igmp | ipv6 mld} snooping immediate-leave
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+
+    port_no = uport2iport(req->instance_id.port.begin_uport);
+    key.is_mvr = false;
+    key.is_ipv4 = is_ipv4;
+    VTSS_RC(vtss_appl_ipmc_lib_port_conf_get(        key, port_no, &conf));
+    VTSS_RC(vtss_appl_ipmc_lib_port_conf_default_get(key, &conf_default));
+
+    sprintf(protocol_buf, "%s", is_ipv4 ? "ip igmp snooping" : "ipv6 mld snooping");
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+    // [no] {ip igmp | ipv6 mld} snooping filter [<word16>]
+    conf_print.force_no_keyword = true;
+    conf_print.is_default = strcmp(conf.profile_key.name, conf_default.profile_key.name) == 0;
+    sprintf(cmd_buf, "%s filter", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%s", conf.profile_key.name));
+
+    // [no] {ip igmp | ipv6 mld} snooping max-groups [<1-10>]
+    // We use the no-form only if the default is 0, which means that the
+    // max-group check is disabled.
+    conf_print.force_no_keyword = conf_default.grp_cnt_max == 0;
+    conf_print.is_default = conf.grp_cnt_max == conf_default.grp_cnt_max;
+    sprintf(cmd_buf, "%s max-groups", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%u", conf.grp_cnt_max));
+#endif
+
+    // [no] {ip igmp | ipv6 mld} mrouter
+    conf_print.force_no_keyword = true;
+    conf_print.is_default = conf.router == conf_default.router;
+    sprintf(cmd_buf, "%s mrouter", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%s", ""));
+
+    // [no] {ip igmp | ipv6 mld} immediate-leave
+    conf_print.force_no_keyword = true;
+    conf_print.is_default = conf.fast_leave == conf_default.fast_leave;
+    sprintf(cmd_buf, "%s immediate-leave", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%s", ""));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_vlan_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_vlan_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result, bool is_ipv4)
+{
+    vtss_appl_ipmc_lib_vlan_key_t  vlan_key = {};
+    vtss_appl_ipmc_lib_vlan_conf_t vlan_conf, vlan_conf_default;
+    vtss_icfg_conf_print_t         conf_print;
+    mesa_vid_t                     vid = req->instance_id.vlan;
+    char                           protocol_buf[20], ipv4_buf[20];
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+    char                           cmd_buf[50];
+#endif
+
+    // Commands in ICLI_CMD_MODE_INTERFACE_VLAN mode:
+    //  [no] {ip igmp             snooping querier address [<ipv4_ucast>]
+    //  [no] {ip igmp | ipv6 mld} snooping compatibility [{auto | v1 | v2 | v3}]   (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping priority [<0-7>]                        (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping robustness-variable [<1-255>]           (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping query-max-response-time [<0-31744>]     (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping query-interval [<1-31744>]              (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping last-member-query-interval [<0-31744>]  (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping unsolicited-report-interval [<1-31744>] (SMBStaX+, only)
+    //  [no] {ip igmp | ipv6 mld} snooping querier election
+    //  [no] {ip igmp | ipv6 mld} snooping // Put last to be able to run-time check qi vs. qri (cannot use querier election, because that's enabled by default).
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+    conf_print.force_no_keyword   = true;
+
+    vlan_key.is_mvr  = false;
+    vlan_key.is_ipv4 = is_ipv4;
+    vlan_key.vid     = vid;
+    VTSS_RC(vtss_appl_ipmc_lib_vlan_conf_get(vlan_key, &vlan_conf));
+    VTSS_RC(vtss_appl_ipmc_lib_vlan_conf_default_get(static_cast<vtss_appl_ipmc_lib_key_t>(vlan_key), &vlan_conf_default));
+
+    sprintf(protocol_buf, "%s", is_ipv4 ? "ip igmp snooping" : "ipv6 mld snooping");
+
+    if (is_ipv4) {
+        // [no] ip igmp snooping querier address [<ipv4_ucast>]
+        conf_print.is_default = vlan_conf.querier_address == vlan_conf_default.querier_address;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "ip igmp snooping querier address", "%s", vlan_conf.querier_address.print(ipv4_buf)));
+    }
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+    // [no] ip {igmp | mld} snooping compatibility [{auto | v1 | v2 | v3}]
+    // Don't use the no-form when printing defaults
+    conf_print.force_no_keyword = false;
+    conf_print.is_default = vlan_conf.compatibility == vlan_conf_default.compatibility;
+    sprintf(cmd_buf, "%s compatibility", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%s", ipmc_lib_util_compatibility_to_str(vlan_conf.compatibility, is_ipv4)));
+
+    //  [no] ip {igmp | mld} snooping priority [<0-7>]
+    // Don't use the no-form when printing defaults
+    conf_print.force_no_keyword = false;
+    conf_print.is_default = vlan_conf.pcp == vlan_conf_default.pcp;
+    sprintf(cmd_buf, "%s priority", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%u", vlan_conf.pcp));
+
+    // [no] ip {igmp | mld} snooping robustness-variable [<1-255>]
+    // Don't use the no-form when printing defaults
+    conf_print.force_no_keyword = false;
+    conf_print.is_default = vlan_conf.rv == vlan_conf_default.rv;
+    sprintf(cmd_buf, "%s robustness-variable", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%u", vlan_conf.rv));
+
+    // [no] ip {igmp | mld} snooping query-max-response-time [<0-31744>]
+    // Don't use the no-form when printing defaults
+    conf_print.force_no_keyword = false;
+    conf_print.is_default = vlan_conf.qri == vlan_conf_default.qri;
+    sprintf(cmd_buf, "%s query-max-response-time", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%u", vlan_conf.qri));
+
+    // [no] ip {igmp | mld} snooping query-interval [<1-31744>]
+    // Don't use the no-form when printing defaults
+    conf_print.force_no_keyword = false;
+    conf_print.is_default = vlan_conf.qi == vlan_conf_default.qi;
+    sprintf(cmd_buf, "%s query-interval", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%u", vlan_conf.qi));
+
+    // [no] ip {igmp | mld} snooping last-member-query-interval [<0-31744>]
+    // Don't use the no-form when printing defaults
+    conf_print.force_no_keyword = false;
+    conf_print.is_default = vlan_conf.lmqi == vlan_conf_default.lmqi;
+    sprintf(cmd_buf, "%s last-member-query-interval", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%u", vlan_conf.lmqi));
+
+    // [no] ip {igmp | mld} snooping unsolicited-report-interval [<1-31744>]
+    // Don't use the no-form when printing defaults
+    conf_print.force_no_keyword = false;
+    conf_print.is_default = vlan_conf.uri == vlan_conf_default.uri;
+    sprintf(cmd_buf, "%s unsolicited-report-interval", protocol_buf);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd_buf, "%u", vlan_conf.uri));
+#endif /* VTSS_SW_OPTION_SMB_IPMC */
+
+    // [no] ip {igmp | mld} snooping querier election // Put last to be able to run-time check qi vs. qri
+    // The default is enabled, so cannot use vtss_icfg_conf_print().
+    if (req->all_defaults || vlan_conf.querier_enable != vlan_conf_default.querier_enable) {
+        VTSS_RC(vtss_icfg_printf(result, " %s%s querier election\n", vlan_conf.querier_enable ? "" : "no ", protocol_buf));
+    }
+
+    // [no] ip {igmp | mld} snooping
+    if (req->all_defaults || vlan_conf.admin_active != vlan_conf_default.admin_active) {
+        VTSS_RC(vtss_icfg_printf(result, " %s%s\n", vlan_conf.admin_active ? "" : "no ", protocol_buf));
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_igmp_global_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_igmp_global_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    return IPMC_ICFG_global_conf_print(req, result, true);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_mld_global_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_mld_global_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    return IPMC_ICFG_global_conf_print(req, result, false);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+#endif /* VTSS_SW_OPTION_SMB_IPMC */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_igmp_port_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_igmp_port_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    return IPMC_ICFG_port_conf_print(req, result, true);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_mld_port_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_mld_port_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    return IPMC_ICFG_port_conf_print(req, result, false);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+#endif /* VTSS_SW_OPTION_SMB_IPMC */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_igmp_vlan_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_igmp_vlan_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    return IPMC_ICFG_vlan_conf_print(req, result, true);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// IPMC_ICFG_mld_vlan_conf_print()
+/******************************************************************************/
+static mesa_rc IPMC_ICFG_mld_vlan_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    return IPMC_ICFG_vlan_conf_print(req, result, false);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+#endif /* VTSS_SW_OPTION_SMB_IPMC */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// ipmc_icfg_init()
+/******************************************************************************/
+mesa_rc ipmc_icfg_init(void)
+{
+    // Register IGMP callback functions
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_IGMP_GLOBAL,         "igmp", IPMC_ICFG_igmp_global_conf_print));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_IGMP_PORT,           "igmp", IPMC_ICFG_igmp_port_conf_print));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_IGMP_VLAN_INTERFACE, "igmp", IPMC_ICFG_igmp_vlan_conf_print));
+
+#if defined(VTSS_SW_OPTION_SMB_IPMC)
+    // Register MLD callback functions
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_MLD_GLOBAL,          "mld",  IPMC_ICFG_mld_global_conf_print));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_MLD_PORT,            "mld",  IPMC_ICFG_mld_port_conf_print));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_MLD_VLAN_INTERFACE,  "mld",  IPMC_ICFG_mld_vlan_conf_print));
+#endif
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+/******************************************************************************/
+// ipmc_icli_port_itr_t
+/******************************************************************************/
+typedef struct {
+    // Input set by caller
+    bool is_ipv4;
+    bool need_conf;
+    bool need_conf_default;
+    bool need_status;
+
+    // If port_list is nullptr, all ports are returned
+    icli_stack_port_range_t *port_list;
+
+    // Administered internally and may be used by caller
+    bool                             has_more_than_one_port;
+    const char                       *proto_txt; // "IGMP" or "MLD"
+    mesa_port_no_t                   port_no;
+    port_iter_t                      pit;
+    vtss_appl_ipmc_lib_port_conf_t   conf;
+    vtss_appl_ipmc_lib_port_conf_t   conf_default;
+    vtss_appl_ipmc_lib_port_status_t status;
+    vtss_appl_ipmc_lib_key_t         key;
+
+    // Private
+    // User should use pit.iter.first to figure out whether this is the first
+    // port in the range or not.
+    bool not_first;
+} ipmc_icli_port_itr_t;
+
+/******************************************************************************/
+// IPMC_ICLI_port_itr()
+/******************************************************************************/
+static bool IPMC_ICLI_port_itr(ipmc_icli_port_itr_t &itr)
+{
+    char    if_str[40];
+    mesa_rc rc;
+
+    if (!itr.not_first) {
+        itr.key.is_mvr  = false;
+        itr.key.is_ipv4 = itr.is_ipv4;
+
+        itr.proto_txt = itr.is_ipv4 ? "IGMP" : "MLD";
+        if ((rc = icli_port_iter_init(&itr.pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL_CPU)) != VTSS_RC_OK) {
+            IPMC_ICLI_PRINTF("%% Unable to initialize port iterator: %s", error_txt(rc));
+            return false;
+        }
+
+        // Figure out whether this iterator spans more than one port.
+        if (itr.port_list) {
+            if (itr.port_list->cnt == 0) {
+                // No iteration done. Not sure we can get here.
+                return false;
+            } else if (itr.port_list->cnt == 1) {
+                if (itr.port_list->switch_range[0].port_cnt > 1) {
+                    itr.has_more_than_one_port = true;
+                }
+            } else {
+                itr.has_more_than_one_port = true;
+            }
+        } else {
+            // If port_list is NULL, icli_port_iter_getnext() returns all ports.
+            itr.has_more_than_one_port = true;
+        }
+
+        itr.not_first = true;
+
+        if (itr.need_conf_default) {
+            if ((rc = vtss_appl_ipmc_lib_port_conf_default_get(itr.key, &itr.conf_default)) != VTSS_RC_OK) {
+                IPMC_ICLI_PRINTF("%% Unable to get default %s port configuration: %s", itr.proto_txt, error_txt(rc));
+                return false;
+            }
+        }
+    }
+
+    while (icli_port_iter_getnext(&itr.pit, itr.port_list)) {
+        itr.port_no = itr.pit.iport;
+
+        if (itr.need_conf) {
+            if ((rc = vtss_appl_ipmc_lib_port_conf_get(itr.key, itr.port_no, &itr.conf)) != VTSS_RC_OK) {
+                IPMC_ICLI_PRINTF("%% Unable to get %s port configuration for %s: %s", itr.proto_txt, icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str), error_txt(rc));
+                continue;
+            }
+        }
+
+        if (itr.need_status) {
+            if ((rc = vtss_appl_ipmc_lib_port_status_get(itr.key, itr.port_no, &itr.status)) != VTSS_RC_OK) {
+                IPMC_ICLI_PRINTF("%% Unable to get %s port configuration for %s: %s", itr.proto_txt, icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str), error_txt(rc));
+                continue;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// ipmc_icli_vlan_itr_t
+/******************************************************************************/
+typedef struct {
+    // Input set by caller
+    bool is_ipv4;
+    bool need_global_conf;
+    bool need_conf;
+    bool need_conf_default;
+    bool need_status;
+    bool need_statistics;
+
+    // If this is nullptr, it iterates across all defined IPMC VLANs with
+    // vtss_appl_ipmc_lib_vlan_itr(). Otherwise, it iterates across all VLANs in
+    // the list.
+    icli_unsigned_range_t *vlan_list;
+
+    // Administered internally and may be used by caller
+    const char                           *proto_txt; // "IGMP" or "MLD"
+    bool                                 has_more_than_one_vlan;
+    uint32_t                             vlan_cnt; // Counts the number of times IPMC_ICLI_vlan_itr() has returned true. Is 1 the first time.
+    vtss_appl_ipmc_lib_vlan_key_t        vlan_key;
+    vtss_appl_ipmc_lib_global_conf_t     global_conf;
+    vtss_appl_ipmc_lib_vlan_conf_t       conf;
+    vtss_appl_ipmc_lib_vlan_conf_t       conf_default;
+    vtss_appl_ipmc_lib_vlan_status_t     status;
+    vtss_appl_ipmc_lib_vlan_statistics_t statistics;
+
+    // Private data
+    // User should use \p first to figure out whether this is the first VLAN
+    // in the range or not.
+    bool     not_first;
+    uint32_t idx;
+} ipmc_icli_vlan_itr_t;
+
+/******************************************************************************/
+// IPMC_ICLI_itr_get_next()
+/******************************************************************************/
+static bool IPMC_ICLI_vlan_itr_get_next(ipmc_icli_vlan_itr_t &itr)
+{
+    if (itr.vlan_list) {
+        // Use the supplied VLAN list
+        if (itr.idx >= itr.vlan_list->cnt) {
+            // No more ranges.
+            return false;
+        }
+
+        if (itr.vlan_key.vid < itr.vlan_list->range[itr.idx].min) {
+            itr.vlan_key.vid = itr.vlan_list->range[itr.idx].min;
+        } else if (itr.vlan_key.vid >= itr.vlan_list->range[itr.idx].max) {
+            if (++itr.idx >= itr.vlan_list->cnt) {
+                return false;
+            }
+
+            itr.vlan_key.vid = itr.vlan_list->range[itr.idx].min;
+        } else {
+            itr.vlan_key.vid++;
+        }
+    } else {
+        // Use the defined VLANs to find the next
+        if (vtss_appl_ipmc_lib_vlan_itr(&itr.vlan_key, &itr.vlan_key, true /* don't mix IPMC/MVR and IGMP/MLD */) != VTSS_RC_OK) {
+            // No more defined VLANs.
+            return false;
+        }
+    }
+
+    T_IG(IPMC_TRACE_GRP_ICLI, "Next vid = %u", itr.vlan_key.vid);
+
+    return true;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_print_vlan_error()
+/******************************************************************************/
+static mesa_rc IPMC_ICLI_print_vlan_error(ipmc_icli_vlan_itr_t &itr, const char *txt, mesa_rc rc)
+{
+    if (rc == VTSS_RC_OK) {
+        return rc;
+    }
+
+    if (itr.has_more_than_one_vlan) {
+        if (txt && txt[0] != '\0') {
+            icli_session_self_printf("%% %s on VLAN interface %u: %s: %s\n", itr.proto_txt, itr.vlan_key.vid, txt, error_txt(rc));
+        } else {
+            icli_session_self_printf("%% %s on VLAN interface %u: %s\n", itr.proto_txt, itr.vlan_key.vid, error_txt(rc));
+        }
+    } else {
+        if (txt && txt[0] != '\0') {
+            icli_session_self_printf("%% %s: %s\n", txt, error_txt(rc));
+        } else {
+            icli_session_self_printf("%% %s\n", error_txt(rc));
+        }
+    }
+
+    return rc;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_vlan_itr()
+/******************************************************************************/
+static bool IPMC_ICLI_vlan_itr(ipmc_icli_vlan_itr_t &itr)
+{
+    mesa_rc rc;
+
+    if (!itr.not_first) {
+        itr.vlan_key.is_mvr  = false;
+        itr.vlan_key.is_ipv4 = itr.is_ipv4;
+        itr.vlan_key.vid     = 0;
+        itr.idx              = 0;
+        itr.not_first        = true;
+        itr.vlan_cnt         = 0;
+        itr.proto_txt        = itr.is_ipv4 ? "IGMP" : "MLD";
+
+        if (itr.vlan_list) {
+            itr.has_more_than_one_vlan = itr.vlan_list->cnt > 1 || itr.vlan_list->range[0].min < itr.vlan_list->range[0].max;
+        } else {
+            // Here, we don't know if more than one VLAN interface exists, but
+            // let's assume there are.
+            itr.has_more_than_one_vlan = true;
+        }
+
+        if (itr.need_global_conf) {
+            if ((rc = vtss_appl_ipmc_lib_global_conf_get(static_cast<vtss_appl_ipmc_lib_key_t>(itr.vlan_key), &itr.global_conf)) != VTSS_RC_OK) {
+                IPMC_ICLI_PRINTF("%% Unable to get global %s configuration: %s", itr.proto_txt, error_txt(rc));
+                return false;
+            }
+        }
+
+        if (itr.need_conf_default) {
+            if ((rc = vtss_appl_ipmc_lib_vlan_conf_default_get(static_cast<vtss_appl_ipmc_lib_key_t>(itr.vlan_key), &itr.conf_default)) != VTSS_RC_OK) {
+                IPMC_ICLI_PRINTF("%% Unable to get default %s VLAN configuration: %s", itr.proto_txt, error_txt(rc));
+                return false;
+            }
+        }
+    }
+
+    while (IPMC_ICLI_vlan_itr_get_next(itr)) {
+        if (itr.need_conf) {
+            if ((rc = vtss_appl_ipmc_lib_vlan_conf_get(itr.vlan_key, &itr.conf)) != VTSS_RC_OK) {
+                (void)IPMC_ICLI_print_vlan_error(itr, "Unable to get VLAN configuration", rc);
+                continue;
+            }
+        }
+
+        if (itr.need_status) {
+            if ((rc = vtss_appl_ipmc_lib_vlan_status_get(itr.vlan_key, &itr.status)) != VTSS_RC_OK) {
+                (void)IPMC_ICLI_print_vlan_error(itr, "Unable to get VLAN status", rc);
+                continue;
+            }
+        }
+
+        if (itr.need_statistics) {
+            if ((rc = vtss_appl_ipmc_lib_vlan_statistics_get(itr.vlan_key, &itr.statistics)) != VTSS_RC_OK) {
+                (void)IPMC_ICLI_print_vlan_error(itr, "Unable to get VLAN statistics", rc);
+                continue;
+            }
+        }
+
+        itr.vlan_cnt++;
+        return true;
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_privilege_level_check()
+/******************************************************************************/
+static BOOL IPMC_ICLI_privilege_level_check(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    icli_privilege_t current_priv;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return false;
+    }
+
+    if (ICLI_PRIVILEGE_GET(&current_priv) != ICLI_RC_OK) {
+        return false;
+    }
+
+    runtime->present = current_priv >= ICLI_PRIVILEGE_15;
+    return true;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_global_conf_set()
+// This function allows for passing a lambda expression that modifies the
+// contents of conf before it's saved.
+/******************************************************************************/
+static icli_rc_t IPMC_ICLI_global_conf_set(bool is_ipv4, std::function<void(vtss_appl_ipmc_lib_global_conf_t &, const vtss_appl_ipmc_lib_global_conf_t &)> func)
+{
+    vtss_appl_ipmc_lib_key_t         key = {};
+    vtss_appl_ipmc_lib_global_conf_t conf, conf_default;
+
+    key.is_mvr  = false;
+    key.is_ipv4 = is_ipv4;
+
+    // Get the default configuration even though the caller may not need it. It
+    // doesn't take much compute power to get.
+    IPMC_PRINT_RC(vtss_appl_ipmc_lib_global_conf_default_get(key, &conf_default));
+    IPMC_PRINT_RC(vtss_appl_ipmc_lib_global_conf_get(key, &conf));
+    func(conf, conf_default);
+
+    T_IG(IPMC_TRACE_GRP_ICLI, "%s: conf = %s, conf_default = %s", key, conf, conf_default);
+    IPMC_PRINT_RC(vtss_appl_ipmc_lib_global_conf_set(key, &conf));
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_port_conf_set()
+// This function allows for passing a lambda expression that modifies the
+// contents of itr.conf before it's saved.
+/******************************************************************************/
+static icli_rc_t IPMC_ICLI_port_conf_set(icli_stack_port_range_t *port_list, bool is_ipv4, std::function<void(ipmc_icli_port_itr_t &)> func)
+{
+    ipmc_icli_port_itr_t itr = {};
+
+    itr.is_ipv4   = is_ipv4;
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    // Even if the caller doesn't need the default-config, we get it, since it
+    // doesn't take a lot of compute power.
+    itr.need_conf_default = true;
+
+    while (IPMC_ICLI_port_itr(itr)) {
+        func(itr);
+        IPMC_PRINT_RC(vtss_appl_ipmc_lib_port_conf_set(itr.key, itr.port_no, &itr.conf));
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_vlan_conf_set()
+// This function allows for passing a lambda expression that modifies the
+// contents of itr.conf before it's saved.
+/******************************************************************************/
+static icli_rc_t IPMC_ICLI_vlan_conf_set(icli_unsigned_range_t *vlan_list, bool is_ipv4, std::function<void(ipmc_icli_vlan_itr_t &)> func)
+{
+    ipmc_icli_vlan_itr_t itr = {};
+
+    itr.is_ipv4   = is_ipv4;
+    itr.vlan_list = vlan_list;
+    itr.need_conf = true;
+
+    // Even if the caller doesn't need the default-config, we get it, since it
+    // doesn't take a lot of compute power.
+    itr.need_conf_default = true;
+
+    while (IPMC_ICLI_vlan_itr(itr)) {
+        func(itr);
+        IPMC_PRINT_RC(vtss_appl_ipmc_lib_vlan_conf_set(itr.vlan_key, &itr.conf));
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_oper_state_to_str()
+/******************************************************************************/
+static const char *IPMC_ICLI_oper_state_to_str(ipmc_icli_vlan_itr_t &itr, bool oper_warnings)
+{
+    if (!itr.global_conf.admin_active) {
+        return "Globally disabled";
+    } else if (!itr.conf.admin_active) {
+        return "Admin disabled";
+    } else if (itr.status.oper_state == VTSS_APPL_IPMC_LIB_VLAN_OPER_STATE_INACTIVE) {
+        if (oper_warnings) {
+            return "Inact. (warnings)";
+        } else {
+            return "Inactive";
+        }
+    } else if (oper_warnings) {
+        return "Active (warnings)";
+    } else {
+        return "Active";
+    }
+}
+
+/******************************************************************************/
+// IPMC_ICLI_vlan_status_do_show()
+/******************************************************************************/
+static void IPMC_ICLI_vlan_status_do_show(ipmc_icli_vlan_itr_t &itr, bool wants_details)
+{
+    char                                    querier_state_buf[20], ip_buf[40];
+    char                                    querier_uptime_buf[40], next_query_buf[40], other_querier_expiry_time_buf[40];
+    char                                    ovqpo_buf[40], ovqpg_buf[40], ovhpo_buf[40], ovhpg_buf[40], buf[100], oper_warning_buf[100];
+    vtss_appl_ipmc_lib_vlan_oper_warnings_t one_warning, mask;
+    const char                              *fmt;
+    bool                                    is_ipv4 = itr.vlan_key.is_ipv4;
+    int                                     i;
+    const int                               width = 31;
+
+    if (itr.status.oper_state == VTSS_APPL_IPMC_LIB_VLAN_OPER_STATE_ACTIVE) {
+        if (itr.conf.querier_enable) {
+            sprintf(querier_state_buf, "%s", ipmc_lib_util_querier_state_to_str(itr.status.querier_state));
+        } else {
+            strcpy(querier_state_buf, "Disabled");
+        }
+
+        if (itr.status.active_querier_address.is_zero()) {
+            strcpy(ip_buf, "-");
+        } else {
+            (void)itr.status.active_querier_address.print(ip_buf);
+        }
+    } else {
+        strcpy(querier_state_buf, "-");
+        strcpy(ip_buf,            "-");
+    }
+
+    if (wants_details) {
+        if (itr.vlan_cnt != 1) {
+            // Not first print-out
+            IPMC_ICLI_PRINTF("-----------------------------------------------------\n\n");
+        }
+
+        IPMC_ICLI_PRINTF("%-*s %u\n", width, "VLAN:",              itr.vlan_key.vid);
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Operational state:", IPMC_ICLI_oper_state_to_str(itr, false));
+
+        // One line per operational warning.
+        strcpy(buf, "Operational warnings:");
+        if (itr.status.oper_warnings) {
+            // Loop through all flags with a mask of running ones, so that we
+            // don't need to worry about someone adding new flags.
+            for (i = 0; i < 8 * sizeof(itr.status.oper_warnings); i++) {
+                mask = (vtss_appl_ipmc_lib_vlan_oper_warnings_t)VTSS_BIT(i);
+                one_warning = itr.status.oper_warnings & mask;
+
+                if (one_warning) {
+                    IPMC_ICLI_PRINTF("%-*s %s\n", width, buf, ipmc_lib_util_vlan_oper_warnings_to_txt(oper_warning_buf, sizeof(oper_warning_buf), one_warning));
+                    buf[0] = '\0';
+                }
+            }
+        } else {
+            IPMC_ICLI_PRINTF("%-*s None\n", width, buf);
+        }
+
+        if (itr.status.oper_state != VTSS_APPL_IPMC_LIB_VLAN_OPER_STATE_ACTIVE) {
+            IPMC_ICLI_PRINTF("\n");
+            return;
+        }
+
+        switch (itr.status.querier_state) {
+        case VTSS_APPL_IPMC_LIB_QUERIER_STATE_INIT:
+            sprintf(next_query_buf,               "%u second%s", itr.status.query_interval_left, itr.status.query_interval_left == 1 ? "" : "s");
+            strcpy(querier_uptime_buf,            "-");
+            strcpy(other_querier_expiry_time_buf, "-");
+            break;
+
+        case VTSS_APPL_IPMC_LIB_QUERIER_STATE_ACTIVE:
+            sprintf(next_query_buf,               "%u second%s", itr.status.query_interval_left, itr.status.query_interval_left == 1 ? "" : "s");
+            sprintf(querier_uptime_buf,           "%u second%s", itr.status.querier_uptime,      itr.status.querier_uptime      == 1 ? "" : "s");
+            strcpy(other_querier_expiry_time_buf, "-");
+            break;
+
+        case VTSS_APPL_IPMC_LIB_QUERIER_STATE_IDLE:
+        default:
+            strcpy(next_query_buf,                 "-");
+            strcpy(querier_uptime_buf,             "-");
+            sprintf(other_querier_expiry_time_buf, "%u second%s", itr.status.other_querier_expiry_time, itr.status.other_querier_expiry_time == 1 ? "" : "s");
+            break;
+        }
+
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Querier state:",             querier_state_buf);
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Active querier:",            ip_buf);
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Querier uptime:",            querier_uptime_buf);
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Next query:",                next_query_buf);
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Other querier expiry time:", other_querier_expiry_time_buf);
+
+        if (itr.conf.compatibility == VTSS_APPL_IPMC_LIB_COMPATIBILITY_AUTO && itr.status.older_version_querier_present_timeout_old) {
+            sprintf(ovqpo_buf, "%u second%s", itr.status.older_version_querier_present_timeout_old, itr.status.older_version_querier_present_timeout_old == 1 ? "" : "s");
+        } else {
+            strcpy(ovqpo_buf, "-");
+        }
+
+        if (itr.conf.compatibility == VTSS_APPL_IPMC_LIB_COMPATIBILITY_AUTO && itr.status.older_version_querier_present_timeout_gen) {
+            sprintf(ovqpg_buf, "%u second%s", itr.status.older_version_querier_present_timeout_gen, itr.status.older_version_querier_present_timeout_gen == 1 ? "" : "s");
+        } else {
+            strcpy(ovqpg_buf, "-");
+        }
+
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Configured compatibility:", ipmc_lib_util_compatibility_to_str(itr.conf.compatibility,    is_ipv4, true));
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Querier compatibility:",    ipmc_lib_util_compatibility_to_str(itr.status.querier_compat, is_ipv4, true));
+
+        if (is_ipv4) {
+            IPMC_ICLI_PRINTF("%-*s %s\n", width, "IGMPv1 querier present timeout:", ovqpo_buf);
+            IPMC_ICLI_PRINTF("%-*s %s\n", width, "IGMPv2 querier present timeout:", ovqpg_buf);
+        } else {
+            IPMC_ICLI_PRINTF("%-*s %s\n", width, "MLDv1 querier present timeout:",  ovqpg_buf);
+        }
+
+        if (itr.conf.compatibility == VTSS_APPL_IPMC_LIB_COMPATIBILITY_AUTO && itr.status.older_version_host_present_timeout_old) {
+            sprintf(ovhpo_buf, "%u second%s", itr.status.older_version_host_present_timeout_old, itr.status.older_version_host_present_timeout_old == 1 ? "" : "s");
+        } else {
+            strcpy(ovhpo_buf, "-");
+        }
+
+        if (itr.conf.compatibility == VTSS_APPL_IPMC_LIB_COMPATIBILITY_AUTO && itr.status.older_version_host_present_timeout_gen) {
+            sprintf(ovhpg_buf, "%u second%s", itr.status.older_version_host_present_timeout_gen, itr.status.older_version_host_present_timeout_gen == 1 ? "" : "s");
+        } else {
+            strcpy(ovhpg_buf, "-");
+        }
+
+        IPMC_ICLI_PRINTF("%-*s %s\n", width, "Host compatibility:", ipmc_lib_util_compatibility_to_str(itr.status.host_compat, is_ipv4, true));
+
+        if (is_ipv4) {
+            IPMC_ICLI_PRINTF("%-*s %s\n", width, "IGMPv1 host present timeout:", ovhpo_buf);
+            IPMC_ICLI_PRINTF("%-*s %s\n", width, "IGMPv2 host present timeout:", ovhpg_buf);
+        } else {
+            IPMC_ICLI_PRINTF("%-*s %s\n", width, "MLDv1 host present timeout:",  ovhpg_buf);
+        }
+
+        IPMC_ICLI_PRINTF("%-*s %u\n\n", width, "Number of registered groups:", itr.status.grp_cnt);
+        IPMC_ICLI_PRINTF("\n");
+    } else {
+        if (is_ipv4) {
+            fmt = "%4u %-17s %-13s %-15s %22s\n";
+        } else {
+            fmt = "%4u %-17s %-13s %-39s %22s\n";
+        }
+
+        if (itr.vlan_cnt == 1) {
+            // First iteration
+            if (is_ipv4) {
+                IPMC_ICLI_PRINTF("VLAN Operational State Querier State Active Querier  Next Query/Expiry Time\n");
+                IPMC_ICLI_PRINTF("---- ----------------- ------------- --------------- ----------------------\n");
+            } else {
+                IPMC_ICLI_PRINTF("VLAN Operational State Querier State Active Querier                          Next Query/Expiry Time\n");
+                IPMC_ICLI_PRINTF("---- ----------------- ------------- --------------------------------------- ----------------------\n");
+            }
+        }
+
+        if (itr.status.oper_state == VTSS_APPL_IPMC_LIB_VLAN_OPER_STATE_ACTIVE && !itr.status.active_querier_address.is_zero()) {
+            if (itr.status.querier_state == VTSS_APPL_IPMC_LIB_QUERIER_STATE_IDLE) {
+                sprintf(next_query_buf, "%u", itr.status.other_querier_expiry_time);
+            } else if (itr.status.query_interval_left) {
+                sprintf(next_query_buf, "%u", itr.status.query_interval_left);
+            } else {
+                strcpy(next_query_buf, "-");
+            }
+        } else {
+            strcpy(next_query_buf, "-");
+        }
+
+        IPMC_ICLI_PRINTF(fmt, itr.vlan_key.vid, IPMC_ICLI_oper_state_to_str(itr, itr.status.oper_warnings != VTSS_APPL_IPMC_LIB_VLAN_OPER_WARNING_NONE), querier_state_buf, ip_buf, next_query_buf);
+    }
+}
+
+/******************************************************************************/
+// IPMC_ICLI_vlan_status_show()
+/******************************************************************************/
+static void IPMC_ICLI_vlan_status_show(icli_unsigned_range_t *vlan_list, bool wants_details, bool is_ipv4)
+{
+    ipmc_icli_vlan_itr_t itr = {};
+
+    itr.is_ipv4          = is_ipv4;
+    itr.vlan_list        = vlan_list;
+    itr.need_global_conf = true;
+    itr.need_conf        = true;
+    itr.need_status      = true;
+
+    while (IPMC_ICLI_vlan_itr(itr)) {
+        IPMC_ICLI_vlan_status_do_show(itr, wants_details);
+    }
+
+    if (!wants_details) {
+        IPMC_ICLI_PRINTF("\n");
+    }
+}
+
+/******************************************************************************/
+// IPMC_ICLI_port_router_status_do_show()
+/******************************************************************************/
+static void IPMC_ICLI_port_router_status_do_show(ipmc_icli_port_itr_t &itr, bool details)
+{
+    char if_str[40], timeout_buf[20];
+
+    if (itr.pit.first) {
+        if (details) {
+            IPMC_ICLI_PRINTF("Interface  Router Status      Dynamic Timeout\n");
+            IPMC_ICLI_PRINTF("---------- ------------------ ---------------\n");
+         } else {
+            IPMC_ICLI_PRINTF("Interface  Router Status\n");
+            IPMC_ICLI_PRINTF("---------- ------------------\n");
+         }
+    }
+
+    if (itr.status.router_status == VTSS_APPL_IPMC_LIB_ROUTER_STATUS_NONE) {
+        // Only print router ports.
+        return;
+    }
+
+    IPMC_ICLI_PRINTF("%-10s %-18s", icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str), ipmc_lib_util_router_status_to_str(itr.status.router_status));
+
+    if (details) {
+        if (itr.status.dynamic_router_timeout) {
+            sprintf(timeout_buf, "%u", itr.status.dynamic_router_timeout);
+        } else {
+            strcpy(timeout_buf, "-");
+        }
+
+        IPMC_ICLI_PRINTF("%16s", timeout_buf);
+    }
+
+    IPMC_ICLI_PRINTF("\n");
+}
+
+/******************************************************************************/
+// IPMC_ICLI_port_router_status_show()
+/******************************************************************************/
+static icli_rc_t IPMC_ICLI_port_router_status_show(bool is_ipv4, bool details)
+{
+    ipmc_icli_port_itr_t itr = {};
+
+    itr.is_ipv4     = is_ipv4;
+    itr.need_status = true;
+
+    while (IPMC_ICLI_port_itr(itr)) {
+        IPMC_ICLI_port_router_status_do_show(itr, details);
+    }
+
+    IPMC_ICLI_PRINTF("\n");
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_port_filter_out()
+// Returns false if port_range is nullptr (indicating the user hasn't specified
+// any particular ports to view) or if port_no is set in port_list.
+// Returns true to not show port_no.
+/******************************************************************************/
+static bool IPMC_ICLI_port_filter_out(icli_stack_port_range_t *port_range, mesa_port_no_t &port_no)
+{
+    uint32_t       range_idx, port_cnt, port_idx;
+    mesa_port_no_t start_port_no;
+
+    if (!port_range) {
+        // Display this entry
+        return false;
+    }
+    for (range_idx = 0; range_idx < port_range->cnt; range_idx++) {
+        port_cnt      = port_range->switch_range[range_idx].port_cnt;
+        start_port_no = port_range->switch_range[range_idx].begin_iport;
+        for (port_idx = 0; port_idx < port_cnt; port_idx++) {
+            if (port_no == start_port_no + port_idx) {
+                // Display this entry
+                return false;
+            }
+        }
+    }
+
+    // Don't display this entry
+    return true;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_src_show()
+/******************************************************************************/
+static void IPMC_ICLI_src_show(icli_unsigned_range_t *vlan_list, icli_stack_port_range_t *port_list, bool wants_details, bool is_ipv4)
+{
+    ipmc_icli_vlan_itr_t            itr = {};
+    vtss_appl_ipmc_lib_vlan_key_t   vlan_key;
+    vtss_appl_ipmc_lib_src_status_t src_status;
+    mesa_vid_t                      prev_vid;
+    vtss_appl_ipmc_lib_ip_t         grp, src = {}, prev_grp;
+    mesa_port_no_t                  port_no = MESA_PORT_NO_NONE, prev_port_no;
+    uint32_t                        grp_cnt = 0, src_cnt = 0;
+    bool                            is_asm, differs_from_prev;
+    char                            vid_buf[10], grp_buf[40], if_str[40], src_buf[40], grp_timeout_buf[20], src_timeout_buf[20];
+    const char                      *fmt;
+    mesa_rc                         rc;
+
+    itr.is_ipv4   = is_ipv4;
+    itr.vlan_list = vlan_list;
+
+    if (is_ipv4) {
+        fmt = "%4s %-15s %-10s %-15s %-11s %-3s%s";
+        if (wants_details) {
+            IPMC_ICLI_PRINTF("VLAN Group Address   Interface  Source Address  Filter Mode Fwd Grp Timeout Src Timeout In H/W\n");
+            IPMC_ICLI_PRINTF("---- --------------- ---------- --------------- ----------- --- ----------- ----------- ------\n");
+        } else {
+            IPMC_ICLI_PRINTF("VLAN Group Address   Interface  Source Address  Filter Mode Fwd\n");
+            IPMC_ICLI_PRINTF("---- --------------- ---------- --------------- ----------- ---\n");
+        }
+    } else {
+        fmt = "%4s %-39s %-10s %-39s %-11s %-3s%s";
+        if (wants_details) {
+            IPMC_ICLI_PRINTF("VLAN Group Address                           Interface  Source Address                          Filter Mode Fwd Grp Timeout Src Timeout In H/W\n");
+            IPMC_ICLI_PRINTF("---- --------------------------------------- ---------- --------------------------------------- ----------- --- ----------- ----------- ------\n");
+        } else {
+            IPMC_ICLI_PRINTF("VLAN Group Address                           Interface  Source Address                          Filter Mode Fwd\n");
+            IPMC_ICLI_PRINTF("---- --------------------------------------- ---------- --------------------------------------- ----------- ---\n");
+        }
+    }
+
+    while (IPMC_ICLI_vlan_itr(itr)) {
+        vtss_clear(grp);
+        vlan_key.vid     = itr.vlan_key.vid;
+        vlan_key.is_mvr  = false;
+        vlan_key.is_ipv4 = is_ipv4;
+        grp.is_ipv4      = is_ipv4;
+
+        // Whenever we start on a new VLAN, make sure to show the entire line
+        // by setting prev_vid to something illegal.
+        prev_vid     = 0;
+        prev_grp     = grp;
+        prev_port_no = port_no;
+
+        while (vtss_appl_ipmc_lib_src_itr(&vlan_key, &vlan_key, &grp, &grp, &port_no, &port_no, &src, &src, true /* Don't mix IPMC/MVR and IPv4 and IPv6 */) == VTSS_RC_OK) {
+            if ((rc = vtss_appl_ipmc_lib_src_status_get(vlan_key, &grp, port_no, &src, &src_status)) != VTSS_RC_OK) {
+                T_IG(IPMC_TRACE_GRP_ICLI, "vtss_appl_ipmc_lib_src_status_get(%s, %s, %u, %s) failed: %s", vlan_key, grp, port_no, src, error_txt(rc));
+                continue;
+            }
+
+            if (vlan_key.vid != itr.vlan_key.vid) {
+                // We got into the next VLAN ID compared to what
+                // IPMC_ICLI_vlan_itr() wants right now.
+                break;
+            }
+
+            if (IPMC_ICLI_port_filter_out(port_list, port_no)) {
+                continue;
+            }
+
+            is_asm = src.is_all_ones();
+
+            if (is_asm) {
+                grp_cnt++;
+            } else {
+                src_cnt++;
+            }
+
+            // We only show part of the line if the new line's VLAN, Group, and
+            // port number doesn't differ from the previous line's.
+            differs_from_prev = prev_vid != vlan_key.vid || prev_grp.is_ipv4 != grp.is_ipv4 || prev_grp != grp || prev_port_no != port_no;
+
+            if (is_asm) {
+                // This is the ASM entry
+                if (differs_from_prev) {
+                    // No previous sources on this <vid, grp, port>.
+                    sprintf(src_buf, "Any");
+                } else {
+                    // Catch remaining
+                    sprintf(src_buf, "Other");
+                }
+            }
+
+            if (differs_from_prev) {
+                // Print vid, grp, port
+                sprintf(vid_buf, "%4u", vlan_key.vid);
+                (void)grp.print(grp_buf);
+                (void)icli_port_info_txt_short(VTSS_USID_START, iport2uport(port_no), if_str);
+            } else {
+                // Don't re-print vid, grp, port
+                vid_buf[0] = '\0';
+                grp_buf[0] = '\0';
+                if_str[0]  = '\0';
+            }
+
+            IPMC_ICLI_PRINTF(fmt, vid_buf, grp_buf, if_str, is_asm ? src_buf : src.print(src_buf), ipmc_lib_util_filter_mode_to_str(src_status.filter_mode), src_status.forwarding ? "Yes" : "No", wants_details ? "" : "\n");
+
+            if (wants_details) {
+                if (is_asm && src_status.filter_mode == VTSS_APPL_IPMC_LIB_FILTER_MODE_EXCLUDE) {
+                    // Group timeout is only used by the ASM entry and when filter
+                    // mode is EXCLUDE
+                    sprintf(grp_timeout_buf, "%11u", src_status.grp_timeout);
+                } else {
+                    strcpy(grp_timeout_buf, "-");
+                }
+
+                if (!is_asm && src_status.forwarding) {
+                    // Source timers are counting if the entry is forwarding,
+                    // independent of the filter mode.
+                    sprintf(src_timeout_buf, "%11u", src_status.src_timeout);
+                } else {
+                    strcpy(src_timeout_buf, "-");
+                }
+
+                IPMC_ICLI_PRINTF(" %11s %11s %s\n", grp_timeout_buf, src_timeout_buf, src_status.hw_location != VTSS_APPL_IPMC_LIB_HW_LOCATION_NONE ? "Yes" : "No");
+            }
+
+            prev_vid     = vlan_key.vid;
+            prev_grp     = grp;
+            prev_port_no = port_no;
+        }
+    }
+
+    if (!grp_cnt && !src_cnt) {
+        if (vlan_list || port_list) {
+           IPMC_ICLI_PRINTF("<None that matched the filter criteria>");
+        } else {
+           IPMC_ICLI_PRINTF("<None>");
+        }
+    } else {
+        if (vlan_list || port_list) {
+            IPMC_ICLI_PRINTF("Total displayed group count: %u (%u source%s)", grp_cnt, src_cnt, src_cnt == 1 ? "" : "s");
+        } else {
+            IPMC_ICLI_PRINTF("Total group count: %u (%u source%s)", grp_cnt, src_cnt, src_cnt == 1 ? "" : "s");
+        }
+    }
+
+    IPMC_ICLI_PRINTF("\n\n");
+}
+
+/******************************************************************************/
+// IPMC_ICLI_stati_summarize()
+/******************************************************************************/
+static uint32_t IPMC_ICLI_stati_summarize(vtss_appl_ipmc_lib_igmp_vlan_statistics_t &s, bool queries)
+{
+    uint32_t result;
+
+    if (queries) {
+        result = s.v1_query + s.v2_g_query + s.v2_gs_query + s.v3_g_query + s.v3_gs_query + s.v3_gss_query;
+    } else {
+        result = s.v1_report + s.v2_report + s.v2_leave + s.v3_report;
+    }
+
+    return result;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_stati_summarize()
+/******************************************************************************/
+static uint32_t IPMC_ICLI_stati_summarize(vtss_appl_ipmc_lib_mld_vlan_statistics_t &s, bool queries)
+{
+    uint32_t result;
+
+    if (queries) {
+        result = s.v1_g_query + s.v1_gs_query + s.v2_g_query + s.v2_gs_query + s.v2_gss_query;
+    } else {
+        result = s.v1_report + s.v1_done + s.v2_report;
+    }
+
+    return result;
+}
+
+/******************************************************************************/
+// IPMC_ICLI_stati_line()
+/******************************************************************************/
+static void IPMC_ICLI_stati_line(const char *name, int name_width, uint32_t *rx_util, uint32_t *rx_igno, uint32_t *tx)
+{
+     IPMC_ICLI_PRINTF("%-*s", name_width, name);
+
+     if (rx_util) {
+         IPMC_ICLI_PRINTF(" %12u", *rx_util);
+     } else {
+         IPMC_ICLI_PRINTF("%13s", "");
+     }
+
+     if (rx_igno) {
+         IPMC_ICLI_PRINTF(" %10u", *rx_igno);
+     } else {
+         IPMC_ICLI_PRINTF("%11s", "");
+     }
+
+     if (tx) {
+         IPMC_ICLI_PRINTF(" %10u\n", *tx);
+     } else {
+         IPMC_ICLI_PRINTF("\n");
+     }
+}
+
+/******************************************************************************/
+// IPMC_ICLI_vlan_statistics_do_show()
+/******************************************************************************/
+static void IPMC_ICLI_vlan_statistics_do_show(ipmc_icli_vlan_itr_t &itr, bool wants_details)
+{
+    uint32_t  rx_q, tx_q, rx_r, tx_r;
+    const int igmp_width = 40;
+    const int mld_width  = 51;
+
+#define IPMC_ICLI_IGMP_STATI_LINE(_n_, _c_) IPMC_ICLI_stati_line(_n_, igmp_width, &itr.statistics.rx.igmp.utilized._c_, &itr.statistics.rx.igmp.ignored._c_, &itr.statistics.tx.igmp._c_)
+#define IPMC_ICLI_MLD_STATI_LINE( _n_, _c_) IPMC_ICLI_stati_line(_n_, mld_width,  &itr.statistics.rx.mld.utilized._c_,  &itr.statistics.rx.mld.ignored._c_,  &itr.statistics.tx.mld._c_)
+
+    if (wants_details) {
+        IPMC_ICLI_PRINTF("VLAN %u Statistics:\n", itr.vlan_key.vid);
+
+        if (itr.vlan_key.is_ipv4) {
+            IPMC_ICLI_PRINTF("Counter                                  Rx Processed Rx Ignored Tx\n");
+            IPMC_ICLI_PRINTF("---------------------------------------- ------------ ---------- ----------\n");
+
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv1 Joins",                             v1_report);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv1 Queries",                           v1_query);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv2 Joins",                             v2_report);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv2 Leaves",                            v2_leave);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv2 General Queries",                   v2_g_query);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv2 Group-Specific Queries",            v2_gs_query);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv3 Reports",                           v3_report);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv3 General Queries",                   v3_g_query);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv3 Group-Specific Queries",            v3_gs_query);
+            IPMC_ICLI_IGMP_STATI_LINE("IGMPv3 Group-and-Source-Specific Queries", v3_gss_query);
+            IPMC_ICLI_stati_line(     "IGMP Error Packets", igmp_width, nullptr, &itr.statistics.rx_errors, nullptr);
+            IPMC_ICLI_PRINTF("\n");
+        } else {
+            IPMC_ICLI_PRINTF("Counter                                             Rx Processed Rx Ignored Tx\n");
+            IPMC_ICLI_PRINTF("--------------------------------------------------- ------------ ---------- ----------\n");
+
+            IPMC_ICLI_MLD_STATI_LINE("MLDv1 Reports",                                       v1_report);
+            IPMC_ICLI_MLD_STATI_LINE("MLDv1 Dones",                                         v1_done);
+            IPMC_ICLI_MLD_STATI_LINE("MLDv1 General Queries",                               v1_g_query);
+            IPMC_ICLI_MLD_STATI_LINE("MLDv1 Multicast-Address-Specific Queries",            v1_gs_query);
+            IPMC_ICLI_MLD_STATI_LINE("MLDv2 Reports",                                       v2_report);
+            IPMC_ICLI_MLD_STATI_LINE("MLDv2 General Queries",                               v2_g_query);
+            IPMC_ICLI_MLD_STATI_LINE("MLDv2 Multicast-Address-Specific Queries",            v2_gs_query);
+            IPMC_ICLI_MLD_STATI_LINE("MLDv2 Multicast-Address-and-Source-Specific Queries", v2_gss_query);
+            IPMC_ICLI_stati_line(    "MLD Error Packets", mld_width, nullptr, &itr.statistics.rx_errors, nullptr);
+            IPMC_ICLI_PRINTF("\n");
+        }
+    } else {
+        if (itr.vlan_cnt == 1) {
+            // First iteration
+            IPMC_ICLI_PRINTF("VLAN Rx Queries Tx Queries Rx Reports Tx Reports Rx Errors\n");
+            IPMC_ICLI_PRINTF("---- ---------- ---------- ---------- ---------- ----------\n");
+        }
+
+        if (itr.is_ipv4) {
+            rx_q = IPMC_ICLI_stati_summarize(itr.statistics.rx.igmp.utilized, true) +  IPMC_ICLI_stati_summarize(itr.statistics.rx.igmp.ignored, true);
+            tx_q = IPMC_ICLI_stati_summarize(itr.statistics.tx.igmp, true);
+            rx_r = IPMC_ICLI_stati_summarize(itr.statistics.rx.igmp.utilized, false) + IPMC_ICLI_stati_summarize(itr.statistics.rx.igmp.ignored, false);
+            tx_r = IPMC_ICLI_stati_summarize(itr.statistics.tx.igmp, false);
+        } else {
+            rx_q = IPMC_ICLI_stati_summarize(itr.statistics.rx.mld.utilized, true) +  IPMC_ICLI_stati_summarize(itr.statistics.rx.mld.ignored, true);
+            tx_q = IPMC_ICLI_stati_summarize(itr.statistics.tx.mld, true);
+            rx_r = IPMC_ICLI_stati_summarize(itr.statistics.rx.mld.utilized, false) + IPMC_ICLI_stati_summarize(itr.statistics.rx.mld.ignored, false);
+            tx_r = IPMC_ICLI_stati_summarize(itr.statistics.tx.mld, false);
+        }
+
+        IPMC_ICLI_PRINTF("%4u %10u %10u %10u %10u %10u\n", itr.vlan_key.vid, rx_q, tx_q, rx_r, tx_r, itr.statistics.rx_errors);
+    }
+}
+
+/******************************************************************************/
+// IPMC_ICLI_vlan_statistics_show()
+/******************************************************************************/
+static void IPMC_ICLI_vlan_statistics_show(icli_unsigned_range_t *vlan_list, bool wants_details, bool is_ipv4)
+{
+    ipmc_icli_vlan_itr_t itr = {};
+
+    itr.is_ipv4          = is_ipv4;
+    itr.vlan_list        = vlan_list;
+    itr.need_statistics  = true;
+
+    while (IPMC_ICLI_vlan_itr(itr)) {
+        IPMC_ICLI_vlan_statistics_do_show(itr, wants_details);
+    }
+
+    if (!wants_details) {
+        IPMC_ICLI_PRINTF("\n");
+    }
+}
+
+/******************************************************************************/
+// IPMC_ICLI_vlan_statistics_clear()
+/******************************************************************************/
+static void IPMC_ICLI_vlan_statistics_clear(icli_unsigned_range_t *vlan_list, bool is_ipv4)
+{
+    ipmc_icli_vlan_itr_t itr = {};
+    mesa_rc              rc;
+
+    itr.is_ipv4   = is_ipv4;
+    itr.vlan_list = vlan_list;
+
+    while (IPMC_ICLI_vlan_itr(itr)) {
+        if ((rc = vtss_appl_ipmc_lib_vlan_statistics_clear(itr.vlan_key)) != VTSS_RC_OK) {
+            IPMC_ICLI_PRINTF("%% Failed to clear %s VLAN %u statistics: %s\n", is_ipv4 ? "IGMP" : "MLD", itr.vlan_key.vid, error_txt(rc));
+        }
+    }
+}
+FUNCTION_END
+
+HELP_IGMP_SNOOPING        = IGMP snooping
+HELP_IGMP_STATUS_DETAILS  = IGMP detailed running information/statistics
+HELP_IGMP_SSM_RANGE       = IPv4 address range of Source Specific Multicast
+HELP_IGMP_QUERIER         = IGMP querier configuration
+HELP_IGMP_QUERIER_ELECT   = Act as an IGMP Querier to join Querier-Election
+HELP_IGMP_QUERIER_ADR     = IGMP querier address configuration
+HELP_IGMP_THROTTLE        = IGMP group throttling configuration
+HELP_IGMP_FILTER          = Access control on IGMP multicast group registration
+HELP_MLD_SNOOPING         = MLD snooping
+HELP_MLD_STATUS_DETAILS   = MLD detailed running information/statistics
+HELP_MLD_SSM_RANGE        = IPv6 address range of Source Specific Multicast
+HELP_MLD_THROTTLE         = MLD group throttling configuration
+HELP_MLD_FILTER           = Access control on MLD multicast group registration
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp ssm-range <ipv4_mcast> <4-32>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = prefix_addr
+CMD_VAR = prefix_len
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SSM_RANGE
+HELP = Valid IPv4 multicast address
+HELP = Prefix length ranges from 4 to 32
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.ssm_prefix.ipv4 = prefix_addr; conf.ssm_prefix_len = prefix_len;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld ssm-range <ipv6_mcast> <8-128>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = prefix_addr
+CMD_VAR = prefix_len
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SSM_RANGE
+HELP = Valid IPv6 multicast address
+HELP = Prefix length ranges from 8 to 128
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.ssm_prefix.ipv6 = prefix_addr; conf.ssm_prefix_len = prefix_len;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+
+COMMAND = no ip igmp ssm-range
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SSM_RANGE
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.ssm_prefix = conf_default.ssm_prefix; conf.ssm_prefix_len = conf_default.ssm_prefix_len;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld ssm-range
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SSM_RANGE
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.ssm_prefix = conf_default.ssm_prefix; conf.ssm_prefix_len = conf_default.ssm_prefix_len;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp host-proxy [leave-proxy]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_leave_proxy
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = IGMP proxy configuration
+HELP = IGMP proxy for leave configuration
+
+CODE_BEGIN
+    if (has_leave_proxy) {
+        ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.leave_proxy_enable = true;}));
+    } else {
+        ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.proxy_enable = true;}));
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (has_leave_proxy) {
+        ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.leave_proxy_enable = false;}));
+    } else {
+        ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.proxy_enable = false;}));
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld host-proxy [leave-proxy]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_leave_proxy
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = MLD proxy configuration
+HELP = MLD proxy for leave configuration
+
+CODE_BEGIN
+    if (has_leave_proxy) {
+        ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.leave_proxy_enable = true;}));
+    } else {
+        ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.proxy_enable = true;}));
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (has_leave_proxy) {
+        ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.leave_proxy_enable = false;}));
+    } else {
+        ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.proxy_enable = false;}));
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ip igmp unknown-flooding
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = Flood unregistered IPv4 multicast traffic
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.unregistered_flooding_enable = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.unregistered_flooding_enable = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld unknown-flooding
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = Flooding unregistered IPv6 multicast traffic
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.unregistered_flooding_enable = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.unregistered_flooding_enable = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ip igmp snooping
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.admin_active = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(true, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.admin_active = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.admin_active = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_global_conf_set(false, [&](vtss_appl_ipmc_lib_global_conf_t &conf, const vtss_appl_ipmc_lib_global_conf_t &conf_default) {conf.admin_active = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping filter <word16>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = profile_name
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##HELP_IGMP_FILTER
+HELP = ##ICLI_HELP_PROFILE_NAME
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {strncpy(itr.conf.profile_key.name, profile_name, sizeof(itr.conf.profile_key.name));}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping filter <word16>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = profile_name
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##HELP_MLD_FILTER
+HELP = ##ICLI_HELP_PROFILE_NAME
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {strncpy(itr.conf.profile_key.name, profile_name, sizeof(itr.conf.profile_key.name));}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping filter
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##HELP_IGMP_FILTER
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {itr.conf.profile_key = itr.conf_default.profile_key;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping filter
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##HELP_MLD_FILTER
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {itr.conf.profile_key = itr.conf_default.profile_key;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping max-groups <1-10>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = grp_cnt_max
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##HELP_IGMP_THROTTLE
+HELP = Maximum number of IGMP group registrations
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {itr.conf.grp_cnt_max = grp_cnt_max;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping max-groups <1-10>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = grp_cnt_max
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##HELP_MLD_THROTTLE
+HELP = Maximum number of MLD group registrations
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {itr.conf.grp_cnt_max = grp_cnt_max;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping max-groups
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##HELP_IGMP_THROTTLE
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {itr.conf.grp_cnt_max = itr.conf_default.grp_cnt_max;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping max-groups
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##HELP_MLD_THROTTLE
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {itr.conf.grp_cnt_max = itr.conf_default.grp_cnt_max;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ip igmp snooping mrouter
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_MROUTER
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {itr.conf.router = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {itr.conf.router = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping mrouter
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_MROUTER
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {itr.conf.router = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {itr.conf.router = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ip igmp snooping immediate-leave
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_IMD_LEAVE
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {itr.conf.fast_leave = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, true, [&](ipmc_icli_port_itr_t &itr) {itr.conf.fast_leave = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping immediate-leave
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_IMD_LEAVE
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {itr.conf.fast_leave = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_conf_set(port_list, false, [&](ipmc_icli_port_itr_t &itr) {itr.conf.fast_leave = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ip igmp snooping
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.admin_active = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.admin_active = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.admin_active = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.admin_active = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ip igmp snooping querier {election | address <ipv4_ucast>}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_election
+CMD_VAR =
+CMD_VAR = ipv4
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##HELP_IGMP_QUERIER
+HELP = ##HELP_IGMP_QUERIER_ELECT
+HELP = ##HELP_IGMP_QUERIER_ADR
+HELP = A valid IPv4 unicast address
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_ip_t ip;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_election) {
+        ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.querier_enable = true;}));
+    } else {
+        vtss_clear(ip);
+        ip.is_ipv4 = true;
+        ip.ipv4 = ipv4;
+        ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.querier_address = ip;}));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no ip igmp snooping querier {election | address}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_election
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##HELP_IGMP_QUERIER
+HELP = ##HELP_IGMP_QUERIER_ELECT
+HELP = ##HELP_IGMP_QUERIER_ADR
+
+CODE_BEGIN
+    if (has_election) {
+        ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.querier_enable = false;}));
+    } else {
+        ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.querier_address = itr.conf_default.querier_address;}));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping querier election
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = MLD Querier configuration
+HELP = Act as an MLD Querier to join Querier-Election
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.querier_enable = true;}));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.querier_enable = false;}));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping compatibility {auto | v1 | v2 | v3}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_auto
+CMD_VAR = has_v1
+CMD_VAR = has_v2
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_COMPAT
+HELP = Compatible with IGMPv1/IGMPv2/IGMPv3
+HELP = Forced IGMPv1
+HELP = Forced IGMPv2
+HELP = Forced IGMPv3
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_compatibility_t compat;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_auto) {
+        compat = VTSS_APPL_IPMC_LIB_COMPATIBILITY_AUTO;
+    } else if (has_v1) {
+        compat = VTSS_APPL_IPMC_LIB_COMPATIBILITY_OLD;
+    } else if (has_v2) {
+        compat = VTSS_APPL_IPMC_LIB_COMPATIBILITY_GEN;
+    } else {
+        compat = VTSS_APPL_IPMC_LIB_COMPATIBILITY_SFM;
+    }
+
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.compatibility = compat;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping compatibility {auto | v1 | v2}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_auto
+CMD_VAR = has_v1
+CMD_VAR =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_COMPAT
+HELP = Compatible with MLDv1/MLDv2
+HELP = Forced MLDv1
+HELP = Forced MLDv2
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_compatibility_t compat;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_auto) {
+        compat = VTSS_APPL_IPMC_LIB_COMPATIBILITY_AUTO;
+    } else if (has_v1) {
+        compat = VTSS_APPL_IPMC_LIB_COMPATIBILITY_GEN;
+    } else {
+        compat = VTSS_APPL_IPMC_LIB_COMPATIBILITY_SFM;
+    }
+
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.compatibility = compat;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping compatibility
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_COMPAT
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.compatibility = itr.conf_default.compatibility;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping compatibility
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_COMPAT
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.compatibility = itr.conf_default.compatibility;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping priority <0-7>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = pcp
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = PCP value to use in VLAN tag
+HELP = PCP priority ranges from 0 to 7
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.pcp = pcp;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping priority <0-7>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = pcp
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = PCP value to use in VLAN tag
+HELP = PCP ranges from 0 to 7
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.pcp = pcp;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+
+COMMAND = no ip igmp snooping priority
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = PCP value to use in VLAN tag
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.pcp = itr.conf_default.pcp;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping priority
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = PCP value to use in VLAN tag
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.pcp = itr.conf_default.pcp;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping robustness-variable <1-255>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = rv
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_RV
+HELP = Packet loss tolerance count from 1 to 255
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.rv = rv;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping robustness-variable <1-255>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = rv
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_RV
+HELP = Packet loss tolerance count from 1 to 255
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.rv = rv;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping robustness-variable
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_RV
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.rv = itr.conf_default.rv;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping robustness-variable
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_RV
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.rv = itr.conf_default.rv;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping query-max-response-time <0-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = qri
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_QRI
+HELP = 0 - 31744 tenths of seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qri = qri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping query-max-response-time <0-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = qri
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_QRI
+HELP = 0 - 31744 tenths of seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qri = qri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping query-max-response-time
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_QRI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qri = itr.conf_default.qri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping query-max-response-time
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_QRI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qri = itr.conf_default.qri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping query-interval <1-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = qi
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_QI
+HELP = 1 - 31744 seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qi = qi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping query-interval <1-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = qi
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_QI
+HELP = 1 - 31744 seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qi = qi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping query-interval
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_QI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qi = itr.conf_default.qi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping query-interval
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_QI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.qi = itr.conf_default.qi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping last-member-query-interval <0-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = lmqi
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_LMQI
+HELP = 0 - 31744 tenths of seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.lmqi = lmqi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping last-member-query-interval <0-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = lmqi
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_LMQI
+HELP = 0 - 31744 tenths of seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.lmqi = lmqi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping last-member-query-interval
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_LMQI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.lmqi = itr.conf_default.lmqi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping last-member-query-interval
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_LMQI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.lmqi = itr.conf_default.lmqi;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ip igmp snooping unsolicited-report-interval <1-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = uri
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_URI
+HELP = 1 - 31744 seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.uri = uri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipv6 mld snooping unsolicited-report-interval <1-31744>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = uri
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_URI
+HELP = 1 - 31744 seconds
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.uri = uri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ip igmp snooping unsolicited-report-interval
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = ##ICLI_HELP_INTF_URI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, true, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.uri = itr.conf_default.uri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipv6 mld snooping unsolicited-report-interval
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlan_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = ##ICLI_HELP_INTF_URI
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_vlan_conf_set(vlan_list, false, [&](ipmc_icli_vlan_itr_t &itr) {itr.conf.uri = itr.conf_default.uri;}));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = show ip igmp snooping mrouter [details]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IPMC_ICLI_privilege_level_check
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = details
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = IGMP multicast router port status
+HELP = ##HELP_IGMP_STATUS_DETAILS
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_router_status_show(true, details));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = show ipv6 mld snooping mrouter [details]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IPMC_ICLI_privilege_level_check
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = details
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = MLD multicast router port status
+HELP = ##HELP_MLD_STATUS_DETAILS
+
+CODE_BEGIN
+    ICLI_RC(IPMC_ICLI_port_router_status_show(false, details));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = show ip igmp snooping [vlan <vlan_list>] [statistics | {group-database [interface <port_type_list>]}] [details]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IPMC_ICLI_privilege_level_check
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CMD_VAR = wants_statistics
+CMD_VAR = wants_group_database
+CMD_VAR =
+CMD_VAR = port_list
+CMD_VAR = wants_details
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = Search by VLAN
+HELP = ##ICLI_HELP_IPMC_VID
+HELP = Statistics counters
+HELP = IGMP multicast group database
+HELP = Search by port
+HELP = ##ICLI_HELP_PORT_TYPE_LIST
+HELP = ##HELP_IGMP_STATUS_DETAILS
+
+CODE_BEGIN
+    if (wants_statistics) {
+       IPMC_ICLI_vlan_statistics_show(vlan_list, wants_details, true);
+    } else if (wants_group_database) {
+       IPMC_ICLI_src_show(vlan_list, port_list, wants_details, true);
+    } else {
+        IPMC_ICLI_vlan_status_show(vlan_list, wants_details, true);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = show ipv6 mld snooping [vlan <vlan_list>] [statistics | {group-database [interface <port_type_list>]}] [details]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IPMC_ICLI_privilege_level_check
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CMD_VAR = wants_statistics
+CMD_VAR = wants_group_database
+CMD_VAR =
+CMD_VAR = port_list
+CMD_VAR = wants_details
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = Search by VLAN
+HELP = ##ICLI_HELP_IPMC_VID
+HELP = Statistics coutners
+HELP = MLD multicast group database
+HELP = Search by port
+HELP = ##ICLI_HELP_PORT_TYPE_LIST
+HELP = ##HELP_MLD_STATUS_DETAILS
+
+CODE_BEGIN
+    if (wants_statistics) {
+        IPMC_ICLI_vlan_statistics_show(vlan_list, wants_details, false);
+    } else if (wants_group_database) {
+        IPMC_ICLI_src_show(vlan_list, port_list, wants_details, false);
+    } else {
+        IPMC_ICLI_vlan_status_show(vlan_list, wants_details, false);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = clear ip igmp snooping [vlan <vlan_list>] statistics
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_10
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CMD_VAR =
+
+HELP =
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_IGMP
+HELP = ##HELP_IGMP_SNOOPING
+HELP = Search by VLAN
+HELP = ##ICLI_HELP_IPMC_VID
+HELP = IGMP snooping counters
+
+CODE_BEGIN
+    IPMC_ICLI_vlan_statistics_clear(vlan_list, true);
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = clear ipv6 mld snooping [vlan <vlan_list>] statistics
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CMD_VAR =
+
+HELP =
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_MLD
+HELP = ##HELP_MLD_SNOOPING
+HELP = Search by VLAN
+HELP = ##ICLI_HELP_IPMC_VID
+HELP = MLD snooping counters
+
+CODE_BEGIN
+    IPMC_ICLI_vlan_statistics_clear(vlan_list, false);
+CODE_END
+CMD_END
+

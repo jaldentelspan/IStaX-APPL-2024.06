@@ -1,0 +1,219 @@
+# Copyright (c) 2006-2017 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+
+
+INCLUDE_BEGIN
+#include "thermal_protect_icli_functions.h"
+#include "thermal_protect_api.h"
+INCLUDE_END
+
+FUNCTION_BEGIN
+static BOOL thermal_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = thermal_protect_module_enabled();
+        return TRUE;
+   }
+   return FALSE;
+}
+FUNCTION_END
+
+!==============================================================================
+CMD_BEGIN
+
+DOC_CMD_DESC    = Shows thermal protection status (chip temperature and port status).
+
+DOC_CMD_USAGE   = Use to show thermal protection status.
+
+DOC_CMD_EXAMPLE = show thermal-protect 
+
+IF_FLAG =
+
+COMMAND =   show thermal-protect [interface <port_type_list>] 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+RUNTIME = thermal_present
+
+HELP = 
+HELP = Display thermal protection status.
+
+CMD_VAR   = 
+CMD_VAR   = 
+CMD_VAR   = interface
+CMD_VAR   = port_list
+CODE_BEGIN
+    thermal_protect_status(session_id, interface, port_list);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+THERMAL_PROTECT_HELP = Thermal protection configurations.
+THERMAL_PROTECT_GRP_HELP = Sets temperature at which to turn ports mapped to the corresponding group off.
+THERMAL_PROTECT_GRPS_HELP = group number. 
+DOC_CMD_DESC    = ##THERMAL_PROTECT_GRP_HELP
+DOC_CMD_USAGE   = Use to set the temperature at which to turn ports mapped to corresponding group off.
+DOC_CMD_EXAMPLE = thermal-protect grp 1 temperature 30
+
+IF_FLAG =
+
+COMMAND = thermal-protect grp <0~3> temperature <0-255>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+RUNTIME = thermal_present
+
+HELP = ##THERMAL_PROTECT_HELP
+HELP = ##THERMAL_PROTECT_GRP_HELP
+HELP = ##THERMAL_PROTECT_GRPS_HELP
+HELP = temperature keyword
+HELP = Temperature at which to turn ports mapped to the corresponding group off.
+
+CMD_VAR   = 
+CMD_VAR   = 
+CMD_VAR   = grp_list
+CMD_VAR   = 
+CMD_VAR   = new_temp
+
+CODE_BEGIN
+    VTSS_RC(thermal_protect_temp(session_id, grp_list, new_temp, FALSE));
+CODE_END
+
+CMD_END
+!==============================================================================
+CMD_BEGIN
+
+DOC_CMD_DESC    = ##THERMAL_PROTECT_GRP_HELP
+DOC_CMD_USAGE   = Use to set the temperature at which to turn ports mapped to the corresponding group off.
+DOC_CMD_EXAMPLE = thermal-protect grp 1 temperature 30
+
+IF_FLAG =
+
+COMMAND = no thermal-protect grp <0~3> 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+RUNTIME = thermal_present
+
+HELP = 
+HELP = ##THERMAL_PROTECT_HELP
+HELP = ##THERMAL_PROTECT_GRP_HELP
+HELP = ##THERMAL_PROTECT_GRPS_HELP
+
+CMD_VAR   = 
+CMD_VAR   = 
+CMD_VAR   = 
+CMD_VAR   = grp_list
+
+CODE_BEGIN
+    VTSS_RC(thermal_protect_temp(session_id, grp_list, 0, TRUE));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+THERMAL_PROTECT_PORT_GRP_HELP = Maps the interface or interfaces to this group.
+
+DOC_CMD_DESC    = ##THERMAL_PROTECT_PORT_GRP_HELP
+DOC_CMD_USAGE   = Use to set the group for the port(s).
+DOC_CMD_EXAMPLE = thermal-protect grp 3
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+RUNTIME = thermal_present
+
+MODE_VAR  = list
+
+IF_FLAG =
+
+COMMAND = thermal-protect grp <0-3>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE
+
+HELP = Thermal group for the interface.
+HELP = ##THERMAL_PROTECT_PORT_GRP_HELP
+HELP = Group number.
+
+CMD_VAR   = 
+CMD_VAR   = 
+CMD_VAR   = grp
+
+CODE_BEGIN
+    thermal_protect_grp(list, grp, FALSE);
+CODE_END
+
+CMD_END
+
+
+!==============================================================================
+CMD_BEGIN
+
+DOC_CMD_DESC    = ##THERMAL_PROTECT_PORT_GRP_HELP
+DOC_CMD_USAGE   = Use to set the group for the port(s).
+DOC_CMD_EXAMPLE = 
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+RUNTIME = thermal_present
+
+MODE_VAR  = list
+
+IF_FLAG =
+
+COMMAND = no thermal-protect grp 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_LOOSELY
+
+HELP =
+HELP = Thermal group for the interface.
+HELP = ##THERMAL_PROTECT_PORT_GRP_HELP
+
+CODE_BEGIN
+    thermal_protect_grp(list, 0, TRUE);
+CODE_END
+
+CMD_END
+
+

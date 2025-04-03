@@ -1,0 +1,59 @@
+commit 299d0fd74a7794fc3aeb14e750f12b8c335ea960
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Thu Oct 8 15:04:24 2020 +0200
+
+    5.0-1100
+
+diff --git a/ospfd/ospf_vty.c b/ospfd/ospf_vty.c
+index f96879fc0..1cce3584a 100644
+--- a/ospfd/ospf_vty.c
++++ b/ospfd/ospf_vty.c
+@@ -10497,6 +10497,7 @@ static int config_write_virtual_link(struct vty *vty, struct ospf *ospf)
+ 		struct listnode *n2;
+ 		struct crypt_key *ck;
+ 		struct ospf_interface *oi;
++		struct ospf_if_params *params;
+ 
+ 		if (vl_data != NULL) {
+ 			memset(buf, 0, INET_ADDRSTRLEN);
+@@ -10524,6 +10525,40 @@ static int config_write_virtual_link(struct vty *vty, struct ospf *ospf)
+ 			else
+ 				vty_out(vty, " area %s virtual-link %s\n", buf,
+ 					inet_ntoa(vl_data->vl_peer));
++
++			/* Auth type */
++			params = IF_DEF_PARAMS(vl_data->vl_oi->ifp);
++			if (OSPF_IF_PARAM_CONFIGURED(params, auth_type)
++			&& params->auth_type != OSPF_AUTH_NOTSET) {
++				const char *auth_str;
++
++				/* Translation tables are not that much help
++				* here due to syntax
++				* of the simple option */
++				switch (params->auth_type) {
++
++				case OSPF_AUTH_NULL:
++					auth_str = " null";
++					break;
++
++				case OSPF_AUTH_SIMPLE:
++					auth_str = "";
++					break;
++
++				case OSPF_AUTH_CRYPTOGRAPHIC:
++					auth_str = " message-digest";
++					break;
++
++				default:
++					auth_str = "";
++					break;
++				}
++
++				vty_out(vty,
++					" area %s virtual-link %s authentication%s\n",
++					buf, inet_ntoa(vl_data->vl_peer), auth_str);
++			}
++
+ 			/* Auth key */
+ 			if (IF_DEF_PARAMS(vl_data->vl_oi->ifp)->auth_simple[0]
+ 			    != '\0')

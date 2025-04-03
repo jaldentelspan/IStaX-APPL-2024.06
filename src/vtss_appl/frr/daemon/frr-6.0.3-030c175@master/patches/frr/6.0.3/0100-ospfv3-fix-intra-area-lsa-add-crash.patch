@@ -1,0 +1,32 @@
+commit beabf870d7eca9a6e5a4c8d32557f8e5ca2ba04b
+Author: Chirag Shah <chirag@cumulusnetworks.com>
+Date:   Thu Oct 11 09:08:37 2018 -0700
+
+    ospf6d: fix ospf6 crash in inp lsa processing
+    
+    Use ospf6_prefix_same for comparing two exact same prefix
+    to determine ECMP for a route.
+    ospf6_route_cmp expects two different prefix rather
+    being exactly same.
+    
+    Ticket:CM-22630
+    Testing Done:
+    performed ECMP of intra network prefix route via
+    sending same route via different available
+    ospf6 paths.
+    
+    Signed-off-by: Chirag Shah <chirag@cumulusnetworks.com>
+
+diff --git a/ospf6d/ospf6_intra.c b/ospf6d/ospf6_intra.c
+index 0ce08a61e..7ae7d682b 100644
+--- a/ospf6d/ospf6_intra.c
++++ b/ospf6d/ospf6_intra.c
+@@ -1729,7 +1729,7 @@ void ospf6_intra_prefix_lsa_add(struct ospf6_lsa *lsa)
+ 		listnode_add_sort(route->paths, path);
+ 
+ 		old = ospf6_route_lookup(&route->prefix, oa->route_table);
+-		if (old && (ospf6_route_cmp(route, old) == 0)) {
++		if (old) {
+ 			if (IS_OSPF6_DEBUG_EXAMIN(INTRA_PREFIX)) {
+ 				prefix2str(&route->prefix, buf, sizeof(buf));
+ 				zlog_debug("%s Update route: %s old cost %u new cost %u paths %u nh %u",

@@ -1,0 +1,244 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>FRER Configuration Overview</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="stream_lib.js"></script> <!-- For stream_lib_ids_to_list() -->
+ <script type="text/javascript" src="frer_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_frer_ctrl.htm";
+
+// Global variables
+var configTable, globals, variables;
+
+/******************************************************************************/
+// on_edit_button_click()
+/******************************************************************************/
+function on_edit_button_click()
+{
+    var elm_ids = this.id.split("_");
+    document.location.href = "frer_edit.htm?frerid=" + elm_ids[1];
+}
+
+/******************************************************************************/
+// on_del_button_click()
+/******************************************************************************/
+function on_del_button_click()
+{
+    var inst = this.id.split("_")[1];
+    frer_lib_json_submit("frer.config.del", [[inst]], requestUpdate);
+}
+
+/******************************************************************************/
+// on_add_button_click()
+/******************************************************************************/
+function on_add_button_click()
+{
+    document.location.href = "frer_edit.htm";
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // 1st row (numbers are colspan, rowspan)
+    row = {fields: [
+             {type: "disp_hdr", params: ["Instance",               1, 2]},
+             {type: "disp_hdr", params: ["Mode",                   1, 2]},
+             {type: "disp_hdr", params: ["Enable",                 1, 2]},
+             {type: "disp_hdr", params: ["Ingress",                3, 1]},
+             {type: "disp_hdr", params: ["FRER VLAN",              1, 2]},
+             {type: "disp_hdr", params: ["Egress Ports",           1, 2]},
+             {type: "disp_hdr", params: ["Recovery",               6, 1]},
+             {type: "disp_hdr", params: ["Latent Error Detection", 5, 1]},
+             {type: "disp_hdr", params: ["Status",                 2, 1]},
+             {type: "disp_hdr", params: ["",                       2, 2]}]
+          };
+    table_rows.push(row);
+
+    row = {fields: [
+             {type: "disp_hdr", params: ["Streams"]},
+             {type: "disp_hdr", params: ["Collection"]},
+             {type: "disp_hdr", params: ["Pop Outer Tag"]},
+             {type: "disp_hdr", params: ["Algorithm"]},
+             {type: "disp_hdr", params: ["History Length"]},
+             {type: "disp_hdr", params: ["Reset Timeout"]},
+             {type: "disp_hdr", params: ["Take-no-sequence"]},
+             {type: "disp_hdr", params: ["Individual"]},
+             {type: "disp_hdr", params: ["Terminate"]},
+             {type: "disp_hdr", params: ["Enable"]},
+             {type: "disp_hdr", params: ["Error Diff"]},
+             {type: "disp_hdr", params: ["Period"]},
+             {type: "disp_hdr", params: ["Paths"]},
+             {type: "disp_hdr", params: ["Reset Period"]},
+             {type: "disp_hdr", params: ["Operational"]},
+             {type: "disp_hdr", params: ["Latent Error"]}]
+          };
+
+    table_rows.push(row);
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(inst, conf, statu)
+{
+    var row = {
+        fields: [
+            {type: "digit",  params: [inst]},
+            {type: "text",   params: [frer_lib_mode_map[conf.Mode], "c"]},
+            {type: "image",  params: ["c", conf.AdminActive ? "images/yes.gif" : "images/no.gif"]},
+            {type: "text",   params: [stream_lib_ids_to_list(conf, true /* print a dash if empty */), "c" ]},
+            {type: "text",   params: [conf.StreamCollectionId === 0 ? "-" : conf.StreamCollectionId, "c"]},
+            {type: "text",   params: [conf.Mode == "generation" ? (conf.IngressOuterTagPop ? "Yes" : "No") : "-"]},
+            {type: "text",   params: [conf.FrerVlan, "c" ]},
+            {type: "text",   params: [frer_lib_egress_ifnames_to_port_list(conf.EgressPorts),    "c" ]},
+            {type: "text",   params: [conf.Mode == "recovery" ? conf.Algorithm            : "-", "c" ]},
+            {type: "text",   params: [conf.Mode == "recovery" ? conf.HistoryLen           : "-", "c" ]},
+            {type: "text",   params: [conf.Mode == "recovery" ? conf.ResetTimeoutMsec     : "-", "c" ]},
+            {type: "image",  params: ["c", conf.Mode == "recovery" ? (conf.TakeNoSequence     ? "images/yes.gif" : "images/no.gif") : "images/led-off.gif"]},
+            {type: "image",  params: ["c", conf.Mode == "recovery" ? (conf.IndividualRecovery ? "images/yes.gif" : "images/no.gif") : "images/led-off.gif"]},
+            {type: "image",  params: ["c", conf.Mode == "recovery" ? (conf.Terminate          ? "images/yes.gif" : "images/no.gif") : "images/led-off.gif"]},
+            {type: "image",  params: ["c", conf.Mode == "recovery" ? (conf.LaErrDetection     ? "images/yes.gif" : "images/no.gif") : "images/led-off.gif"]},
+            {type: "text",   params: [conf.Mode == "recovery" ? conf.LaErrDifference      : "-", "c" ]},
+            {type: "text",   params: [conf.Mode == "recovery" ? conf.LaErrPeriodMsec      : "-", "c" ]},
+            {type: "text",   params: [conf.Mode == "recovery" ? conf.LaErrPaths           : "-", "c" ]},
+            {type: "text",   params: [conf.Mode == "recovery" ? conf.LaErrResetPeriodMsec : "-", "c" ]},
+            {type: "image",  params: ["c", frer_lib_oper_state_to_image(statu), frer_lib_oper_state_to_str(statu)]},
+            {type: "image",  params: ["c", frer_lib_led_error_to_image(statu, conf)]},
+            {type: "image",  params: ["c", "images/edit.gif", "Edit", "Edit_" + inst, on_edit_button_click]},
+            {type: "image",  params: ["c", "images/del.gif", "Delete", "Delete_" + inst, on_del_button_click]}]
+    };
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows = new Array();
+
+    // Add table header
+    add_header(table_rows);
+
+    // Add one row per FRER instance
+    Object.each(variables.conf, function(record, idx) {
+        table_rows.push(add_row(record.key, record.val, variables.statu[idx].val));
+    });
+
+    // The maximum number of streams that can be configured is limited by the
+    // allowed index range [1; capabilities.InstanceMax]
+    if (variables.conf.length < globals.capabilities.InstanceMax) {
+        table_rows.push(
+            {fields: [
+               {type:"text",  params:["", "c", 21]},
+               {type:"image", params:["c", "images/add.gif", "Add new FRER instance", null, on_add_button_click]}]
+            });
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Add table rows
+    var table_rows = add_rows();
+    configTable.addRows(table_rows);
+
+    // Update this dynamic table
+    configTable.update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}};
+    frer_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    frer_lib_port_map = {};
+    Object.each(globals.port_name_map, function(record, idx) {
+        // This sets frer_lib_port_map to e.g. {'Gi 1/1': 1}, ..., {'Gi 1/24': 24}, ...
+        // where the key is the interface name and the value is the port_no.
+        frer_lib_port_map[record.key] = record.val;
+    });
+
+    requestUpdate();
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    configTable = new DynamicTable("frerTableContent", "config");
+
+    frer_lib_disable_button_add("refresh_button");
+
+    globals = {capabilities: {}, port_name_map: {}};
+    frer_lib_json_request(globals, on_globals_received);
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>FRER Configuration Overview</h1>
+
+<div class="refreshbar">
+  <input type="button" id="refresh_button" value="Refresh" onClick="requestUpdate(); this.blur();"/>
+  <img id="frer_update" alt="" src="images/updating.gif"/>
+</div>
+
+<div id="frerTableContent"></div>
+
+</body>
+</html>
+

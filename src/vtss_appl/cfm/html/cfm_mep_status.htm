@@ -1,0 +1,368 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>MPLS-TP LSPs Status</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_cfm_status.htm";
+
+// Global variables
+var myDynamicTable, myPortInfo, myCapabilities, timerID;
+
+var oTPort = Array(), oVPort = Array();
+
+oTFngState = Array("reset", "defect", "reportDefect", "defectReported", "defectClearing");
+oVFngState = Array("reset", "defect", "reportDefect", "defectReported", "defectClearing");
+
+oTHighestState = Array("none",    "RDICCM",    "MACstatus",    "RemoteCCM",    "ErrorCCM",    "XconCCM");
+oVHighestState = Array("none", "defRDICCM", "defMACstatus", "defRemoteCCM", "defErrorCCM", "defXconCCM");
+
+function addHeader(table_rows)
+{
+    var row;
+
+    // 1st row
+    row = {fields:[
+             {type:"disp_hdr", params:["Domain", 1, 2]},
+             {type:"disp_hdr", params:["Service", 1, 2]},
+             {type:"disp_hdr", params:["MEPID", 1, 2]},
+             {type:"disp_hdr", params:["Port", 1, 2]},
+             {type:"disp_hdr", params:["State", 2]},
+             {type:"disp_hdr", params:["SMAC", 1, 2]},
+             {type:"disp_hdr", params:["Defects", 2]},
+             {type:"disp_hdr", params:["CCM Rx", 3]},
+             {type:"disp_hdr", params:["CCM Tx", 1, 2]}
+            ]
+          };
+    table_rows.push(row);
+
+    // 2nd row
+    row = {fields:[
+             {type:"disp_hdr", params:["Active"]},
+             {type:"disp_hdr", params:["Fng"]},
+             {type:"disp_hdr", params:["Highest"]},
+             {type:"disp_hdr", params:["Defects"]},
+             {type:"disp_hdr", params:["Valid"]},
+             {type:"disp_hdr", params:["Invalid"]},
+             {type:"disp_hdr", params:["Errors"]}
+            ]
+          };
+    table_rows.push(row);
+
+}
+
+function defects2String(defect) {
+// R (1): someRDIdefect (RDI received from at least one remote MEP)
+// M (2): someMACstatusDefect (received Port Status TLV != psUp or Interface Status TLV != isUp)
+// C (3): someRMEPCCMdefect (valid CCM is not received within 3.5 times CCM interval from at least one remote MEP)
+// E (4): errorCCMdefect (received CCM from an unknown remote MEP-ID or CCM interval mismatch)
+// X (5): xconCCMdefect (received CCM with an MD/MEG level smaller than configured or wrong MAID/MEGID (cross-connect))
+    var defect_text = ["-","-","-","-","-"];
+    if (defect & 1) {
+        defect_text[0] = "R";
+    }
+    if (defect & 2) {
+        defect_text[1] = "M";
+    }
+    if (defect & 4) {
+        defect_text[2] = "C";
+    }
+    if (defect & 8) {
+        defect_text[3] = "E";
+    }
+    if (defect & 16) {
+        defect_text[4] = "X";
+    }
+    return defect_text.join("|");
+}
+
+
+// Here we mimic the code in cfm.icli:CFM_ICLI_oper_state_str_get()
+function status2Hint(status, config, ma_config_vid_is_zero)
+{
+    var oper_state_str2 = "";
+    var oper_state_str1 = "";
+
+    if (!config.AdminActive) {
+        oper_state_str1 = "Administratively disabled";
+    } else if (!status.MepCreatable) {
+        // Highest order error: MEP uncreatable
+        oper_state_str1 = "MEP Uncreatable: ";
+        oper_state_str2 = creatable_error_to_str(status);
+    } else if (!status.EnableRmepDefect) {
+        // Second highest order error: Remote MEP SM(s) not running
+        oper_state_str1 = "RMEP SM error: ";
+        oper_state_str2 = enableRmepDefect_error_to_str(ma_config_vid_is_zero, config, status);
+    } else if (status.HighestDefect != "none") {
+        oper_state_str1 = "Highest MEP defect: ";
+        oper_state_str2 = status.HighestDefect;
+    } else {
+        oper_state_str1 = "Active";
+    }
+
+    return oper_state_str1 + oper_state_str2;
+}
+
+function enableRmepDefect_error_to_str(ma_config_vid_is_zero, config, status)
+{
+    if (status.ErrNoLink) {
+        return "No link on residence interface";
+    } else if (status.ErrVlanUnaware) {
+        return "The MEP is a VLAN MEP or a tagged Port MEP configured on a VLAN unaware residence interface";
+    } else if (status.ErrVlanMembership) {
+        if (ma_config_vid_is_zero && config.Vid === 0) {
+            // Untagged
+            return "Ingress filtering is enabled on the untagged port MEP's residence interface, which is not a member of its own port VLAN ID";
+        } else {
+            return "Ingress filtering is enabled on the MEP's residence interface, which is not a member of the MEP's VLAN ID";
+        }
+    } else if (status.ErrStpBlocked) {
+        return "The MEP's residence interface is blocked by the Spanning Tree Protocol";
+    } else if (status.ErrMstpBlocked) {
+        return "The MEP's residence interface is blocked on the MEP's interface by the Multiple Spanning Tree Protocol";
+    } else if (status.EnableRmepDefect) {
+        return "";
+    } else {
+        return "Internal error that requires a code update. Check console and/or crashlog";
+    }
+}
+
+function creatable_error_to_str(status)
+{
+    if (status.ErrnoRmeps) {
+        return "The MEP does not have any configured remote MEPs";
+    } else if (status.ErrPortUpMep) {
+        return "MEPs created in this service are port MEPs, which cannot be configured as Up-MEPs";
+    } else if (status.ErrRmepsCcmInterval) {
+        return "The MEP has more than one Remote MEP, but the service's CCM interval is faster than 1 second";
+    } else if (status.ErrIsMirrorPort) {
+        return "The MEP's residence interface is used as mirror destination port";
+    } else if (status.ErrIsNniPort) {
+        return "The MEP's residence interface is used as NPI port";
+    } else if (status.ErrHwResources) {
+        return "Out of hardware resources";
+    } else if (status.ErrInternalError) {
+        return "Internal error that requires a code update. Check console and/or crashlog";
+    } else if (status.MepCreatable) {
+        return "";
+    } else {
+        return "Internal error that requires a code update. Check console and/or crashlog";
+    }
+}
+
+function status2Image(status, config)
+{
+    return !config.AdminActive ? "images/led-off.gif" : (status.MepActive === false || status.EnableRmepDefect === false || status.Defects !== 0) ? "images/led-down.gif" : "images/led-up.gif";
+}
+
+function addRow(key, val, idx)
+{
+    var recv_conf = myDynamicTable.getRecvJson("config");
+    var recv_ma_conf = myDynamicTable.getRecvJson("ma_config");
+    var ma_size = myDynamicTable.getRecvJson("ma_config").length;
+    var conf = recv_conf[idx].val;
+
+    //find the ma which this mep is configured below and get its configured vlanid
+    var vlanid = -1;
+    var ndx;
+    for ( ndx = 0; ndx < ma_size; ndx++) {
+        if (recv_ma_conf[ndx].key.md == key.md) {
+            if (recv_ma_conf[ndx].key.ma == key.ma) {
+                vlanid = recv_ma_conf[ndx].val.Vid;
+            }
+        }
+    }
+
+    row = {fields:[
+            {type:"text",       params:[key.md,  "cl"]},
+            {type:"text",       params:[key.ma,  "cl"]},
+            {type:"text",       params:[key.mep, "cl"]},
+            {type:"text",       params:[oTPort[oVPort.indexOf(conf.IfIndex)], "cr"]},
+            {type:"image",      params:["c", status2Image(val ,conf), status2Hint(val, conf, vlanid === 0 )]},
+            {type:"text",       params:[oTFngState[oVFngState.indexOf(val.FngState)] , "cl"]},
+            {type:"text",       params:[val.Smac , "c"]},
+            {type:"text",       params:[oTHighestState[oVHighestState.indexOf(val.HighestDefect)], "cl"]},
+            {type:"text",       params:[defects2String(val.Defects)]},
+            {type:"digit",      params:[val.CcmRxValidCnt]},
+            {type:"digit",      params:[val.CcmRxInvalidCnt]},
+            {type:"digit",      params:[val.CcmRxSequenceErrorCnt]},
+            {type:"digit",      params:[val.CcmTxCnt]}
+          ]};
+
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var table_rows = new Array();
+    var row, empty_colspan = 13;
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function(record, idx) {
+        table_rows.push(addRow(record.key, record.val, idx));
+    });
+
+    // Empty row
+    if (!recv_json.length) {
+        table_rows.push({fields:[{type:"empty_row", params:[empty_colspan]}]});
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    // recv_json is the "status" data
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // The config, notification and status entry count should be the same
+    if (recv_json.length != myDynamicTable.getRecvJson("config").length) {
+        alert("Number of entries in config data does not match number of entries in status data.");
+        recv_json = [];
+    }
+
+    // Add table rows
+    myDynamicTable.addRows(addRows(recv_json));
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+function prepareUpdate(recv_json, name)
+{
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // This table requires three JSON data.
+    if (myDynamicTable.getRecvJsonCnt() == 3) {
+        processUpdate(myDynamicTable.getRecvJson("status"));
+    }
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+
+    // This table requires three JSON data(config/status).
+    requestJsonDoc("cfm.config.ma.get",           null, prepareUpdate, "ma_config");
+    requestJsonDoc("cfm.config.mep.get",          null, prepareUpdate, "config");
+    requestJsonDoc("cfm.status.mep.get",          null, prepareUpdate, "status");
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    console.log("requestUpdateGlobals name=", name , "endofname");
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = myDynamicTable.cloneRecvJson(recv_json);
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    }
+    if (myCapabilities && myPortInfo) {
+        requestUpdate();
+    }
+}
+
+function checkRefresh(fld)
+{
+    if (fld.checked) {
+        requestUpdate();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+    requestJsonDoc("cfm.capabilities.get", null, requestUpdateGlobals, "capabilities");
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>CFM MEP Status</h1>
+
+<div class="refreshbar">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="checkRefresh(this);">
+  <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+<div style="visibility: hidden;">
+ <img alt="" src="images/yes.gif">
+ <img alt="" src="images/no.gif">
+</div>
+
+</body>
+</html>

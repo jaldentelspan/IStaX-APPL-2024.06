@@ -1,0 +1,780 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_KR)
+
+INCLUDE_BEGIN
+#include "kr_api.h"            /* For ourselves     */
+#include "icli_porting_util.h"
+#include "misc_api.h"          /* For iport2uport() */
+#include "port_api.h"
+INCLUDE_END
+
+FUNCTION_BEGIN
+/******************************************************************************/
+// KR_ICLI_tap_result()
+/******************************************************************************/
+static uint32_t KR_ICLI_tap_result(uint32_t value, uint32_t mask)
+{
+    if ((value & ~mask) > 0) {
+        return ((~value) + 1) & mask;
+    } else {
+        return value;
+    }
+}
+
+/******************************************************************************/
+// KR_ICLI_debug_kr_debug()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_debug(uint32_t session_id, bool ena)
+{
+    (void)kr_debug_set(ena);
+    ICLI_PRINTF("KR debug %s\n", ena ? "enabled" : "disabled");
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// KR_ICLI_debug_kr_pd()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_pd(uint32_t session_id, icli_stack_port_range_t *plist, bool ena)
+{
+    switch_iter_t sit;
+    port_iter_t   pit;
+    VTSS_RC(icli_switch_iter_init(&sit));
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        VTSS_RC(icli_port_iter_init(&pit, 1, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+        while (icli_port_iter_getnext(&pit, plist)) {
+            (void)kr_debug_pd_set(pit.iport, ena);
+        }
+    }
+
+    ICLI_PRINTF("KR parallel detect %s\n", ena ? "enabled" : "disabled");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// KR_ICLI_debug_kr_pcs_flap()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_pcs_flap(uint32_t session_id, icli_stack_port_range_t *plist, bool ena)
+{
+    switch_iter_t sit;
+    port_iter_t   pit;
+    VTSS_RC(icli_switch_iter_init(&sit));
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        VTSS_RC(icli_port_iter_init(&pit, 1, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+        while (icli_port_iter_getnext(&pit, plist)) {
+            (void)kr_debug_pcs_flap_set(pit.iport, ena);
+        }
+    }
+
+    ICLI_PRINTF("KR pcs-flap %s\n", ena ? "enabled" : "disabled");
+    return VTSS_RC_OK;
+}
+
+
+/******************************************************************************/
+// KR_ICLI_debug_kr_ber_hist()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_ber_hist(uint32_t session_id, icli_stack_port_range_t *plist, bool full)
+{
+    port_iter_t         pit;
+    mesa_port_no_t      uport;
+    mesa_port_kr_conf_t kr;
+    uint32_t            dt;
+    bool                first = true, train_found;
+    char                buf[200] = {0}, *b;
+    char                sts_tmp[20] = {0};
+    kr_ber_t            ber;
+    kr_irq_t            irq;
+
+    VTSS_RC(icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+    while (icli_port_iter_getnext(&pit, plist)) {
+        if (!kr_mgmt_port_capable(pit.iport)) {
+            ICLI_PRINTF("Interface not KR capable\n");
+            continue;
+        }
+
+        uport = pit.uport;
+        if (kr_mgmt_port_conf_get(pit.iport, &kr) != MESA_RC_OK || !kr.aneg.enable) {
+            continue;
+        }
+
+        train_found = false;
+        first = true;
+        ICLI_PRINTF("\nPort %d:\n", uport);
+        for (uint16_t indx = 0;; indx++) {
+            if (kr_debug_state_ber_hist_get(pit.iport, &ber, indx) != VTSS_RC_OK) {
+                break;
+            }
+
+            if (kr_debug_state_irq_hist_get(pit.iport, &irq, indx) != VTSS_RC_OK) {
+                break;
+            }
+
+            char coef_tap[20] = {0};
+            char coef_act[20] = {0};
+            (void)kr_util_raw_coef_to_txt(ber.ber_coef_frm, coef_tap, coef_act);
+            char sts_tap[20] = {0};
+            char sts_res[20] = {0};
+            kr_util_raw_status_to_txt(ber.ber_status_frm, sts_tap, sts_res);
+
+            if (ber.ber_status_frm == 0 || ber.ber_status_frm == 0xdead) {
+            } else {
+                memcpy(sts_tmp, sts_tap, sizeof(sts_tap));
+            }
+
+            if (irq.irq == MESA_KR_TRAIN || train_found) {
+                dt = ber.time;
+                train_found = true;
+            } else {
+                dt = 0;
+            }
+
+            if (first) {
+                ICLI_PRINTF("%-8s%-12s%-12s%-12s%-20s%-8s%-20s\n", "", "RxTAP", "RxLPS", "TxLPC", "BER state", "ms", "IRQs");
+                ICLI_PRINTF("  --------------------------------------------------------------------------\n");
+                first = false;
+            }
+
+            if (!full && (ber.ber_coef_frm == 0)) {
+                continue; // Skip the HOLD cmd
+            }
+
+            b = &buf[0];
+            for (uint32_t i = 4; i < 31; i++) {
+                if ((1 << i) & irq.irq) {
+                    b += sprintf(b, "%s ", kr_util_irq_to_txt(VTSS_BIT(i)));
+                }
+            }
+
+            if ((irq.irq & 0xf) > 0) {
+                sprintf(b, "%s ", kr_util_aneg_rate_to_txt(irq.irq & 0xf));
+            }
+
+            ICLI_PRINTF("%-8d%-12s%-12s%-12s%-20s%-8d%-20s\n", indx, sts_tmp, sts_res, coef_act, kr_util_ber_to_txt(ber.ber_training_stage), dt, buf);
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// KR_ICLI_debug_kr_eq_hist()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_eq_hist(uint32_t session_id, icli_stack_port_range_t *plist, bool full)
+{
+    port_iter_t         pit;
+    mesa_port_no_t      uport;
+    kr_mgmt_status_t    status;
+    mesa_port_kr_conf_t kr;
+    uint16_t            cp1, cm1, c0;
+    uint32_t            dt;
+    kr_coef_t           coef;
+    bool                first;
+
+    VTSS_RC(icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+    while (icli_port_iter_getnext(&pit, plist)) {
+        if (!kr_mgmt_port_capable(pit.iport)) {
+            ICLI_PRINTF("Interface not KR capable\n");
+            continue;
+        }
+
+        uport = pit.uport;
+        if (kr_mgmt_port_conf_get(pit.iport, &kr) != MESA_RC_OK ||
+            !kr.aneg.enable) {
+            continue;
+        }
+
+        if (kr_mgmt_port_status_get(pit.iport, &status) != MESA_RC_OK) {
+            ICLI_PRINTF("Port:%d Could not read kr status\n", uport);
+            continue;
+        }
+
+        first = true;
+        ICLI_PRINTF("\nPort %d:\n", uport);
+        for (uint16_t indx = 0;; indx++) {
+            if (kr_debug_state_eq_hist_get(pit.iport, &coef, indx) != VTSS_RC_OK) {
+                break;
+            }
+
+            char coef_tap[20] = {0};
+            char coef_act[20] = {0};
+            (void)kr_util_raw_coef_to_txt(coef.res.coef, coef_tap, coef_act);
+            char sts_res[20] = {0};
+            char sts_tap[20] = {0};
+            kr_util_raw_status_to_txt(coef.res.status, sts_tap, sts_res);
+
+            cp1 = coef.res.cp1;
+            cm1 = coef.res.cm1;
+            c0 = coef.res.c0;
+            dt = coef.time;
+            if (first) {
+                ICLI_PRINTF("%-4s%-8s%-8s%-8s%-8s%-8s%-15s%-8s\n", "", "TAP", "CMD", "CM1", "Ampl", "CP1", "Status", "ms since train start");
+                ICLI_PRINTF("    ---------------------------------------------------------\n");
+                first = false;
+            }
+
+            if (!full && (coef.res.coef == 0)) {
+                continue; // Skip the HOLD cmd
+            }
+
+            ICLI_PRINTF("%-4d%-8s%-8s%-8d%-8d%-8d%-15s%-8d\n", indx, coef_tap, coef_act, cm1, c0, cp1, sts_res, dt);
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+#define BT(x) (1 << (x))
+/******************************************************************************/
+// KR_ICLI_debug_kr_irq_hist()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_irq_hist(uint32_t session_id, icli_stack_port_range_t *plist)
+{
+    port_iter_t         pit;
+    mesa_port_no_t      uport;
+    mesa_port_kr_conf_t kr;
+    uint32_t            dt = 0, delta;
+    bool                first = true;
+    char                buf[1000] = {0};
+    char                buf2[1000] = {0}, *b2;;
+    kr_irq_t            irq;
+
+    VTSS_RC(icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+    while (icli_port_iter_getnext(&pit, plist)) {
+        if (!kr_mgmt_port_capable(pit.iport)) {
+            ICLI_PRINTF("Interface not KR capable\n");
+            continue;
+        }
+
+        uport = pit.uport;
+        if (kr_mgmt_port_conf_get(pit.iport, &kr) != MESA_RC_OK || !kr.aneg.enable) {
+            continue;
+        }
+
+        first = true;
+        ICLI_PRINTF("\nPort %d:\n", uport);
+        for (uint16_t indx = 0;; indx++) {
+
+            if (kr_debug_state_irq_hist_get(pit.iport, &irq, indx) != VTSS_RC_OK) {
+                break;
+            }
+
+            if (irq.time < dt) {
+                delta = irq.time;
+            } else {
+                delta = irq.time - dt;
+            }
+
+            dt = irq.time;
+
+            if (first) {
+                ICLI_PRINTF("%-4s%-10s%-10s%-60s%-22s%-16s%-16s\n","","us","delta","KR IRQs","SM","LP BP ability","LP NP ability");
+                ICLI_PRINTF("    ------------------------------------------------------------------------------------------------------------------------------------\n");
+                first = false;
+            }
+
+            if ((irq.irq & 0xf) > 0) {
+                sprintf(buf, "%s ", kr_util_aneg_rate_to_txt(irq.irq & 0xf));
+            } else {
+                (void)kr_util_irq_mask_to_txt(irq.irq, buf);
+            }
+
+            buf2[0] = '\0';
+            if (irq.irq & MESA_KR_CMPL_ACK || irq.irq & MESA_KR_NP_RX) {
+                b2 = &buf2[0];
+                b2 += sprintf(b2, "%s",irq.lp_bp1 & BT(5) ? "1G/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp2 & BT(0) ? "2G5/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp2 & BT(1) ? "5G/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp1 & BT(7) ? "10G/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp1 & BT(14) ? "25S/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp1 & BT(15) ? "25KR/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp0 & BT(10) ? "FC_ASYM/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp0 & BT(11) ? "FC_SYM/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp0 & BT(13) ? "RF/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp2 & BT(14) ? "FECA/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp2 & BT(15) ? "FECR/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp2 & BT(13) ? "RFEC/" : "");
+                b2 += sprintf(b2, "%s",irq.lp_bp2 & BT(12) ? "RSFEC" : "");
+                b2 += sprintf(b2, "  ");
+                if ((irq.lp_np0 & 0x3) == 0x3) { // code for ablilities
+                    b2 += sprintf(b2, "%s",irq.lp_np1 & BT(5) ? "25KR/" : "");
+                    b2 += sprintf(b2, "%s",irq.lp_np1 & BT(6) ? "25CR/" : "");
+                    b2 += sprintf(b2, "%s",irq.lp_np2 & BT(8) ? "F1/" : "");
+                    b2 += sprintf(b2, "%s",irq.lp_np2 & BT(9) ? "F2" : "");
+                } else {
+                    b2 += sprintf(b2, "-");
+                }
+            }
+
+            ICLI_PRINTF("%-4d%-10d%-10d%-60s%-22s%-s\n",
+                        indx, dt, delta, buf, kr_util_aneg_sm_to_txt(irq.sm), buf2);
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// KR_ICLI_debug_kr_status()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_status(uint32_t session_id, icli_stack_port_range_t *plist, bool eq_hist, bool ber_hist, bool irq, bool full)
+{
+    port_iter_t           pit;
+    mesa_port_no_t        uport;
+    kr_mgmt_status_t      status;
+    mesa_port_kr_conf_t   kr;
+    mesa_port_kr_state_t  *krs = &status.state;
+    mesa_port_kr_status_t *sts = &status.status;
+    bool                  kr_ver_3;
+    char                  buf[200] = {0};
+
+    (void)kr_mgmt_capable(&kr_ver_3);
+
+    if (eq_hist && kr_ver_3) {
+        KR_ICLI_debug_kr_eq_hist(session_id, plist, full);
+        return MESA_RC_OK;
+    }
+
+    if (ber_hist && kr_ver_3) {
+        KR_ICLI_debug_kr_ber_hist(session_id, plist, full);
+        return MESA_RC_OK;
+    }
+
+    if (irq && kr_ver_3) {
+        KR_ICLI_debug_kr_irq_hist(session_id, plist);
+        return MESA_RC_OK;
+    }
+
+    VTSS_RC(icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+    while (icli_port_iter_getnext(&pit, plist)) {
+        if (!kr_mgmt_port_capable(pit.iport)) {
+            ICLI_PRINTF("Interface not KR capable\n");
+            continue;
+        }
+
+        uport = pit.uport;
+        if (kr_mgmt_port_conf_get(pit.iport, &kr) != MESA_RC_OK ||
+            !kr.aneg.enable) {
+            continue;
+        }
+
+        if (kr_mgmt_port_status_get(pit.iport, &status) != MESA_RC_OK) {
+            ICLI_PRINTF("Port:%d Could not read kr status\n", uport);
+            continue;
+        }
+
+        ICLI_PRINTF("%s:\n", icli_port_info_txt(VTSS_USID_START, pit.uport, buf));
+        ICLI_PRINTF("  ANEG completed    : %s\n", sts->aneg.complete ? "Yes" : "No");
+        ICLI_PRINTF("  Speed             : %s\n", kr_ver_3 ? kr_util_spd_to_txt(sts->aneg.speed_req) : sts->aneg.complete ? "10G" : "Undefined");
+        ICLI_PRINTF("  RS-FEC (CL-108)   : %s\n", sts->fec.rs_fec_enable ? "Enabled" : "Disabled");
+        ICLI_PRINTF("  R-FEC (CL-74)     : %s\n", sts->fec.r_fec_enable ? "Enabled" : "Disabled");
+        ICLI_PRINTF("  Time since start  : %d sec\n", status.time_since_restart);
+        if (!kr.train.enable) {
+            ICLI_PRINTF("  Training          : Disabled\n");
+        } else {
+            if (kr_ver_3 && !kr.train.no_remote && full) {
+                ICLI_PRINTF("\n  Training Results:\n");
+                ICLI_PRINTF("  LP CM1 MAX/END    : %d/%d\n", krs->lp_tap_max_cnt[CM1], krs->lp_tap_end_cnt[CM1] + 1);
+                ICLI_PRINTF("  LP C0  MAX/END    : %d/%d\n", krs->lp_tap_max_cnt[C0], krs->lp_tap_end_cnt[C0] + 1);
+                ICLI_PRINTF("  LP CP1 MAX/END    : %d/%d\n", krs->lp_tap_max_cnt[CP1], krs->lp_tap_end_cnt[CP1] + 1);
+                ICLI_PRINTF("  BER_COUNT CM1     : ");
+                for (uint32_t i = 0; i < krs->lp_tap_max_cnt[CM1]; i++) {
+                    ICLI_PRINTF("%d ", krs->ber_cnt[0][i]);
+                }
+
+                ICLI_PRINTF("\n  BER_COUNT C0      : ");
+                for (uint32_t i = 0; i < krs->lp_tap_max_cnt[C0]; i++) {
+                    ICLI_PRINTF("%d ", krs->ber_cnt[1][i]);
+                }
+
+                ICLI_PRINTF("\n  BER_COUNT CP1     : ");
+                for (uint32_t i = 0; i < krs->lp_tap_max_cnt[CP1]; i++) {
+                    ICLI_PRINTF("%d ", krs->ber_cnt[2][i]);
+                }
+
+                ICLI_PRINTF("\n  EYE HEIGHT CM1    : ");
+                for (uint32_t i = 0; i < krs->lp_tap_max_cnt[CM1]; i++) {
+                    ICLI_PRINTF("%d ", krs->eye_height[0][i]);
+                }
+
+                ICLI_PRINTF("\n  EYE HEIGHT C0     : ");
+                for (uint32_t i = 0; i < krs->lp_tap_max_cnt[C0]; i++) {
+                    ICLI_PRINTF("%d ", krs->eye_height[1][i]);
+                }
+
+                ICLI_PRINTF("\n  EYE HEIGHT CP1    : ");
+                for (uint32_t i = 0; i < krs->lp_tap_max_cnt[CP1]; i++) {
+                    ICLI_PRINTF("%d ", krs->eye_height[2][i]);
+                }
+            } else if (kr.train.no_remote) {
+                ICLI_PRINTF("\n  Link partner not trained\n");
+            }
+        }
+
+        if (kr_ver_3) {
+            if (full) {
+                ICLI_PRINTF("\n  CURRENT EYE HEIGHT: %d\n", status.eye_height);
+                ICLI_PRINTF("\n  This port Tx Equalizer settings:\n");
+                ICLI_PRINTF("  LD CM1 (tap_adv)   : %d\n", sts->train.cm_ob_tap_result);
+                ICLI_PRINTF("  LD C0 (amplitude) : %d\n", sts->train.c0_ob_tap_result);
+                ICLI_PRINTF("  LD CP1 (tap_dly)   : %d\n", sts->train.cp_ob_tap_result);
+
+                ICLI_PRINTF("\n  This port Rx CTLE settings:\n");
+                ICLI_PRINTF("  LD VGA            : %d\n", status.ctle.vga);
+                ICLI_PRINTF("  LD EDC            : %d\n", status.ctle.edc);
+                ICLI_PRINTF("  LD EQR            : %d\n", status.ctle.eqr);
+            }
+
+            ICLI_PRINTF("  Training status   : %s\n", krs->current_state == MESA_TR_SEND_DATA ? "OK" : "Failed");
+        } else {
+            bool cm = (sts->train.cm_ob_tap_result >> 6) > 0 ? 1 : 0;
+            bool cp = (sts->train.cp_ob_tap_result >> 6) > 0 ? 1 : 0;
+            bool c0 = (sts->train.c0_ob_tap_result >> 6) > 0 ? 1 : 0;
+            ICLI_PRINTF("  Training complete (BER method):%s\n", sts->train.complete ? "Yes" : "No");
+            ICLI_PRINTF("  CM OB tap (7-bit signed)      :%s%d (%d)\n", cm ? "-" : "+", KR_ICLI_tap_result(sts->train.cm_ob_tap_result, 0x3f), sts->train.cm_ob_tap_result);
+            ICLI_PRINTF("  CP OB tap (7-bit signed)      :%s%d (%d)\n", cp ? "-" : "+", KR_ICLI_tap_result(sts->train.cp_ob_tap_result, 0x3f), sts->train.cp_ob_tap_result);
+            ICLI_PRINTF("  C0 OB tap (7-bit signed)      :%s%d (%d)\n", c0 ? "-" : "+", KR_ICLI_tap_result(sts->train.c0_ob_tap_result, 0x3f), sts->train.c0_ob_tap_result);
+        }
+
+        if (full) {
+            ICLI_PRINTF("\n  Training time     : %d ms\n", status.time_ld);
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// KR_ICLI_debug_kr_conf()
+/******************************************************************************/
+static mesa_rc KR_ICLI_debug_kr_conf(uint32_t session_id, icli_stack_port_range_t *plist,
+                                     bool all, bool adv_1g, bool adv_2g5, bool adv_5g,
+                                     bool adv_10g, bool adv_25g, bool fec_req, bool train, bool no_remote, bool pcs_flap, bool no_pd, bool disable)
+{
+  switch_iter_t       sit;
+  port_iter_t         pit;
+  mesa_port_kr_conf_t conf = {};
+  bool                get_only = false;
+  char                buf[200];
+  bool                kr_ver_3;
+  meba_port_cap_t     cap;
+
+  (void)kr_mgmt_capable(&kr_ver_3);
+
+  if (!disable && !all && !adv_1g && !adv_2g5 && !adv_5g && !adv_10g && !adv_25g && !train) {
+      get_only = true;
+  } else if (!disable) {
+      conf.train.no_remote  = no_remote;
+      conf.aneg.enable      = true;
+      conf.train.enable     = train   || all;
+      conf.train.pcs_flap   = pcs_flap;
+      conf.aneg.adv_1g      = adv_1g  || all;
+      conf.aneg.adv_2g5     = adv_2g5 || all;
+      conf.aneg.adv_5g      = adv_5g  || all;
+      conf.aneg.adv_10g     = adv_10g || all;
+      conf.aneg.adv_25g     = adv_25g || all;
+      conf.aneg.no_pd       = no_pd;
+      if (conf.aneg.adv_10g) {
+          conf.aneg.r_fec_req = fec_req || all;
+      }
+
+      if (conf.aneg.adv_25g) {
+          conf.aneg.rs_fec_req = fec_req || all;
+      }
+  }
+
+  VTSS_RC(icli_switch_iter_init(&sit));
+  while (icli_switch_iter_getnext(&sit, plist)) {
+      VTSS_RC(icli_port_iter_init(&pit, 1, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+      while (icli_port_iter_getnext(&pit, plist)) {
+          if  (!kr_ver_3) {
+              ICLI_PRINTF("Command not supported on this platform\n");
+              continue;
+          }
+
+          if (get_only) {
+              ICLI_PRINTF("%s:\n", icli_port_info_txt(sit.usid, pit.uport, buf));
+              if (kr_mgmt_port_conf_get(pit.iport, &conf) != MESA_RC_OK ||
+                  !conf.aneg.enable) {
+                  continue;
+              }
+
+              ICLI_PRINTF("Aneg enabled              :%s\n", conf.aneg.enable      ? "Yes" : "No");
+              ICLI_PRINTF("  Advertise 1G            :%s\n", conf.aneg.adv_1g      ? "Yes" : "No");
+              ICLI_PRINTF("  Advertise 2.5G          :%s\n", conf.aneg.adv_2g5     ? "Yes" : "No");
+              ICLI_PRINTF("  Advertise 5G            :%s\n", conf.aneg.adv_5g      ? "Yes" : "No");
+              ICLI_PRINTF("  Advertise 10G           :%s\n", conf.aneg.adv_10g     ? "Yes" : "No");
+              ICLI_PRINTF("  Advertise 25G           :%s\n", conf.aneg.adv_25g     ? "Yes" : "No");
+              ICLI_PRINTF("  Reguest R-FEC           :%s\n", conf.aneg.r_fec_req   ? "Yes" : "No");
+              ICLI_PRINTF("  Reqeust RS-FEC          :%s\n", conf.aneg.rs_fec_req  ? "Yes" : "No");
+              ICLI_PRINTF("Training enabled          :%s\n", conf.train.enable     ? "Yes" : "No");
+          } else {
+              if (all) {
+                  (void)port_cap_get(pit.iport, &cap);
+                  conf.aneg.adv_1g     = conf.aneg.adv_1g   && (cap & MEBA_PORT_CAP_1G_FDX);
+                  conf.aneg.adv_2g5    = conf.aneg.adv_2g5  && (cap & MEBA_PORT_CAP_2_5G_FDX);
+                  conf.aneg.adv_5g     = conf.aneg.adv_5g   && (cap & MEBA_PORT_CAP_5G_FDX);
+                  conf.aneg.adv_10g    = conf.aneg.adv_10g  && (cap & MEBA_PORT_CAP_10G_FDX);
+                  conf.aneg.adv_25g    = conf.aneg.adv_25g  && (cap & MEBA_PORT_CAP_25G_FDX);
+                  conf.aneg.rs_fec_req = conf.aneg.adv_25g ? true : false;
+                  conf.aneg.r_fec_req  = conf.aneg.adv_10g ? true : false;
+              }
+              if (kr_mgmt_port_conf_set(pit.iport, &conf) != VTSS_RC_OK) {
+                  ICLI_PRINTF("Could not apply KR config");
+              }
+          }
+      }
+  }
+
+  return VTSS_RC_OK;
+}
+
+FUNCTION_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = debug kr-status [{eq-hist}] [{ber-hist}] [{irq}] [{details}]
+
+DOC_CMD_DESC    = Use to show kr status
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_eq
+CMD_VAR = has_ber
+CMD_VAR = has_irq
+CMD_VAR = has_details
+
+HELP = Debug keyword
+HELP = Show KR status
+HELP = Show training history of equalizer
+HELP = Show training history of BER
+HELP = Show irqs
+HELP = Even more details
+
+CODE_BEGIN
+    VTSS_RC(KR_ICLI_debug_kr_status(session_id, plist, has_eq, has_ber, has_irq, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = debug kr-debug [{enable | disable}]
+
+DOC_CMD_DESC    = Enable on-the-fly debug output
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR =
+
+! 1: debug
+! 2: kr_debug
+! 3: enable
+! 4: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_enable
+CMD_VAR =
+
+HELP = Debug keyword
+HELP = KR poll keyword
+HELP = Enable polling
+HELP = Disable polling
+
+CODE_BEGIN
+    VTSS_RC(KR_ICLI_debug_kr_debug(session_id, has_enable));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug kr-pd [{enable | disable}]
+
+DOC_CMD_DESC    = Enable parallel detect
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: kr_pd
+! 3: enable
+! 4: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_enable
+CMD_VAR =
+
+HELP = Debug keyword
+HELP = KR poll keyword
+HELP = Enable polling
+HELP = Disable polling
+
+CODE_BEGIN
+    VTSS_RC(KR_ICLI_debug_kr_pd(session_id, plist, has_enable));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug kr-pcsflap [{enable | disable}]
+
+DOC_CMD_DESC    = Enable perform pcs-flap after training
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: kr_pcsflap
+! 3: enable
+! 4: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_enable
+CMD_VAR =
+
+HELP = Debug keyword
+HELP = KR keyword
+HELP = Enable pcs flap
+HELP = Disable pcs plap
+
+CODE_BEGIN
+    VTSS_RC(KR_ICLI_debug_kr_pcs_flap(session_id, plist, has_enable));
+CODE_END
+CMD_END
+
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug kr-aneg [{all}] [{adv-1g}] [{adv-2g5}] [{adv-5g}] [{adv-10g}] [{adv-25g}] [{fec-req}] [{train}] [{no-remote}] [{pcs-flap}] [{no-pd}] [{disable}]
+
+DOC_CMD_DESC    = Use to set kr-aneg
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: kr_aneg
+! 3: all
+! 4: adv-1g
+! 5: adv-2g5
+! 6: adv-5g
+! 7: adv-10g
+! 8: adv-25g
+! 9: fec-req
+! 10: train
+! 11: no-remote
+! 12: pcs-flap
+! 13: no-pd
+! 14: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_all
+CMD_VAR = has_adv1g
+CMD_VAR = has_adv2g5
+CMD_VAR = has_adv5g
+CMD_VAR = has_adv10g
+CMD_VAR = has_adv25g
+CMD_VAR = has_fecreq
+CMD_VAR = has_train
+CMD_VAR = has_nr
+CMD_VAR = has_pcs
+CMD_VAR = has_nopd
+CMD_VAR = has_disable
+
+HELP = Debug keyword
+HELP = Show keyword
+HELP = Advertise all
+HELP = Advertise 1G
+HELP = Advertise 2.5G
+HELP = Advertise 5G
+HELP = Advertise 10g
+HELP = Advertise 25g
+HELP = Advertise FEC ability
+HELP = Enable Training
+HELP = No remote training
+HELP = Enable pcs flap
+HELP = Disable pd
+HELP = Disable kr
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    VTSS_RC(KR_ICLI_debug_kr_conf(session_id, plist, has_all, has_adv1g, has_adv2g5, has_adv5g, has_adv10g, has_adv25g, has_fecreq, has_train, has_nr, has_pcs, has_nopd, has_disable));
+CODE_END
+
+CMD_END

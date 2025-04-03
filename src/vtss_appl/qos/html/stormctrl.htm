@@ -1,0 +1,403 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Storm Policer Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/qos_util.js"></script>
+ <script type="text/javascript">
+
+// Help page macic
+var help_page = "/help/help_stormctrl.htm";
+
+var gspCnt  = 0; // The number of Global Storm Policers shown on the web page are determined at runtime
+var portCnt = 0; // The number of ports shown on the web page are determined at runtime
+
+var oTGspRateUnit;
+var oVGspRateUnit; /* Must correspond to the enum returned by qos_display_rate_unit() */
+
+var oTPspRateUnit;
+var oVPspRateUnit; /* Must correspond to the enum returned by qos_display_rate_unit() */
+
+var gspHeader = ["Unicast", "Multicast", "Broadcast"];
+
+function addGlobalStormRow(idx, frag, values) {
+    var enabled    = parseInt(values[0], 10);
+    var rate       = parseInt(values[1], 10);
+    var frame_rate = parseInt(values[2], 10);
+    var tr;
+
+    // The "rate_n" and "frame_rate_n" is not shown directly on the user interface
+    // Instead we convert these two values to the more user friendly "display_rate_n" and display_rate_unit_n"
+    // When the form is submitted the values are converted back to the ones that the API expects
+    tr = CreateStyledElement("tr", idx % 2 ? "config_odd" : "config_even");
+    addHiddenInputCell(tr, rate, "cr", "gsp_rate_" + idx);
+    addHiddenInputCell(tr, frame_rate, "cr", "gsp_frame_rate_" + idx);
+    frag.appendChild(tr);       // Add (hidden) row to fragment
+
+    tr = CreateStyledElement("tr", idx % 2 ? "config_odd" : "config_even");
+    addTextCell(tr, gspHeader[idx], "cl");
+    addCheckBoxCell(tr, enabled, "c", "gsp_enabled_" + idx);
+    addInputCell(tr, qos_display_rate(rate), "cr", "gsp_display_rate_" + idx, 8, 8);
+    addSelectCell(tr, oTGspRateUnit, oVGspRateUnit, qos_display_rate_unit(rate, frame_rate), "cr", "gsp_display_rate_unit_" + idx);
+    frag.appendChild(tr);
+}
+
+function addGlobalStorm(global_storm_config) {
+    var i, pval, tbody;
+    var stormconfig = global_storm_config.split("/");
+    var frag = document.createDocumentFragment();
+
+    oTGspRateUnit = [];
+    oVGspRateUnit = [];
+    if (configQosGlobalStormBitRateMax) {
+        oTGspRateUnit = oTGspRateUnit.concat(["kbps", "Mbps"]);
+        oVGspRateUnit = oVGspRateUnit.concat([ 0, 1]);
+    }
+    if (configQosGlobalStormFrameRateMax) {
+        oTGspRateUnit = oTGspRateUnit.concat(["fps", "kfps"]);
+        oVGspRateUnit = oVGspRateUnit.concat([ 2, 3]);
+    }
+    gspCnt = stormconfig.length;
+    for (i = 0; i < stormconfig.length; i++) {
+        if (stormconfig[i]){
+            pval = stormconfig[i].split("|");
+            addGlobalStormRow(i, frag, pval);
+        }
+    }
+    tbody = document.getElementById("global_storm_tbody");
+    clearChildNodes(tbody);
+    tbody.appendChild(frag);
+    SetVisible("global_storm_config", true);
+}
+
+function addPortStormRow(index, frag, values) {
+    var pdata         = values.split("/");
+    var portno        = parseInt(pdata[0], 10);
+    var unicast       = pdata[1].split("|");
+    var broadcast     = pdata[2].split("|");
+    var unknown       = pdata[3].split("|");
+    var uc_enabled    = parseInt(unicast[0], 10);
+    var uc_rate       = parseInt(unicast[1], 10);
+    var uc_frame_rate = parseInt(unicast[2], 10);
+    var bc_enabled    = parseInt(broadcast[0], 10);
+    var bc_rate       = parseInt(broadcast[1], 10);
+    var bc_frame_rate = parseInt(broadcast[2], 10);
+    var un_enabled    = parseInt(unknown[0], 10);
+    var un_rate       = parseInt(unknown[1], 10);
+    var un_frame_rate = parseInt(unknown[2], 10);
+    var tr;
+
+    // The "rate_n" and "frame_rate_n" is not shown directly on the user interface
+    // Instead we convert these two values to the more user friendly "display_rate_n" and display_rate_unit_n"
+    // When the form is submitted the values are converted back to the ones that the API expects
+    tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    addHiddenInputCell(tr, uc_frame_rate, "cr", "uc_frame_rate_" + index);
+    addHiddenInputCell(tr, uc_rate,       "cr", "uc_rate_" + index);
+    addHiddenInputCell(tr, bc_frame_rate, "cr", "bc_frame_rate_" + index);
+    addHiddenInputCell(tr, bc_rate,       "cr", "bc_rate_" + index);
+    addHiddenInputCell(tr, un_frame_rate, "cr", "un_frame_rate_" + index);
+    addHiddenInputCell(tr, un_rate,       "cr", "un_rate_" + index);
+    frag.appendChild(tr);       // Add (hidden) row to fragment
+
+    tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    addTextCell(tr, configPortName(portno, 0), "cr");
+    addCheckBoxCell(tr, uc_enabled, "c", "uc_enabled_" + index);
+    addInputCell(tr, qos_display_rate(uc_rate), "cr", "uc_display_rate_" + index, 8, 8);
+    addSelectCell(tr, oTPspRateUnit, oVPspRateUnit, qos_display_rate_unit(uc_rate, uc_frame_rate), "cr", "uc_display_rate_unit_" + index);
+    addCheckBoxCell(tr, bc_enabled, "c", "bc_enabled_" + index);
+    addInputCell(tr, qos_display_rate(bc_rate), "cr", "bc_display_rate_" + index, 8, 8);
+    addSelectCell(tr, oTPspRateUnit, oVPspRateUnit, qos_display_rate_unit(bc_rate, bc_frame_rate), "cr", "bc_display_rate_unit_" + index);
+    addCheckBoxCell(tr, un_enabled, "c", "un_enabled_" + index);
+    addInputCell(tr, qos_display_rate(un_rate), "cr", "un_display_rate_" + index, 8, 8);
+    addSelectCell(tr, oTPspRateUnit, oVPspRateUnit, qos_display_rate_unit(un_rate, un_frame_rate), "cr", "un_display_rate_unit_" + index);
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+function addPortStorm(port_storm_config) {
+    var i, tbody, cBar;
+    var values = port_storm_config.split(",");
+    var frag = document.createDocumentFragment();
+
+    oTPspRateUnit = [];
+    oVPspRateUnit = [];
+    if (configQosPortStormBitRateMax) {
+        oTPspRateUnit = oTPspRateUnit.concat(["kbps", "Mbps"]);
+        oVPspRateUnit = oVPspRateUnit.concat([ 0, 1]);
+    }
+    if (configQosPortStormFrameRateMax) {
+        oTPspRateUnit = oTPspRateUnit.concat(["fps", "kfps"]);
+        oVPspRateUnit = oVPspRateUnit.concat([ 2, 3]);
+    }
+    portCnt = values.length;
+    for (i = 0; i < portCnt; i++) {
+        addPortStormRow(i, frag, values[i]);
+    }
+    tbody = document.getElementById("port_storm_tbody");
+    clearChildNodes(tbody);
+    tbody.appendChild(frag);
+    cBar = new HeaderControlBar([{text: "*", className: "cr"},
+                                 {name: "uc_enabled_"},
+                                 {name: "uc_display_rate_"},
+                                 {name: "uc_display_rate_unit_"},
+                                 {name: "bc_enabled_"},
+                                 {name: "bc_display_rate_"},
+                                 {name: "bc_display_rate_unit_"},
+                                 {name: "un_enabled_"},
+                                 {name: "un_display_rate_"},
+                                 {name: "un_display_rate_unit_"}]);
+    cBar.construct("port_storm_tbody");
+
+    SetVisible("port_storm_config", true);
+}
+
+function processUpdate(req, ref)
+{
+    /* Format:
+     * <global_storm>#<port_storm>
+     *
+     *   global_storm   :== <unicast>/<multicast>/<broadcast>
+     *     unicast      :== <enabled>|<rate>|<frame_rate>
+     *       enabled    :== 0..1           // 0: no, 1: yes
+     *       rate       :== 0..0xffffffff  // actual bit or frame rate
+     *       frame_rate :== 0..1           // 0: unit for rate is kilobits pr seconds (kbps), 1: unit for rate is frames pr second (fps)
+     *     multicast    :== <enabled>|<rate>|<frame_rate>
+     *       enabled    :== 0..1           // 0: no, 1: yes
+     *       rate       :== 0..0xffffffff  // actual bit or frame rate
+     *       frame_rate :== 0..1           // 0: unit for rate is kilobits pr seconds (kbps), 1: unit for rate is frames pr second (fps)
+     *     broadcast    :== <enabled>|<rate>|<frame_rate>
+     *       enabled    :== 0..1           // 0: no, 1: yes
+     *       rate       :== 0..0xffffffff  // actual bit or frame rate
+     *       frame_rate :== 0..1           // 0: unit for rate is kilobits pr seconds (kbps), 1: unit for rate is frames pr second (fps)
+     *
+     * port_storm       :== <port 1>,<port 2>,<port 3>,...<port n>
+     *
+     *   port x         :== <port_no>/<unicast>/<broadcast>/<unknown>
+     *     port_no      :== 1..max
+     *     unicast      :== <enabled>|<rate>|<frame_rate>
+     *       enabled    :== 0..1           // 0: no, 1: yes
+     *       rate       :== 0..0xffffffff  // actual bit or frame rate
+     *       frame_rate :== 0..1           // 0: unit for rate is kilobits pr seconds (kbps), 1: unit for rate is frames pr second (fps)
+     *     broadcast    :== <enabled>|<rate>|<frame_rate>
+     *       enabled    :== 0..1           // 0: no, 1: yes
+     *       rate       :== 0..0xffffffff  // actual bit or frame rate
+     *       frame_rate :== 0..1           // 0: unit for rate is kilobits pr seconds (kbps), 1: unit for rate is frames pr second (fps)
+     *     unknown      :== <enabled>|<rate>|<frame_rate>
+     *       enabled    :== 0..1           // 0: no, 1: yes
+     *       rate       :== 0..0xffffffff  // actual bit or frame rate
+     *       frame_rate :== 0..1           // 0: unit for rate is kilobits pr seconds (kbps), 1: unit for rate is frames pr second (fps)
+     */
+    if (redirectOnError(req)) {
+        return;
+    }
+
+    if (req.responseText) {
+        var stormconfig = req.responseText.split("#");
+        if (stormconfig[0]) {
+            addGlobalStorm(stormconfig[0]);
+        }
+        if (stormconfig[1]) {
+            addPortStorm(stormconfig[1]);
+        }
+    } else {
+        SpomHandleError();
+    }
+}
+
+function requestUpdate() {
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    loadXMLDoc(SpomAddSidArg("/config/stormconfig"), processUpdate);
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function policerOk(name, index, min, max)
+{
+    // Validate <name>_display_rate_<index> and <name>_display_rate_unit_<index> and convert
+    // back to the <name>_rate_<index> and <name>_frame_rate_<index> values expected by the API.
+
+    var frame_rate;
+    var rate = document.getElementById(name + "_display_rate_" + index).value;
+
+    switch (document.getElementById(name + "_display_rate_unit_" + index).value) {
+        case "0": // kbps
+            frame_rate = 0;
+            if (!isWithinRange(name + "_display_rate_" + index, min, max, "'Rate'", " kbps.")) {
+                return false;
+            }
+            break;
+        case "1": // Mbps
+            rate *= 1000;
+            frame_rate = 0;
+            if (!isWithinRange(name + "_display_rate_" + index, 1, Math.floor(max / 1000), "'Rate'", " Mbps.")) {
+                return false;
+            }
+            break;
+        case "2": // fps
+            frame_rate = 1;
+            if (!isWithinRange(name + "_display_rate_" + index, min, max, "'Rate'", " fps.")) {
+                return false;
+            }
+            break;
+        case "3": // kfps
+            rate *= 1000;
+            frame_rate = 1;
+            if (!isWithinRange(name + "_display_rate_" + index, 1, Math.floor(max / 1000), "'Rate'", " kfps.")) {
+                return false;
+            }
+            break;
+        default:
+            // Shall never happen
+            return GiveAlert("Invalid 'Unit'", document.getElementById(name + "_display_rate_unit_" + index));
+    }
+
+    document.getElementById(name + "_rate_" + index).value = rate;
+    document.getElementById(name + "_frame_rate_" + index).value = frame_rate;
+
+    return true;
+}
+
+function checkForm(form)
+{
+    var min, max, i, psp;
+    var psp_types = ["uc", "bc", "un"]; // The different types of Port Storm Policers
+
+    if (gspCnt) {
+        min = qos_rate_min(configQosGlobalStormBitRateMin, configQosGlobalStormFrameRateMin);
+        max = qos_rate_max(configQosGlobalStormBitRateMax, configQosGlobalStormFrameRateMax);
+
+        for (i = 0; i < gspCnt; i++) {
+            if (!policerOk("gsp", i, min, max)) {
+                return false;
+            }
+        }
+    }
+
+    if (portCnt) {
+        min = qos_rate_min(configQosPortStormBitRateMin, configQosPortStormFrameRateMin);
+        max = qos_rate_max(configQosPortStormBitRateMax, configQosPortStormFrameRateMax);
+
+        for (psp = 0; psp < psp_types.length; psp++) { // Loop through the three different port storm policer types
+            for (i = 0; i < portCnt; i++) {
+                if (!policerOk(psp_types[psp], i, min, max)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    requestUpdate();            // Update page to reflect selector
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<form method="POST" action="/config/stormconfig"  onsubmit="return checkForm(this);">
+
+<div id="global_storm_config" style="display:none;">
+<h1>Global Storm Policer Configuration</h1>
+
+<table summary="Global Storm Policer Configuration" cellspacing="0" class="config">
+ <thead>
+  <tr class="config_header">
+   <th>Frame Type</th>
+   <th>Enable</th>
+   <th>Rate</th>
+   <th>Unit</th>
+  </tr>
+ </thead>
+ <tbody id="global_storm_tbody">
+ </tbody>
+</table>
+</div>
+
+<div id="port_storm_config" style="display:none;">
+<h1>Port Storm Policer Configuration <span id="display_sid"></span></h1>
+
+<table summary="Port Storm Policer Configuration" cellspacing="0" class="config">
+ <thead>
+  <tr class="config_header">
+   <th rowspan="2">Port</th>
+   <th colspan="3">Unicast Frames</th>
+   <th colspan="3">Broadcast Frames</th>
+   <th colspan="3">Unknown Frames</th>
+  </tr>
+  <tr class="config_header">
+   <th>Enable</th>
+   <th>Rate</th>
+   <th>Unit</th>
+   <th>Enable</th>
+   <th>Rate</th>
+   <th>Unit</th>
+   <th>Enable</th>
+   <th>Rate</th>
+   <th>Unit</th>
+  </tr>
+ </thead>
+ <tbody id="port_storm_tbody">
+ </tbody>
+</table>
+</div>
+
+<p>
+<input type="hidden" id="submit_sid" name="sid">
+<input type="submit" value="Save">
+<input type="reset" value="Reset">
+</p>
+
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

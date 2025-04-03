@@ -1,0 +1,662 @@
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_UPNP)
+
+INCLUDE_BEGIN
+#include "main.h"
+#include "vtss_upnp_api.h"
+#include "icli_porting_util.h" /* For icli_bool_txt() */
+#include "vtss/appl/interface.h"
+
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+typedef enum {
+    SYS_MODE_CMD,
+    //SYS_TTL_CMD,
+    SYS_ADV_CMD,
+    SYS_IP_ADDR_MODE_CMD,
+    SYS_IP_ADDR_STATIC_VID_CMD,
+    SYS_CMD_END
+}UPNP_ICLI_system_cmd_t;
+
+static void UPNP_ICLI_system_set(u32 session_id, UPNP_ICLI_system_cmd_t cmd, void* var)
+{
+    mesa_rc                 rc;
+    vtss_appl_upnp_param_t  conf;
+
+    if ((rc = vtss_appl_upnp_system_config_get(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%s\n", error_txt(rc));
+        return;
+    }
+
+    switch (cmd) {
+        case SYS_MODE_CMD:
+        {
+            BOOL  original_mode;
+            original_mode = conf.mode;
+            conf.mode = *(BOOL*)var ? 1: 0;
+            if (conf.mode != original_mode && (rc = vtss_appl_upnp_system_config_set(&conf)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%s\n", error_txt(rc));
+            }
+            break;
+        }
+        /*
+        case SYS_TTL_CMD:
+        {
+            u8 tmp;
+            tmp = conf.ttl;
+            conf.ttl = *(u8*)var;
+            if (conf.ttl != tmp && (rc = vtss_appl_upnp_system_config_set(&conf)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%s\n", error_txt(rc));
+            }
+            break;
+        }
+        */
+        case SYS_ADV_CMD:
+        {
+            u32 tmp;
+            tmp = conf.adv_interval;
+            conf.adv_interval = *(u32*)var;
+            if ( conf.adv_interval != tmp && (rc = vtss_appl_upnp_system_config_set(&conf)) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%s\n", error_txt(rc));
+            }
+            break;
+        }
+        case SYS_IP_ADDR_MODE_CMD:
+        {
+            vtss_appl_upnp_ip_addressing_mode_t tmp;
+            tmp = conf.ip_addressing_mode;
+            conf.ip_addressing_mode = *(vtss_appl_upnp_ip_addressing_mode_t*)var;
+            if ( conf.ip_addressing_mode != tmp && (rc = vtss_appl_upnp_system_config_set(&conf)) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%s\n", error_txt(rc));
+            }
+            break;
+        }
+        case SYS_IP_ADDR_STATIC_VID_CMD:
+        {
+            vtss_ifindex_t tmp;
+            tmp = conf.static_ifindex;
+            conf.static_ifindex = *(vtss_ifindex_t*)var;
+            if ( conf.static_ifindex != tmp && (rc = vtss_appl_upnp_system_config_set(&conf)) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%s\n", error_txt(rc));
+            }
+            break;
+        }
+        default:
+            ICLI_PRINTF("undkown cmd %d\n", cmd);
+            break;
+    }
+
+}
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+HELP_SHOW_UPNP = Display UPnP configuration
+HELP_UPNP = Set UPnP configuration
+//HELP_UPNP_TTL = Set TTL value
+//HELP_UPNP_TTL_VAL = TTL value
+HELP_UPNP_ADV_INTERVAL = Set advertising duration
+HELP_UPNP_ADV_INTERVAL_VAL = advertising duration specified in seconds
+HELP_UPNP_IP_ADDR_MODE = Set IP addressing mode
+HELP_UPNP_IP_ADDR_STATIC_VID = Set static VLAN interface ID
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show upnp
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! 1: show
+! 2: upnp
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##HELP_SHOW_UPNP
+
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_appl_upnp_param_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) vtss_appl_upnp_system_config_get(&conf);
+    ICLI_PRINTF("UPnP Mode                     : %s\n",  icli_bool_txt(conf.mode));
+    ICLI_PRINTF("UPnP TTL                      : %d\n",  conf.ttl);
+    ICLI_PRINTF("UPnP Advertising Duration     : %u\n", conf.adv_interval);
+    if (VTSS_APPL_UPNP_IPADDRESSING_MODE_DYNAMIC == conf.ip_addressing_mode) {
+        ICLI_PRINTF("UPnP IP Addressing Mode       : dynamic\n");
+    } else {
+        ICLI_PRINTF("UPnP IP Addressing Mode       : static\n");
+    }
+    ICLI_PRINTF("UPnP Static IP Interface ID   : %d\n",  vtss_ifindex_cast_to_u32(conf.static_ifindex));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = upnp
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: upnp
+
+CMD_VAR =
+
+HELP = ##HELP_UPNP
+
+BYWORD =
+
+VARIABLE_BEGIN
+    BOOL mode = TRUE;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    BOOL mode = FALSE;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    UPNP_ICLI_system_set(session_id, SYS_MODE_CMD, &mode);
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    UPNP_ICLI_system_set(session_id, SYS_MODE_CMD, &mode);
+NO_FORM_CODE_END
+
+CMD_END
+
+//!==============================================================================
+
+//CMD_BEGIN
+
+//IF_FLAG =
+
+//COMMAND = upnp ttl <1-255>
+
+//DOC_CMD_DESC    =
+//DOC_CMD_DEFAULT =
+//DOC_CMD_USAGE   =
+//DOC_CMD_EXAMPLE =
+
+//FUNC_NAME =
+//FUNC_REUSE =
+
+//PRIVILEGE = ICLI_PRIVILEGE_15
+//PROPERTY  =
+
+//CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+//MODE_VAR =
+
+//RUNTIME =
+
+//! 1: upnp
+//! 2: ttl
+//! 3: <1-255>
+
+//CMD_VAR =
+//CMD_VAR =
+//CMD_VAR = v_1_to_255
+
+//HELP = ##HELP_UPNP
+//HELP = ##HELP_UPNP_TTL
+//HELP = ##HELP_UPNP_TTL_VAL
+
+//BYWORD =
+//BYWORD =
+//BYWORD =
+
+//VARIABLE_BEGIN
+//    i8 ttl;
+//VARIABLE_END
+
+//CODE_BEGIN
+//    ttl = (i8) v_1_to_255;
+//    UPNP_ICLI_system_set(session_id, SYS_TTL_CMD, &ttl);
+//CODE_END
+
+//CMD_END
+
+//!==============================================================================
+
+//CMD_BEGIN
+
+//IF_FLAG =
+
+//COMMAND = no upnp ttl
+
+//DOC_CMD_DESC    =
+//DOC_CMD_DEFAULT =
+//DOC_CMD_USAGE   =
+//DOC_CMD_EXAMPLE =
+
+//FUNC_NAME =
+//FUNC_REUSE =
+
+//PRIVILEGE = ICLI_PRIVILEGE_15
+//PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+//CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+//MODE_VAR =
+
+//RUNTIME =
+
+//! 1: no
+//! 2: upnp
+//! 3: ttl
+
+//CMD_VAR =
+//CMD_VAR =
+//CMD_VAR =
+
+//HELP = ##ICLI_HELP_NO
+//HELP = ##HELP_UPNP
+//HELP = ##HELP_UPNP_TTL
+
+//BYWORD =
+//BYWORD =
+//BYWORD =
+
+//VARIABLE_BEGIN
+//    i8 ttl = (i8) UPNP_MGMT_DEFAULT_TTL;
+//VARIABLE_END
+
+//CODE_BEGIN
+//    UPNP_ICLI_system_set(session_id, SYS_TTL_CMD, &ttl);
+//CODE_END
+
+//CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = upnp advertising-duration <100-86400>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: upnp
+! 2: advertising-duration
+! 3: <100-86400>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_100_to_86400
+
+HELP = ##HELP_UPNP
+HELP = ##HELP_UPNP_ADV_INTERVAL
+HELP = ##HELP_UPNP_ADV_INTERVAL_VAL
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    UPNP_ICLI_system_set(session_id, SYS_ADV_CMD, &v_100_to_86400);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no upnp advertising-duration
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: no
+! 2: upnp
+! 3: advertising-duration
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_UPNP
+HELP = ##HELP_UPNP_ADV_INTERVAL
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    u32 adv_interval = UPNP_MGMT_DEFAULT_INT;
+VARIABLE_END
+
+CODE_BEGIN
+    UPNP_ICLI_system_set(session_id, SYS_ADV_CMD, &adv_interval);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = upnp ip-addressing-mode { dynamic | static }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: upnp
+! 2: ip-addressing-mode
+! 3: dynamic
+! 4: static
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_dynamic
+CMD_VAR =
+
+HELP = ##HELP_UPNP
+HELP = ##HELP_UPNP_IP_ADDR_MODE
+HELP = Dynamic IP addressing mode
+HELP = Static IP addressing mode
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_appl_upnp_ip_addressing_mode_t type = VTSS_APPL_UPNP_IPADDRESSING_MODE_DYNAMIC;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_dynamic) {
+        type = VTSS_APPL_UPNP_IPADDRESSING_MODE_STATIC;
+    }
+    UPNP_ICLI_system_set(session_id, SYS_IP_ADDR_MODE_CMD, &type);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no upnp ip-addressing-mode
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: no
+! 2: upnp
+! 3: ip-addressing-mode
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_UPNP
+HELP = ##HELP_UPNP_IP_ADDR_MODE
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_appl_upnp_ip_addressing_mode_t type = VTSS_APPL_UPNP_IPADDRESSING_MODE_DYNAMIC;
+VARIABLE_END
+
+CODE_BEGIN
+    UPNP_ICLI_system_set(session_id, SYS_IP_ADDR_MODE_CMD, &type);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = upnp static interface vlan <vlan_id>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: upnp
+! 2: static
+! 3: interface
+! 4: vlan
+! 5: <vlan_id>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_vlan_id
+
+HELP = ##HELP_UPNP
+HELP = ##HELP_UPNP_IP_ADDR_STATIC_VID
+HELP = ##ICLI_HELP_INTERFACE
+HELP = VLAN Interface
+HELP = VLAN identifier (VID)
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_ifindex_t ifidx;
+VARIABLE_END
+
+CODE_BEGIN
+    ifidx = vtss_ifindex_cast_from_u32(v_vlan_id, VTSS_IFINDEX_TYPE_VLAN);
+    UPNP_ICLI_system_set(session_id, SYS_IP_ADDR_STATIC_VID_CMD, &ifidx);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no upnp static interface vlan
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: no
+! 2: upnp
+! 3: static
+! 4: interface
+! 5: vlan
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_UPNP
+HELP = ##HELP_UPNP_IP_ADDR_STATIC_VID
+HELP = ##ICLI_HELP_INTERFACE
+HELP = VLAN Interface
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_ifindex_t ifidx = vtss_ifindex_cast_from_u32(UPNP_MGMT_DEF_VLAN_ID, VTSS_IFINDEX_TYPE_VLAN);;
+VARIABLE_END
+
+CODE_BEGIN
+    UPNP_ICLI_system_set(session_id, SYS_IP_ADDR_STATIC_VID_CMD, &ifidx);
+CODE_END
+
+CMD_END

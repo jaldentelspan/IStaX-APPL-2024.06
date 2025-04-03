@@ -1,0 +1,359 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title> FRER Detailed Configuration Help</title>
+ <link href="/lib/help.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="/lib/config.js"></script>
+ <script type="text/javascript" src="/lib/mootools-core.js"></script>
+ <script type="text/javascript" src="/lib/dynforms.js"></script>
+ <script type="text/javascript" src="/lib/ajax.js"></script>
+ <script type="text/javascript" src="/lib/spom.js"></script>
+ <script type="text/javascript" src="/lib/format.js"></script>
+ <script type="text/javascript" src="/lib/json.js"></script>
+ <script type="text/javascript" src="../frer_lib.js"></script>
+ <script type="text/javascript" language="JavaScript">
+
+var globals;
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    $("ResetTimeoutMsecMin").innerHTML     = globals.capabilities.ResetTimeoutMsecMin;
+    $("ResetTimeoutMsecMax").innerHTML     = globals.capabilities.ResetTimeoutMsecMax;
+    $("HistorylenMin").innerHTML           = globals.capabilities.HistorylenMin;
+    $("HistorylenMax").innerHTML           = globals.capabilities.HistorylenMax;
+    $("LaErrDifferenceMin").innerHTML      = globals.capabilities.LaErrDifferenceMin;
+    $("LaErrDifferenceMax").innerHTML      = globals.capabilities.LaErrDifferenceMax;
+    $("LaErrPeriodMsecMin").innerHTML      = globals.capabilities.LaErrPeriodMsecMin;
+    $("LaErrPeriodMsecMax").innerHTML      = globals.capabilities.LaErrPeriodMsecMax;
+    $("LaErrPathsMin").innerHTML           = globals.capabilities.LaErrPathsMin;
+    $("LaErrPathsMax").innerHTML           = globals.capabilities.LaErrPathsMax;
+    $("LaErrResetPeriodMsecMin").innerHTML = globals.capabilities.LaErrResetPeriodMsecMin;
+    $("LaErrResetPeriodMsecMax").innerHTML = globals.capabilities.LaErrResetPeriodMsecMax;
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    globals = {capabilities: {}};
+    frer_lib_json_request(globals, on_globals_received);
+});
+ </script>
+</head>
+
+<body>
+<h1> FRER Detailed Configuration Help</h1>
+
+This page allows the user to edit existing or new
+<a href="glossary.htm#FRER" class="glossary">FRER</a> configurations, as well as
+adding new.<br/>
+
+At the top right corner, the page offers a drop-down list, where any of the
+existing FRER instances can be selected. Notice that if you have changed
+contents of a FRER instance without saving and then change to another instance,
+the changes will be lost without confirmation.<br/>
+
+Besides all the existing FRER instances, the selector has one last item, which
+allows for creating a new instance.
+
+<dl>
+  <dt>Mode</dt>
+  <dd>
+    Decides if this FRER instance shall run in generation or recovery mode. Default is generation.
+  </dd>
+
+  <dt>Enable</dt>
+  <dd>
+   Enable or disable a FRER instance.
+  </dd>
+
+ <dt>Pop Outer Tag</dt>
+ <dd>
+   Only available in generation mode.<br/>
+
+   When checked, a possible outer VLAN tag in the ingressing frames gets popped
+   before egressing with an R-tag. When unchecked, a possible outer VLAN tag in
+   the ingressing frames is preserved beneath the R-tag on egress.
+ </dd>
+
+  <dt>FRER VLAN</dt>
+  <dd>
+    Select the VLAN ID that ingress flows get classified to.
+  </dd>
+
+  <dt>Algorithm</dt>
+  <dd>
+    IEEE 802.1CB-2017 requires implementations to provide two different recovery
+    function algorithms, match and vector.<br/><br/>
+
+    "Match" is the simplest algorithm: It basically says: Discard all packets
+    with a sequence number equal to the last sequence number seen. Accept all
+    others. The algorithm also comes with a reset timer that - when it expires -
+    causes the algorithm to accept any sequence number - even the same as the
+    previous. The reset timer is restarted every time a packet is accepted.<br/>
+
+    The match algorithm counts the number of times the reset timer has expired
+    and the number of passed, discarded, and out-of-order packets. Out-of-order
+    happens when the sequence number of a given packet is not one higher than
+    the previous (and the timer has not expired).<br/><br/>
+
+    "Vector" is somewhat more complicated. When a packet with a given sequence
+    number arrives, it must be within the previous accepted packet's sequence
+    number +/- a configurable history length, or it will be discarded. If the
+    packet is already seen (within the history length window), it is also
+    discarded. Also this algorithm comes with a reset timer that - when it
+    expires - causes the algorithm to accept any sequence number next time a
+    packet arrives. The reset timer is restarted every time a packet is
+    accepted.<br/><br/>
+
+    The Vector algorithm counts the number of times the reset timer has expired
+    and the number of passed, discarded, out-of-order, and so-called rogue
+    packets. Out-of-order happens when the sequence number of a given packet is
+    "older" than a previous packet's (taking wrap-around into account), and the
+    packet has not been accepted before. Out-of-order packets are accepted.
+    Rogue packets are packets with a sequence number beyond the history length
+    window. Rogue packets are also counted as discarded. Furthermore, the Vector
+    algorithm counts lost packets, that is, the number of unreceived sequence
+    numbers when the history window moves.<br/><br/>
+
+    Both algorithms also count the number of packets arriving without an R-tag.
+    This is done with the tagless counter. By default, such packets will be
+    discarded. A per-FRER instance parameter recovery take-no-sequence, however,
+    allows such frames to pass through.<br/>
+
+    Notice: The 802.1CB standard utilizes the frerSeqRcvyTakeNoSequence only in
+    the vector algorithm, but the switches that the present guide is meant for
+    also utilizes it in the match algorithm.<br/>
+
+    Notice: This feature should only be used on terminating switches, because
+    such tagless packets will be R-tagged (with sequence number 0) on their way
+    out on non-terminating switches.<br/><br/>
+
+    The selected algorithm on a given FRER instance will be used in both
+    compound and individual recovery functions.<br/><br/>
+    Default is the Vector algorithm.
+  </dd>
+
+  <dt>Recovery History Length</dt>
+  <dd>
+    Configure the recovery functions history length.<br/>
+
+    Valid range is
+    <span id="HistorylenMin">?</span>-<span id="HistorylenMax">?</span> and
+    default is 2.
+  </dd>
+
+  <dt>Recovery Reset Timeout</dt>
+  <dd>
+    Configure recovery function's reset timeout in milliseconds.<br/>
+    Valid range is
+    <span id="ResetTimeoutMsecMin">?</span>-<span
+    id="ResetTimeoutMsecMax">?</span> and default is 1000.
+  </dd>
+
+  <dt>Recovery Take-no-sequence</dt>
+  <dd>
+    Select this option to accept all frames whether they are R-tagged or not.
+  </dd>
+
+  <dt>Individual Recovery</dt>
+  <dd>
+    Individual recovery means that a member stream undergoes recovery before it
+    reaches the compound recovery function. The compound recovery function sits
+    on each and every egress port in the FRER instance. The one and only thing
+    that individual recovery can do that compound recovery can not is to filter
+    out member streams that keep presenting the same R-tag sequence number
+    because of a defect transmitter. It goes like this:<br/><br/>
+
+    Suppose the transmitter of member stream 1 is working perfectly. It will
+    send out frames with an increasing sequence number and wrap back to 0 after
+    65535 frames. Suppose the transmitter of member stream 2 is sending out the
+    same frame with the same sequence number, X, over and over again. If we only
+    had a compound recovery function, that function would at times be presented
+    with frames with sequence number X from stream 1 and sequence number X from
+    stream 2, and the first of these two frames would be sent to the egress
+    port.<br/><br/>
+
+    So - depending on timing - sometimes the frame with sequence number X would
+    come from stream 1 and sometimes it would come from the erroneous stream 2.
+    The effect of enabling individual recovery is to have the individual
+    recovery function for stream 2 filter out all identically numbered frames
+    before they are presented to the compound recovery function. This is a very
+    unlikely situation, and most network administrators will not need individual
+    recovery.<br/><br/>
+
+    Moreover, individual recovery is very expensive in terms of hardware
+    resources: Every ingress stream needs an individual recovery function per
+    egress port. So if a FRER instance defines 8 ingress streams and 8 egress
+    ports, the switch needs 64 individual recovery instances - just for this one
+    FRER instance.
+  </dd>
+
+  <dt>Recovery Terminate</dt>
+  <dd>
+    Select this option to strip an R-Tag from a frame before presenting it on egress.
+  </dd>
+
+  <dt>Latent Error Detection</dt>
+  <dd>
+    The purpose of latent error detection is to raise a flag if the number of
+    discarded packets is "relatively few" compared to the number of passed
+    packets. The algorithm relies on four user inputs:<br/><br/>
+
+    Period, Reset period, Paths, Error difference.<br/><br/>
+
+    The reset function algorithm is as follows: Every Reset period milliseconds,
+    read number of passed and discarded packet counters and set a per-FRER
+    instance variable, CurDiff, as follows:<br/><br/>
+
+    CurDiff = passed_packets * (paths - 1) - discarded_packets<br/><br/>
+
+    The test function algorithm is as follows: Every timeout milliseconds, read
+    the discarded and passed packet counters, and perform the following:<br/>
+    <br/>
+
+    diff = Abs(CurDiff - (passed_packets * (paths - 1) - discarded_packets))
+    <br/><br/>
+
+    if (diff &gt; difference) {<br/>
+    &nbsp;&nbsp;raise_flag();<br/>
+    }<br/><br/>
+
+    Basically, it says: If you expect N member streams to ingress this FRER
+    instance, N-1 of these member streams are expected to be discarded, and only
+    one is expected to pass. To allow for some slack due to random packet losses
+    and the fact that counters are not neccessarily read simultaneously, set the
+    difference to account for that. The reset function makes sure that CurDiff
+    is updated to avoid that occassional packet losses do not accumulate
+    forever.
+  </dd>
+
+  <dt>Latent Error Detection, Enable</dt>
+  <dd>
+    Enable/disable Latent error detection.
+  </dd>
+
+  <dt>Latent Error Detection, Error Diff</dt>
+  <dd>
+    The number of packets "allowed" to be in difference without raising the
+    flag.<br/>
+
+    Valid range is
+    <span id="LaErrDifferenceMin">?</span>-<span
+    id="LaErrDifferenceMax">?</span> and default is 100.
+  </dd>
+
+  <dt>Latent Error Detection, Period</dt>
+  <dd>
+    The number of milliseconds between invoking the test function.<br/>
+
+    Valid range is
+    <span id="LaErrPeriodMsecMin">?</span>-<span
+    id="LaErrPeriodMsecMax">?</span> and default is 2000.
+  </dd>
+
+  <dt>Latent Error Detection, Paths</dt>
+  <dd>
+   The number of member streams expected to ingress this FRER instance.<br/>
+   Valid range is
+   <span id="LaErrPathsMin">?</span>-<span id="LaErrPathsMax">?</span> and
+   default is 2.
+  </dd>
+
+  <dt>Latent Error Detection, Reset period</dt>
+  <dd>
+   The number of milliseconds between invoking the reset function.<br/>
+   Valid range is
+   <span id="LaErrResetPeriodMsecMin">?</span>-<span
+   id="LaErrResetPeriodMsecMax">?</span> and default is 30000.
+  </dd>
+
+  <dt>Operational State</dt>
+  <dd>
+    This shows the current operational state of the selected FRER instance.<br/>
+
+    See the <a href=help_frer_ctrl.htm#oper_state>FRER Configuration
+    Overview Help</a> page for details on image color and possible warnings.
+  </dd>
+
+  <dt>Stream Type</dt>
+  <dd>
+    Two different methods for specifying streams that should map to this FRER
+    instance exist.<br/>
+
+    The first, "Stream ID List", allows for setting up to 8 ingress streams in
+    recovery mode. In generator mode, only one ingress stream can be specified.
+    If you need more, use the second option.<br/>
+
+    The second, "Stream Collection", allows for specifying an ID of a stream
+    collection. A stream collection compiles multiple streams into one single,
+    which can be used in both generator and recovery mode, except if individual
+    recovery is enabled.<br/>
+
+    The two methods are mutually exclusive.
+  </dd>
+
+  <dt>Stream ID List</dt>
+  <dd>
+    Specify the ingress streams that should map to this FRER instance. Only one
+    stream ID can be specified in generator mode. If more are needed, use an
+    ingress stream collection. In other modes, up to 8 ingress streams can be
+    specified.<br/>
+
+    This field is only available if "Stream Type" is set to "Stream ID List".
+  </dd>
+
+  <dt>Stream Collection</dt>
+  <dd>
+    Specify the ID of an ingress stream collection that should map to this FRER
+    instance.<br/>
+
+    This field is only available if "Stream Type" is set to "Stream Collection".
+  </dd>
+
+  <dt>Egress port list</dt>
+  <dd>
+    Specify the egress ports that this FRER instance will hit. There is a
+    maximum of 8 egress ports per FRER instance.
+  </dd>
+</dl>
+
+<h2>Buttons</h2>
+<p><input type="button" value="Save">: Click to save changes.</p>
+<p><input type="button" value="Reset">: Click to undo any changes made locally and revert to previously saved values.</p>
+<p><input type="button" value="Back">: Return to the previous page. Any changes made locally will be lost.</p>
+<p><input type="button" value="Refresh">: Click to refresh the page immediately. Any changes made locally will be lost. This is useful if the FRER configuration has been changed from e.g. CLI or configurational warnings have been mended elsewhere.</p>
+
+</body>
+</html>
+

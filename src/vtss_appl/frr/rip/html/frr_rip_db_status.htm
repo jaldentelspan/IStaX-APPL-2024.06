@@ -1,0 +1,348 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>RIP Database Information</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/mootools-more.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/format.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_rip_db_status.htm";
+
+// Global variables
+var timerID; // For auto-refresh button
+
+var myDynamicTable;
+
+var oTdbType = Array("RIP", "Connected", "Static", "OSPF");
+var oVdbType = Array("rip", "connected", "static", "ospf");
+
+var oTdbSubType = Array("normal", "static", "default", "redistribute", "interface");
+
+var firstIndex = 0,
+    lastIndex = 0,
+    total_num = 0;
+
+function addHeader(table_rows) {
+    //1st row
+    var row = {
+        fields: [
+            { type: "disp_hdr", params: ["Type"] },
+            { type: "disp_hdr", params: ["Sub-Type"] },
+            { type: "disp_hdr", params: ["Network"] },
+            { type: "disp_hdr", params: ["Next Hop"] },
+            { type: "disp_hdr", params: ["Metric"] },
+            { type: "disp_hdr", params: ["From"] },
+            { type: "disp_hdr", params: ["External Metric"] },
+            { type: "disp_hdr", params: ["Tag"] },
+            { type: "disp_hdr", params: ["Uptime"] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+function addRow(key, val, idx) {
+    var row = {
+        fields: [
+            { type: "text", params: [oTdbType[oVdbType.indexOf(val.Type)], "cl"] },
+            { type: "text", params: [val.SubType, "cl"] },
+            { type: "text", params: [key.NetworkAddress + "/" + key.NetworkPrefixSize, "cr"] },
+            { type: "text", params: [key.NextHop, "cr"] },
+            { type: "text", params: [val.Metric, "cr"] },
+            { type: "text", params: [val.IsSelfInterface ? "self" : val.SourceAddress, "cl"] },
+            { type: "text", params: [val.ExternalMetric ? val.ExternalMetric : "", "cr"] },
+            { type: "text", params: [val.Tag, "cr"] },
+            { type: "text", params: [(val.Type == "rip" && val.SubType == "normal") ? secondsToDays(val.Uptime) : "", "cr"] }
+        ]
+    };
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 9;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record, idx) {
+        table_rows.push(addRow(record.key, record.val, idx));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+/* Return true when start_key <= key. Otherwise, return false. */
+function entryKeyGreatOrEqual(start_key, key) {
+
+    if (Ipv4Str2Val(start_key.NetworkAddress) != Ipv4Str2Val(key.NetworkAddress)) {
+        return (Ipv4Str2Val(start_key.NetworkAddress) <= Ipv4Str2Val(key.NetworkAddress));
+    } else if (start_key.NetworkPrefixSize != key.NetworkPrefixSize) {
+        return (start_key.NetworkPrefixSize <= key.NetworkPrefixSize);
+    } else if (Ipv4Str2Val(start_key.NextHop) != Ipv4Str2Val(key.NextHop)) {
+        return (Ipv4Str2Val(start_key.NextHop) <= Ipv4Str2Val(key.NextHop));
+    }
+
+    return true;
+}
+
+function getEntryList(json_arry, key) {
+    var entry_list = new Array();
+    var found_firstIndex = false;
+
+    // Get the entry index which key is larger than or equal to the starting key
+    firstIndex = json_arry.length >= 1 ? json_arry.length - 1 : 0;
+    for (var i = 0; i < json_arry.length; i++) {
+        if (!found_firstIndex && entryKeyGreatOrEqual(key, json_arry[i].key)) {
+            found_firstIndex = true;
+            firstIndex = i;
+        }
+    }
+
+    lastIndex = Math.min(firstIndex + parseInt($("entriesNumPerPage").value, 10), total_num);
+    entry_list = json_arry.slice(firstIndex, lastIndex);
+
+    return entry_list;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    var myConf = new Array();
+    myConf = recv_json;
+
+    // myConf is saved when 'Refresh' occurs(i.e., '|<', '<<', '>>', and '>|' won't save myConf)
+    if (name) {
+        // Save the received JSON data (both of the original and filtered)
+        myDynamicTable.saveRecvJson(name, myConf);
+        myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+        // Get the table summary
+        total_num = myConf.length;
+        firstIndex = 0;
+        lastIndex = Math.min(total_num, $("entriesNumPerPage").value);
+
+        // Get the entries shown in the page.
+        var start_keys = {
+            "NetworkAddress": $("startNetworkAddr").value,
+            "NetworkPrefixSize": $("startNetworkPrefixSize").value,
+            "NextHop": $("startNextHop").value
+        };
+        myConf = getEntryList(myConf, start_keys);
+    }
+
+    // Add table summery
+    $("summaryDesc").innerHTML = (total_num ? (firstIndex + 1) : 0) + " - " + (lastIndex) + " of " + total_num + (total_num > 1 ? " entries" : " entry");
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Update the first entry in the table into start entry
+    if (total_num && myConf.length) {
+        UpdateIdValue("startNetworkAddr", myConf[0].key.NetworkAddress);
+        UpdateIdValue("startNetworkPrefixSize", myConf[0].key.NetworkPrefixSize);
+        UpdateIdValue("startNextHop", myConf[0].key.NextHop);
+    }
+
+    // Refresh timer
+    var autorefresh = $("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+
+    UpdatePageController();
+}
+
+/* Update the received HTML request */
+function requestUpdate() {
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("rip.status.db.get", null, processUpdate, "status");
+}
+
+function getFirstEntry() {
+    if (firstIndex) {
+        var orig_json = myDynamicTable.getRecvJson("status");
+        var start_keys = {
+            "NetworkAddress": "0.0.0.0",
+            "NetworkPrefixSize": 0,
+            "NextHop": "0.0.0.0"
+        };
+        var entry_list = getEntryList(orig_json, start_keys);
+        processUpdate(entry_list);
+    }
+}
+
+// Disable '|<' and '<<' if the page is in the begining of the table.
+// Disable '>>' and '>|' in the page is in the end of the table.
+function UpdatePageController() {
+    if (!firstIndex) {
+        $("first_page").disabled = $("prev_page").disabled = true;
+    } else {
+        $("first_page").disabled = $("prev_page").disabled = false;
+    }
+
+    if (lastIndex == total_num) {
+        $("next_page").disabled = $("last_page").disabled = true;
+    } else {
+        $("next_page").disabled = $("last_page").disabled = false;
+    }
+}
+
+function getPreviousEntry() {
+    if (firstIndex) {
+        var json_arry = new Array();
+        json_arry = myDynamicTable.getRecvJson("status");
+        lastIndex = firstIndex;
+        firstIndex = Math.max(lastIndex - parseInt($("entriesNumPerPage").value, 10), 0);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function getNextEntry() {
+    if (lastIndex != total_num) {
+        var json_arry = new Array();
+        json_arry = myDynamicTable.getRecvJson("status");
+        firstIndex = lastIndex;
+        lastIndex = firstIndex + Math.min($("entriesNumPerPage").value, total_num - firstIndex);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function getLastEntry() {
+    if (total_num && (lastIndex != total_num)) {
+        var json_arry = new Array();
+        var num_per_page = $("entriesNumPerPage").value;
+        json_arry = myDynamicTable.getRecvJson("status");
+        // 'total_num' must minus 1 to prevernt from errr in the condition that 'total_num' is the multiple 'num_per_page'
+        firstIndex = Math.floor((total_num - 1) / num_per_page) * num_per_page;
+        lastIndex = firstIndex + Math.min($("entriesNumPerPage").value, total_num - firstIndex);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function checkRefresh(fld) {
+    if (fld.checked) {
+        requestUpdate();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+/* Initialize resores when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+
+    // To ensure the completed data, we request the configured data after the
+    // instance data is received and it is requested only one time.
+    requestUpdate();
+});
+
+function checkForm() {
+    // Start options
+    if (!isIpStr("startNetworkAddr", false, "'Network Address'", 2, false) ||
+        !isWithinRange("startNetworkPrefixSize", 0, 32, "Network Prefix Size") ||
+        !isIpStr("startNextHop", false, "' Next Hop'", 2, false)) {
+        return false;
+    }
+
+    // entriesNumPerPage
+    if (!isWithinRange("entriesNumPerPage", 1, 999, "'entries per page'")) {
+        return false;
+    }
+
+    return true;
+}
+
+    </script>
+</head>
+
+<body class="content">
+    <h1>RIP Database Information</h1>
+    <p>
+        <span class="displaytext">Start from </span>
+        <!-- Start options: Network -->
+        <span class="displaytext">Network </span>
+        <input type="text" id="startNetworkAddr" name="startNetworkAddr" maxlength="15" size="15" value="0.0.0.0">
+        <!-- Start options: Network prefix size -->
+        <span class="displaytext">/</span>
+        <input type="text" id="startNetworkPrefixSize" name="startNetworkPrefixSize" maxlength="2" size="2" value="0">
+        <!-- Start options: Next Hop -->
+        <span class="displaytext">, Next Hop </span>
+        <input type="text" id="startNextHop" name="startNextHop" maxlength="15" size="15" value="0.0.0.0">
+        <!-- Start options: entries number per page -->
+        <span class="displaytext"> with </span>
+        <input type="text" id="entriesNumPerPage" name="entriesNumPerPage" maxlength="3" size="3" value="20">
+        <span class="displaytext"> entries per page. </span>
+    </p>
+    <div class="refreshbar">
+        <span id="summaryDesc"></span> &nbsp;&nbsp;&nbsp;&nbsp;
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="if(!checkForm()) {return false;} checkRefresh(this);">
+        <input type="button" value="Refresh" onClick='if(!checkForm()) {return false;} requestUpdate(); this.blur();'>
+        <input type="button" id="first_page" value=" |<< " title="First page" onclick="if(!checkForm()) {return false;} getFirstEntry();    this.blur();">
+        <input type="button" id="prev_page" value=" << " title="Previous page" onclick="if(!checkForm()) {return false;} getPreviousEntry(); this.blur();">
+        <input type="button" id="next_page" value=" >> " title="Next page" onclick="if(!checkForm()) {return false;} getNextEntry();     this.blur();">
+        <input type="button" id="last_page" value=" >>| " title="Last page" onclick="if(!checkForm()) {return false;} getLastEntry();     this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+    <p>&nbsp;</p>
+</body>
+
+</html>

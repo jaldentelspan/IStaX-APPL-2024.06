@@ -1,0 +1,466 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<!--
+ Microchip is aware that some terminology used in this technical document is
+ antiquated and inappropriate. As a result of the complex nature of software
+ where seemingly simple changes have unpredictable, and often far-reaching
+ negative results on the software's functionality (requiring extensive retesting
+ and revalidation) we are unable to make the desired changes in all legacy
+ systems without compromising our product or our clients' products.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>PTP Clock Configuration Monitor Page</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/config.js"></script>
+    <script type="text/javascript" src="lib/ajax.js"></script>
+    <script type="text/javascript" src="lib/spom.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_ptp_clock_data_stat.htm";
+var ptp_1as_profile;
+
+var timerID = null;
+var ptp_clock_config = Array();
+var ptp_clock_ports = Array();
+var ptp_clock_tbody_id =
+Array(
+    "Default",
+    "Lclock_tbody",
+    "CTypeProfile_tbody",
+    "CDDataSet_tbody", 
+    "CCDataSet_tbody",
+    "CPDataSet_tbody",
+    "CTPDataSet_tbody",
+    "Filter_tbody",
+    "Servo_tbody",
+    "UcSlaveConf_tbody"
+);
+// global_clock_inst is used to store the clock_inst value from the 
+//   ptp.htm screen
+var global_clock_inst = 0;
+// This piece of code makes sure that a specific clock_instancet can be selected
+// directly, when navigating from a hyperlink on a different page.
+var arg_idx = document.URL.indexOf('?');
+if(arg_idx != -1) {
+    var args = document.URL.substring(arg_idx+1, document.URL.length);
+    var tup = args.split('=');
+
+    if(tup.length == 2) {
+        if(tup[0] == 'clock_inst') {
+            global_clock_inst = parseInt(tup[1]);
+        }
+    }
+}
+
+// Display all the elements in a Row
+function addRow(index, frag, values) {
+    var tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var per_port_params = values.split("/");
+    
+    for (var port_param_index = 0; port_param_index < per_port_params.length; port_param_index++) {
+        addTextCell(tr, per_port_params[port_param_index], "c");
+    }
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+// This function is used to Parse the data from the server and display 
+// the values on the screen.
+function processUpdate(req)
+{
+    if (redirectOnError(req))
+        return;
+
+    if (req.responseText) {
+        ptp_clock_config = req.responseText.split("#");
+        // create holder for accumulated tbody elements and text nodes
+        {
+            var frag = document.createDocumentFragment();
+            var tr = CreateStyledElement("tr", "config_odd");
+            var fld;
+            var elem;
+
+            // Create Local CLock Time Table
+            var time_config = ptp_clock_config[1].split("/");
+            var profiles = ptp_clock_config[2].split("/");
+            ptp_1as_profile  = profiles[3];
+            addTextCell(tr, time_config[0], "c");
+            addTextCell(tr, time_config[1],"c");
+            frag.appendChild(tr);
+            var td = CreateTd("c");
+            var td = CreateStyledElement("td", "c");
+            var txt = document.createTextNode("Ports Monitor");
+            var link = document.createElement("a");
+            link.href = "ptp_clock_ports.htm?clock_inst=" + global_clock_inst;
+            link.appendChild(txt);  // Add Text
+            td.appendChild(link);   // Add link to cell
+            tr.appendChild(td);     // Add cell to row
+            elem = document.getElementById("Lclock_tbody");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+        }
+        {
+            // create holder for accumulated tbody elements and text nodes.
+            //for(var table_index = 2; table_index < ptp_clock_tbody_id.length; table_index++ ) {
+            for(var table_index = 2; table_index < 9; table_index++ ) {
+                var frag = document.createDocumentFragment();
+                var tr = CreateStyledElement("tr", "config_odd");
+                var elem;
+                var ptp_clock_table_params = ptp_clock_config[table_index].split("/");
+
+                if (ptp_clock_tbody_id[table_index] == "CDDataSet_tbody") {
+                    tr_2 = CreateStyledElement("tr", "config_header");
+                    addTextHeaderCell(tr_2, "Device Type", "hdrc");
+                    addTextHeaderCell(tr_2, "One-Way", "hdrc");
+                    addTextHeaderCell(tr_2, "2 Step Flag", "hdrc");
+                    addTextHeaderCell(tr_2, "Ports", "hdrc");
+                    addTextHeaderCell(tr_2, "Clock Identity", "hdrc");
+                    addTextHeaderCell(tr_2, "Dom", "hdrc");
+                    addTextHeaderCell(tr_2, "Clock Quality", "hdrc");
+                    if (ptp_1as_profile != "AED 802.1AS") {
+                        addTextHeaderCell(tr_2, "Pri1", "hdrc");
+                        addTextHeaderCell(tr_2, "Pri2", "hdrc");
+                        addTextHeaderCell(tr_2, "Local Prio", "hdrc");
+                    }
+                    addTextHeaderCell(tr_2, "Protocol", "hdrc");
+                    addTextHeaderCell(tr_2, "VID", "hdrc");
+                    addTextHeaderCell(tr_2, "PCP", "hdrc");
+                    addTextHeaderCell(tr_2, "DSCP", "hdrc");
+                    if (ptp_1as_profile == "802.1AS") {
+                        addTextHeaderCell(tr_2, "GM Capable", "hdrc");
+                        addTextHeaderCell(tr_2, "sdoId", "hdrc");
+                    } else if (ptp_1as_profile == "AED 802.1AS") {
+                        addTextHeaderCell(tr_2, "isGM", "hdrc");
+                    }
+                    frag.appendChild(tr_2);  // Add row to fragment
+                }
+                if (ptp_clock_tbody_id[table_index] == "CCDataSet_tbody") {
+                    tr_2 = CreateStyledElement("tr", "config_header");
+                    addTextHeaderCell(tr_2, "stpRm", "hdrc");
+                    addTextHeaderCell(tr_2, "Offset From Master", "hdrc");
+                    addTextHeaderCell(tr_2, "Mean Path Delay", "hdrc");
+                    if (ptp_1as_profile == "802.1AS") {
+                        addTextHeaderCell(tr_2, "Last GM Ph Change", "hdrc");
+                        addTextHeaderCell(tr_2, "Last GM FR Change", "hdrc");
+                        addTextHeaderCell(tr_2, "GM time base", "hdrc");
+                        addTextHeaderCell(tr_2, "GM change count", "hdrc");
+                        addTextHeaderCell(tr_2, "Last GM Change Event", "hdrc");
+                        addTextHeaderCell(tr_2, "Last GM Phase Change Event", "hdrc");
+                        addTextHeaderCell(tr_2, "Last GM Freq Change Event", "hdrc");
+                    }
+                    addTextHeaderCell(tr_2, "Slave Port", "hdrc");
+                    addTextHeaderCell(tr_2, "Slave State", "hdrc");
+                    addTextHeaderCell(tr_2, "Holdover(ppb)", "hdrc");
+                    frag.appendChild(tr_2);  // Add row to fragment
+                }
+                if (ptp_clock_tbody_id[table_index] == "CPDataSet_tbody") {
+                    tr_2 = CreateStyledElement("tr", "config_header");
+                    addTextHeaderCell(tr_2, "Parent Port ID", "hdrc");
+                    addTextHeaderCell(tr_2, "port", "hdrc");
+                    addTextHeaderCell(tr_2, "PStat", "hdrc");
+                    addTextHeaderCell(tr_2, "Var", "hdrc");
+                    addTextHeaderCell(tr_2, "Rate", "hdrc");
+                    if (ptp_1as_profile != "AED 802.1AS") {
+                        addTextHeaderCell(tr_2, "GrandMaster ID", "hdrc");
+                        addTextHeaderCell(tr_2, "GrandMaster Clock Quality", "hdrc");
+                        addTextHeaderCell(tr_2, "Pri1", "hdrc");
+                        addTextHeaderCell(tr_2, "Pri2", "hdrc");
+                    }
+                    if (ptp_1as_profile == "802.1AS") {
+                        addTextHeaderCell(tr_2, "CRR", "hdrc");
+                    }
+                    frag.appendChild(tr_2);  // Add row to fragment
+                }
+
+                for (var elem_index = 0; elem_index < ptp_clock_table_params.length; elem_index++) {
+                    if (ptp_clock_tbody_id[table_index] == "CDDataSet_tbody") {
+                        if (elem_index == 14 || elem_index == 15) {
+                            if (ptp_1as_profile == "802.1AS") {
+                                addTextCell(tr, ptp_clock_table_params[elem_index], "c");
+                            }
+                        // Do not add ptp priorities for AED profile as they are not used
+                        } else if (ptp_1as_profile != "AED 802.1AS" || (elem_index != 7 && elem_index != 8 && elem_index != 9)) {
+                            addTextCell(tr, ptp_clock_table_params[elem_index], "c");
+                        }
+                    } else if (ptp_clock_tbody_id[table_index] == "CCDataSet_tbody") {
+                        if (elem_index > 2 && elem_index < 10) {
+                            if (ptp_1as_profile == "802.1AS") {
+                                addTextCell(tr, ptp_clock_table_params[elem_index], "c");
+                            }
+                        } else {
+                            addTextCell(tr, ptp_clock_table_params[elem_index], "c");
+                        }
+                    } else if (ptp_clock_tbody_id[table_index] == "CPDataSet_tbody") {
+                        if (elem_index == 9) {
+                            if (ptp_1as_profile == "802.1AS") {
+                                addTextCell(tr, ptp_clock_table_params[elem_index], "c");
+                            }
+                        // Do not add GM info and ptp priorities for AED profile as they are not used
+                        } else if (ptp_1as_profile != "AED 802.1AS"|| (elem_index != 5 && elem_index != 6 && elem_index != 7 && elem_index != 8)){
+                            addTextCell(tr, ptp_clock_table_params[elem_index], "c");
+                        }
+                    } else {
+                        addTextCell(tr, ptp_clock_table_params[elem_index], "c");
+                    }
+                }
+                frag.appendChild(tr);
+                elem = document.getElementById(ptp_clock_tbody_id[table_index]);
+                clearChildNodes(elem);
+                elem.appendChild(frag);
+                // Check value of PDV field. If PDV == "BASIC" then show filter and servo parameters.
+                if (ptp_clock_tbody_id[table_index] == "CTypeProfile_tbody" && ptp_clock_table_params[4] == "BASIC") {
+                    document.getElementById("ptpFilterParamDiv").style.visibility = "visible";
+                    document.getElementById("ptpFilterParamDiv").style.height = "auto";
+                    document.getElementById("ptpFilterParamDiv").style.overflow = "visible";
+                    document.getElementById("ptpServoParamDiv").style.visibility = "visible";
+                    document.getElementById("ptpServoParamDiv").style.height = "auto";
+                    document.getElementById("ptpServoParamDiv").style.overflow = "visible";
+                }
+                // Check value of Protocol field. If Protocol == "IPv4Uni" then show unicast slave configuration.
+                if (ptp_clock_tbody_id[table_index] == "CDDataSet_tbody" && ptp_clock_table_params[10] == "IPv4Uni") {
+                    document.getElementById("ptpUnicastSlaveConfigDiv").style.visibility = "visible";
+                    document.getElementById("ptpUnicastSlaveConfigDiv").style.height = "auto";
+                    document.getElementById("ptpUnicastSlaveConfigDiv").style.overflow = "visible";
+                }
+            }
+        }
+        {   // Unicast Slave Configuration
+            var frag = document.createDocumentFragment();
+            var elem;
+
+            // Create Local CLock Time Table
+            var UcSlave_table_Conf = ptp_clock_config[9].split("|");
+            for (var idx = 1; idx < UcSlave_table_Conf.length; idx++) {
+                var tr = CreateStyledElement("tr", idx % 2 ? "config_odd" : "config_even");
+                var UcSlave_Conf = UcSlave_table_Conf[idx-1].split("/");
+                for (var elem_index = 0; elem_index < UcSlave_Conf.length; elem_index++) {
+                    addTextCell(tr, UcSlave_Conf[elem_index], "c");
+                }
+                frag.appendChild(tr);
+            }
+            elem = document.getElementById("UcSlaveConf_tbody");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+        }
+    } else {
+        SpomHandleError();
+    }
+
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh.checked) {
+        if(timerID)
+           clearTimeout(timerID);
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+    document.getElementById("update").style.visibility = "hidden";
+}
+
+// This function is called on the load of the page which inturn sends the 
+// request to the server for fetching the information.
+function requestUpdate() {
+    if(SpomNavigationLoading())
+        return;                 // Bail out, navigation will trigger update
+
+    document.getElementById("update").style.visibility = "visible";
+    loadXMLDoc(SpomAddSidArg("/stat/ptp_clock?clock_inst=" + global_clock_inst), processUpdate);
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+            timerID = null;
+        }
+    } else {
+        requestUpdate();
+    }
+}
+
+// HTML script starts from here.
+</script>
+</head>
+<body class="content" onload="requestUpdate();">
+
+<h1>PTP Clock's Configuration <span id="display_sid"></span></h1>
+<div class="refreshbar">
+    <form action="#">
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+        <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+    </form>
+</div>
+
+<h2 style = "height : 4px; margin-top : 1px;" >Clock Type and Profile</h2>
+<table summary="Clock Type and Profile" class="config">
+ <thead id="CTypeProfile_thead">
+ <thead>
+  <tr>
+   <th>Clock Instance</th>
+   <th>Clk Domain</th>
+   <th>Device Type</th>
+   <th>Profile</th>
+   <th style="width: 320px">Filter Type</th>
+   <th>Filter Mode</th>
+  </tr>
+ </thead>
+ <tbody id="CTypeProfile_tbody">
+ </tbody>
+</table>
+
+<h2 style = "height : 4px; margin-top : 1px;" >Local Clock Current Time</h2>
+<table summary="Local Clock Current Time" class="config">
+ <thead id="Lclock_thead">
+ <thead>
+  <tr>
+   <th>PTP Time</th>
+   <th>Clock Adjustment method</th>
+   <th>Ports Monitor Page</th>
+  </tr>
+ </thead>
+ <tbody id="Lclock_tbody">
+ </tbody>
+</table>
+
+<h2 style = "height : 4px; margin-top : 7px;">Clock Default DataSet</h2>
+<table summary="Clock Default DataSet" class="config">
+ <thead id="CDDataSet_thead">
+ </thead>
+ <tbody id="CDDataSet_tbody">
+ </tbody>
+</table>
+
+<h2 style = "height : 4px; margin-top : 7px;">Clock Current DataSet</h2>
+<table summary="Clock Current DataSet" class="config">
+  <thead id="CCDataSet_thead">
+ </thead>
+ <tbody id="CCDataSet_tbody">
+ </tbody>
+</table>
+
+<h2 style = "height : 4px; margin-top : 7px;">Clock Parent DataSet </h2>
+<table summary="Clock Parent DataSet" class="config">
+  <thead id="CPDataSet_thead">
+ </thead>
+ <tbody id="CPDataSet_tbody">
+ </tbody>
+</table>
+
+<h2 style = "height : 4px; margin-top : 7px;">Clock Time Properties DataSet </h2>
+<table summary="Clock Time Properties DataSet" class="config">
+  <thead>
+  <tr>
+   <th>UtcOffset</th>
+   <th>Valid</th>
+   <th>leap59</th>
+   <th>leap61</th>
+   <th>Time Trac</th>
+   <th>Freq Trac</th>
+   <th>ptp Time Scale</th>
+   <th>Time Source</th>
+  </tr>
+ </thead>
+ <tbody id="CTPDataSet_tbody">
+ </tbody>
+</table>
+
+<div id="ptpFilterParamDiv" style="visibility:hidden;height:0px;overflow:hidden;">
+<h2 style = "height : 4px; margin-top : 7px;">Basic Filter Parameters </h2>
+<table summary="Basic Filter Parameters" class="config">
+  <thead>
+  <tr>
+   <th>DelayFilter</th>
+   <th>Period</th>
+   <th>Dist</th>
+  </tr>
+ </thead>
+ <tbody id="Filter_tbody">
+ </tbody>
+</table>
+</div>
+
+<div id="ptpServoParamDiv" style="visibility:hidden;height:0px;overflow:hidden;">
+<h2 style = "height : 4px; margin-top : 7px;">Basic Servo Parameters </h2>
+<table summary="Basic Servo Parameters" class="config">
+  <thead>
+  <tr>
+   <th>Display</th>
+   <th>P-enable</th>
+   <th>I-enable</th>
+   <th>D-enable</th>
+   <th>'P' constant</th>
+   <th>'I' constant</th>
+   <th>'D' constant</th>
+   <th>Gain constant</th>
+  </tr>
+ </thead>
+ <tbody id="Servo_tbody">
+ </tbody>
+</table>
+</div>
+
+<div id="ptpUnicastSlaveConfigDiv" style="visibility:hidden;height:0px;overflow:hidden;">
+<h2 style = "height : 4px; margin-top : 7px;">Unicast Slave Configuration </h2>
+<table summary="Unicast Slave Configuration" class="config">
+  <thead>
+  <tr>
+   <th>Index</th>
+   <th>Duration</th>
+   <th>IP_Address</th>
+   <th>Grant</th>
+   <th>CommState</th>
+  </tr>
+ </thead>
+ <tbody id="UcSlaveConf_tbody">
+ </tbody>
+</table>
+</div>
+
+<form action="#">
+<table id="ptpClockInformation" summary="Per Clock Information" cellspacing="0" class="config">
+  <tbody id="ptpClockData"></tbody>
+</table>
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

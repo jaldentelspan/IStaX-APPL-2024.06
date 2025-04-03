@@ -1,0 +1,928 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>IP Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/config.js"></script>
+    <script type="text/javascript" src="lib/ajax.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_ip_config.htm";
+
+var timerID = null;
+var ipInterfaceConfig = null;
+
+var modeT = Array("Host", "Router");
+var modeV = genArrayInt(0, modeT.length - 1);
+var dns_modeT;
+var dns_modeV;
+var domain_modeT;
+var domain_modeV;
+if (configIPv6Support) {
+    if (configDHCPv6Support) {
+        domain_modeT = Array("No Domain Name",
+            "Configured Domain Name",
+            "From any DHCPv4 interfaces",
+            "From this DHCPv4 interface",
+            "From any DHCPv6 interfaces",
+            "From this DHCPv6 interface");
+        domain_modeV = Array(0, 1, 2, 3, 4, 5);
+        dns_modeT = Array("No DNS server",
+            "Configured IPv4 or IPv6",
+            "From any DHCPv4 interfaces",
+            "From this DHCPv4 interface",
+            "From any DHCPv6 interfaces",
+            "From this DHCPv6 interface");
+        dns_modeV = Array(0, 1, 2, 3, 4, 5);
+    } else {
+        domain_modeT = Array("No Domain Name",
+            "Configured Domain Name");
+        domain_modeV = Array(0, 1);
+        dns_modeT = Array("No DNS server",
+            "Configured IPv4 or IPv6",
+            "From any DHCPv4 interfaces",
+            "From this DHCPv4 interface");
+        dns_modeV = Array(0, 1, 2, 3);
+    }
+} else {
+    domain_modeT = Array("No Domain Name",
+        "Configured Domain Name");
+    domain_modeV = Array(0, 1);
+    dns_modeT = Array("No DNS server",
+        "Configured IPv4",
+        "From any DHCPv4 interfaces",
+        "From this DHCPv4 interface");
+    dns_modeV = Array(0, 1, 2, 3);
+}
+
+var reset_data;
+var if_ct;
+var rt_ct;
+var max_interfaces = 10;
+var max_routes = 10;
+
+var oVPort = genArrayInt(configPortMin, configNormalPortMax);
+var oTPort = Array();
+for (var port_idx = configPortMin; port_idx <= configNormalPortMax; port_idx++) {
+    oTPort.push(configPortName(port_idx, 1));
+}
+
+var oVClinetIdType = genArrayInt(0, 3);
+var oTClinetIdType = Array("Auto", "IF_MAC", "ASCII", "HEX");
+
+function changeClientIdType(fld) {
+    var elm_ids = this.id ? this.id.split("_") : fld.id.split("_");
+    var vid_idx = elm_ids[elm_ids.length - 1]; // last word is vid_idx
+
+    switch (oTClinetIdType[$('if_client_id_type_' + vid_idx).value]) {
+    case "Auto":
+        $('if_client_id_if_mac_' + vid_idx).disabled = $('if_client_id_ascii_' + vid_idx).disabled = $('if_client_id_hex_' + vid_idx).disabled = true;
+        break;
+    case "IF_MAC":
+        $('if_client_id_if_mac_' + vid_idx).disabled = false;
+        $('if_client_id_ascii_' + vid_idx).disabled = $('if_client_id_hex_' + vid_idx).disabled = true;
+        break;
+    case "ASCII":
+        $('if_client_id_ascii_' + vid_idx).disabled = false;
+        $('if_client_id_if_mac_' + vid_idx).disabled = $('if_client_id_hex_' + vid_idx).disabled = true;
+        break;
+    case "HEX":
+        $('if_client_id_hex_' + vid_idx).disabled = false;
+        $('if_client_id_if_mac_' + vid_idx).disabled = $('if_client_id_ascii_' + vid_idx).disabled = true;
+        break;
+    default:
+        break;
+    }
+}
+
+function convertIp2Number(ip) {
+    var n = 0;
+    var b = ip.match(/^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s*$/);
+    if (b) {
+        for (var i = 1; i <= 4; i++) {
+            n <<= 8;
+            n += Number(b[i]);
+        }
+    }
+    return n;
+}
+
+function convertLen2Mask(len) {
+    return len > 32 ? 0 : (0xffffffff << (32 - len));
+}
+
+function convertNumber2Ip(ip) {
+    var b1, b2, b3, b4;
+    b1 = 0xff & ip;
+    ip >>= 8;
+    b2 = 0xff & ip;
+    ip >>= 8;
+    b3 = 0xff & ip;
+    ip >>= 8;
+    b4 = 0xff & ip;
+    ip >>= 8;
+    return String(b4) + "." + String(b3) + "." + String(b2) + "." + String(b1);
+}
+
+function Ipv6Expand(ip) {
+    var ip4 = ip.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    // Convert IPv4 mapped
+    if (ip4) {
+        var n1 = parseInt(ip4[1], 10),
+            n2 = parseInt(ip4[2], 10),
+            n3 = parseInt(ip4[3], 10),
+            n4 = parseInt(ip4[4], 10);
+        var w1 = ((n1 << 8) + n2).toString(16),
+            w2 = ((n3 << 8) + n4).toString(16);
+        ip = ip.replace(ip4[0], w1 + ":" + w2);
+    }
+    var n = "0:0:0:0:0:0:0:0".split(":");
+    var i;
+    var w = [];
+    // Expand ::
+    var dip = ip.split("::", 2);
+    w.append(dip[0].split(":"));
+    if (dip.length == 2 && w.length < 8) {
+        var e = dip[1].split(":");
+        if ((e.length + w.length) < 8) {
+            w.append(n.slice(0, 8 - e.length - w.length));
+        }
+        w.append(e);
+    }
+    return w.join(":");
+}
+
+function Ipv6Prefix2Mask(prefix) {
+    var i;
+    var w = [];
+    for (i = 0; i < 8; i++) {
+        var m = 0;
+        if (prefix > 0) {
+            var pl = Math.min(16, prefix);
+            prefix -= pl;
+            m = (1 << pl) - 1;
+            m <<= (16 - pl);
+        }
+        w.push(m.toString(16));
+    }
+    return w.join(":");
+}
+
+function Hex2Int(str) {
+    str = str.replace(/^0+/, "");
+    return parseInt(str, 16);
+}
+
+function Ipv6AddressMask(ip, mask) {
+    var i;
+    var w_i = ip.split(":");
+    var m_i = mask.split(":");
+    var w = [];
+    for (i = 0; i < 8; i++) {
+        var r = Hex2Int(w_i[i]) & Hex2Int(m_i[i]);
+        w.push(r.toString(16));
+    }
+    return w.join(":");
+}
+
+function Ipv6Net(ip, prefix) {
+    var exp_ip = Ipv6Expand(ip);
+    var mask = Ipv6Prefix2Mask(prefix);
+    var res = Ipv6AddressMask(exp_ip, mask);
+    return res;
+}
+
+function IsValidInterfaceIPandMask(ipf, maskf) {
+    if (!isIpAddr(ipf.id, "'Interface IP address'")) {
+        return false;
+    }
+
+    if (!isWithinRange(maskf.id, 1, 31, "'Address mask length'")) {
+        return false;
+    }
+
+    var addr = convertIp2Number(ipf.value);
+    var mask = convertLen2Mask(maskf.value);
+
+    if (~mask === 1) {
+        return true; // RFC3021
+    }
+
+    if (~((addr & ~mask) | mask) === 0) {
+        return GiveAlert('IP address must not be a broadcast address', ipf);
+    }
+
+    if ((addr & ~mask) === 0) {
+        return GiveAlert('IP address must not contain all zeros in the host part', ipf);
+    }
+
+    return true;
+}
+
+function checkForm() {
+    // Interfaces
+    var i, j, vaddr, vmask, net;
+    var iftable = new Array();
+    var masktable = new Array();
+    var masktable6 = new Array();
+    var dns_src;
+    var dns_val, val;
+    var using_dhcp = new Array();
+    var using_dhcp6 = new Array();
+
+    for (i = 0; i < if_ct; i++) {
+        var vid = $('if_vid_' + i);
+        var dhcp = $('if_dhcp_' + i);
+        var client_id_type = $('if_client_id_type_' + i);
+        var client_id_ascii = $('if_client_id_ascii_' + i);
+        var client_id_hex = $('if_client_id_hex_' + i);
+        var tout = $('if_tout_' + i);
+        var addr = $('if_addr_' + i);
+        var mask = $('if_mask_' + i);
+        var dhcp6 = $('if_dhcp6_' + i);
+        var rpcmt = $('if_rpcmt_' + i);
+        var addr6 = $('if_addr6_' + i);
+        var mask6 = $('if_mask6_' + i);
+        var inp_delete = $('if_del_' + i);
+        if (vid) {
+            var m;
+            if ((m = vid.value.match(/VLAN ([0-9]+)/))) {
+                var vid_id;
+                vid_id = parseInt(m, 10);
+                if (vid_id < configVlanIdMin || vid_id > configVlanIdMax) {
+                    return GiveAlert("Invalid interface id: " + vid.value);
+                }
+            } else if ((m = vid.value.match(/CPU [0-9]\/[0-9]/))) {
+            } else {
+                return GiveAlert("Invalid interface id: " + vid.value);
+            }
+
+            if ((!inp_delete) || // Added entry
+                (!inp_delete.checked)) { // Existing, not deleted
+
+                if (iftable[vid.value]) {
+                    return GiveAlert("VLAN " + vid.value + " used for more than one interface", vid);
+                }
+                iftable[vid.value] = 1;
+                if (dhcp.checked) {
+                    if (oTClinetIdType[client_id_type.value] == "ASCII" &&
+                        (client_id_ascii.value.length < configIPClientIdLenMin || client_id_ascii.value.length > configIPClientIdLenMax)) {
+                        return GiveAlert("Client ID ASCII string must be non-zero or less than " + configIPClientIdLenMax + " characters", client_id_ascii);
+                    }
+                    if (oTClinetIdType[client_id_type.value] == "HEX" &&
+                        ((client_id_hex.value.length % 2) || !IsHex(client_id_hex.value, false) ||
+                            client_id_hex.value.length < (configIPClientIdLenMin * 2) || client_id_hex.value.length > (configIPClientIdLenMax * 2))) {
+                        return GiveAlert("Client ID HEX value must be non-zero or less than " + configIPClientIdLenMax + " characters and the length must be even since one hex is saved as two octets", client_id_hex);
+                    }
+                    if (!isValidDomainOrIP('if_hostname_' + i, "'DHCPv4 Hostname'", false, null, null, null, true)) {
+                        return false;
+                    }
+                    if (!isWithinRange(tout.id, 0, 4294967295, "'DHCP Fallback Timeout'")) {
+                        return false; // Disallow submit
+                    }
+                    var cur = $('cur_' + i);
+                    if (cur) {
+                        var v = cur.value.split("/");
+                        vaddr = convertIp2Number(v[0]);
+                        vmask = convertLen2Mask(v[1]);
+                        net = vaddr & vmask;
+                        masktable.push({ "vlan": vid.value, "net": net, "mask": vmask });
+                    }
+                    using_dhcp[vid.value] = true;
+                }
+                if (addr.value.length || mask.value.length) {
+                    if (dhcp.checked && parseInt(tout.value, 10) === 0) {
+                        return GiveAlert("A static address is only used if the fall-back timeout is non-zero.", tout);
+                    }
+                    if (!IsValidInterfaceIPandMask(addr, mask)) {
+                        return false;
+                    }
+                    vaddr = convertIp2Number(addr.value);
+                    vmask = convertLen2Mask(mask.value);
+                    net = vaddr & vmask;
+                    masktable.push({ "vlan": vid.value, "net": net, "mask": vmask, "field": addr });
+                } else {
+                    if (parseInt(tout.value, 10) > 0) {
+                        return GiveAlert("A fallback address must be provided when you specify a non-zero fallback timeout");
+                    }
+                }
+                if (configDHCPv6Support && dhcp6.checked) {
+                    var curr6 = $('curr6_' + i);
+                    if (curr6 && isIpv6Str2(curr6.id, "'DHCPv6 Address'", 1, 1)) {
+                        masktable6.push({
+                            "vlan": vid.value,
+                            "address": curr6.value,
+                            "net": Ipv6Net(curr6.value, 128),
+                            "mask": 128,
+                            "field": curr6
+                        });
+                    }
+                    using_dhcp6[vid.value] = true;
+                }
+                if (configIPv6Support && (addr6.value.length || mask6.value.length)) {
+                    if (!isIpv6Str2(addr6.id, "'IPv6 Address'", 7, 0)) {
+                        return false;
+                    }
+                    if (!isWithinRange(mask6.id, 1, 128, "'IPv6 Mask Length'")) {
+                        return false;
+                    }
+                    masktable6.push({
+                        "vlan": vid.value,
+                        "address": addr6.value,
+                        "net": Ipv6Net(addr6.value, mask6.value),
+                        "mask": mask6.value,
+                        "field": addr6
+                    });
+                }
+            }
+        }
+    }
+
+    dns_src = $('ip_dns_domain_type');
+    if (dns_src) {
+        dns_val = $('ip_dns_domain_value');
+        if (dns_src.value == 1) { // Configured
+            if (!isValidDomainOrIP(dns_val.id, "'Domain Name'", false, null, null, null, true, false, true)) {
+                return false;
+            }
+        } else if (dns_src.value == 3 || dns_src.value == 5) { // Specific DHCP if
+            if (!isWithinRange(dns_val.id, configVlanIdMin, configVlanIdMax, "'DHCP Interface VLAN ID'")) {
+                return false;
+            }
+        }
+    }
+
+    for (i = 0; i < 4; i++) {
+        dns_src = $('ip_dns_src_' + i);
+        if (dns_src) {
+            var skip_dhcp_if_chk = 1;
+            dns_val = $('ip_dns_value_' + i);
+            if (dns_src.value == 1) { // Configured
+                if (configIPv6Support) {
+                    if (!isIpv6Str2(dns_val.id, "'DNS Server " + i + "'", 8, 1) &&
+                        !isIpStr(dns_val.id, 0, "'DNS Server " + i + "'", 1, 1)) {
+                        return GiveAlert("'DNS Server " + i + "' address is neither a valid IPv4 nor a valid IPv6 address format.", dns_val);
+                    }
+                } else {
+                    if (!isIpAddr(dns_val.id, "'DNS Server " + i + "'")) {
+                        return false;
+                    }
+                }
+            } else if (dns_src.value == 3 ||
+                dns_src.value == 5) { // Specific DHCP if
+                if (!isWithinRange(dns_val.id, configVlanIdMin, configVlanIdMax, "'DHCP Interface VLAN ID'")) {
+                    return false;
+                }
+                // Specific DHCP if check: Do we need this?
+                if (parseInt(skip_dhcp_if_chk, 10) > 0) {
+                    continue;
+                }
+                if (dns_src.value == 3 && !using_dhcp[dns_val.value]) {
+                    return GiveAlert("Interface " + dns_val.value + " not using DHCPv4", dns_val);
+                }
+                if (configIPv6Support && dns_src.value == 5 && !using_dhcp6[dns_val.value]) {
+                    return GiveAlert("Interface " + dns_val.value + " not using DHCPv6", dns_val);
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < masktable.length; i++) {
+        for (j = 0; j < masktable.length; j++) {
+            if ((i != j) &&
+                (masktable[i].vlan != masktable[j].vlan) &&
+                (masktable[j].net & masktable[i].mask) == masktable[i].net) {
+                var alert_field = (masktable[j].field ? masktable[j].field : masktable[i].field);
+                return GiveAlert("Subnet of VLAN " + masktable[j].vlan + " overlaps VLAN " + masktable[i].vlan, alert_field);
+            }
+        }
+    }
+    for (i = 0; i < masktable6.length; i++) {
+        for (j = 0; j < masktable6.length; j++) {
+            if ((i != j) &&
+                masktable6[j].field && (masktable6[i].vlan != masktable6[j].vlan) &&
+                Ipv6Net(masktable6[j].address, masktable6[i].mask) == masktable6[i].net) {
+                return GiveAlert("IPv6 Subnet of VLAN " + masktable6[j].vlan + " overlaps VLAN " + masktable6[i].vlan, masktable6[j].field);
+            }
+        }
+    }
+    for (i = 0; i < rt_ct; i++) {
+        var rt_net = $('rt_net_' + i);
+        var rt_mask = $('rt_mask_' + i);
+        var rt_dest = $('rt_dest_' + i);
+        var rt_nhvid = $('rt_nhvid_' + i);
+        var rt_dist = $('rt_dist_' + i);
+        var rt_delete = $('rt_del_' + i);
+
+        if (rt_net) {
+            if (!rt_delete) {
+                if (configIPv6Support && rt_net.value.match(/:/)) {
+                    // IPV6 route
+                    if (!isIpv6Str2(rt_net.id, "'IPv6 Network'", 0, 0)) {
+                        return false;
+                    }
+                    if (isIpv6AddrUnspecified(rt_net.id)) {
+                        if (rt_mask.value != "0") {
+                            return GiveAlert("Default route mask length must be zero.", rt_mask);
+                        }
+                    } else {
+                        if (!isWithinRange(rt_mask.id, 1, 128, "'IPv6 Mask Length'")) {
+                            return false;
+                        }
+                    }
+
+                    val = $(rt_dest.id);
+                    if (val.value !== 'blackhole') {
+                        // In case of input error, I would have loved if the
+                        // text could include something about 'blackhole' being
+                        // a valid input. That's not so easy.
+                        if (!isIpv6Str2(rt_dest.id, "'IPv6 Gateway'", 1, 0)) {
+                            return false;
+                        } else {
+                            if (!isIpv6Str2(rt_dest.id, "'IPv6 Gateway'", 4, 1) &&
+                                !isWithinRange(rt_nhvid.id, configVlanIdMin, configVlanIdMax, "'Next Hop VLAN'", " VLAN index")) {
+                                return false;
+                            }
+                        }
+                    }
+
+                    // TBD - overlap tests
+                } else {
+                    // IPV4 route
+                    if (!isIpStr(rt_net.id, false, "'Network'", 0, false)) {
+                        return false;
+                    }
+                    if (isIpAddrZero(rt_net.id, false)) {
+                        if (rt_mask.value != "0") {
+                            return GiveAlert("Default route mask length must be zero.", rt_mask);
+                        }
+                    } else {
+                        if (!isWithinRange(rt_mask.id, 1, 32, "'Network mask length'")) {
+                            return false;
+                        }
+                    }
+
+                    val = $(rt_dest.id);
+                    if (val.value !== 'blackhole') {
+                        // In case of input error, I would have loved if the
+                        // text could include something about 'blackhole' being
+                        // a valid input. That's not so easy.
+                        if (!isIpAddr(rt_dest.id, "'Gateway'")) {
+                            return false;
+                        }
+                    }
+
+                    vaddr = convertIp2Number(rt_net.value);
+                    vmask = convertLen2Mask(rt_mask.value);
+                    if (vaddr & ~vmask) {
+                        return GiveAlert("Invalid route - address bits outside mask: " + convertNumber2Ip(vaddr & ~vmask), rt_net);
+                    }
+                }
+
+                if (!isWithinRange(rt_dist.id, 1, 255, "'Distance'")) {
+                    return false;
+                }
+            }
+        }
+    }
+    $('if_ct').set('value', if_ct);
+    $('rt_ct').set('value', rt_ct);
+    return true;
+}
+
+function processGlobal(values) {
+    var gval, dns, proxy, dnsx, dns_src;
+    gval = values[0].split("|");
+    max_interfaces = parseInt(gval[0], 10);
+    max_routes = parseInt(gval[1], 10);
+    if (configIPRoutingSupport) {
+        var mode = UpdateIdSelect('ip_mode', modeT, modeV, parseInt(gval[2], 10));
+        mode.getParent('tr').removeClass('hidden');
+    }
+    if (values.length > 1) {
+        dnsx = values[1].split("|");
+        dns_src = UpdateIdSelect('ip_dns_domain_type', domain_modeT, domain_modeV, parseInt(dnsx[0], 10));
+        if ((dns = $('ip_dns_domain_value'))) {
+            dns.set('value', dnsx[1]);
+        }
+        dns_src.onchange = function () {
+            var src = this.value;
+            if (src === 0 || src === 1) { // Any or None
+                dns.disabled = true;
+            } else {
+                dns.disabled = false;
+            }
+        };
+        if ((proxy = $('ip_dns_proxy'))) {
+            proxy.set('checked', parseInt(values[2], 10));
+        }
+        gval = values[3].split("/");
+        for (var i = 0; i < gval.length; i++) {
+            dnsx = gval[i].split("|");
+            dns_src = UpdateIdSelect('ip_dns_src_' + i, dns_modeT, dns_modeV, parseInt(dnsx[0], 10));
+            if ((dns = $('ip_dns_value_' + i))) {
+                dns.set('value', dnsx[1]);
+            }
+            dns_src.onchange = function () {
+                var src = this.value;
+                if (src === 0 || src === 1) { // Any or None
+                    dns.disabled = true;
+                } else {
+                    dns.disabled = false;
+                }
+            };
+        }
+        $$('.hasdns').removeClass('hidden');
+    }
+    if (configDHCPv6Support) {
+        $$('.dhcp6').removeClass('hidden');
+    }
+    if (configIPv6Support) {
+        $$('.ipv6').removeClass('hidden');
+    }
+}
+
+function DoStripe(id) {
+    var i = 1;
+    var children = $(id).getChildren();
+    children.each(function (tr) {
+        if (i % 2) {
+            tr.removeClass('config_odd');
+            tr.addClass('config_even');
+        } else {
+            tr.addClass('config_odd');
+            tr.removeClass('config_even');
+        }
+        i++;
+    });
+    return children;
+}
+
+function UpdateInterfaces() {
+    var ct = DoStripe('tbody_if').length;
+    $('add_if').disabled = (ct >= max_interfaces);
+}
+
+function addInterfaceRow(index, frag, values) {
+    var tr = CreateStyledElement("tr", "config");
+    var ifid, dhcp, client_id_type, client_id_if_mac, client_id_ascii, client_id_hex, hostname, tout, addr, mask, cur, addr6, mask6, curr6, val_idx = 0;
+    if (values) {
+        vlan = values[val_idx++];
+        dhcp = parseInt(values[val_idx++], 10);
+        client_id_type = parseInt(values[val_idx++], 10);
+        client_id_if_mac = parseInt(values[val_idx++], 10);
+        client_id_ascii = unescape(values[val_idx++]);
+        client_id_hex = values[val_idx++];
+        hostname = unescape(values[val_idx++]);
+        tout = parseInt(values[val_idx++], 10);
+        addr = values[val_idx++];
+        mask = values[val_idx++];
+        cur = values[val_idx++];
+        if (configIPv6Support) {
+            addr6 = values[val_idx++];
+            mask6 = values[val_idx++];
+        }
+        if (configDHCPv6Support) {
+            dhcp6 = parseInt(values[val_idx++], 10);
+            rpcmt = parseInt(values[val_idx++], 10);
+            curr6 = values[val_idx++];
+        }
+        addCheckBoxCell(tr, 0, "c", "if_del_" + if_ct);
+        addTextCell(tr, vlan, "cr");
+        addInputCell(tr, vlan, "hidden", "if_vid_" + if_ct, 5);
+    } else {
+        dhcp = tout = dhcp6 = rpcmt = 0;
+        client_id_if_mac = 1;
+        client_id_ascii = client_id_hex = hostname = addr = mask = addr6 = mask6 = "";
+        var button = addButtonCell(tr, "Delete", "c", "ifdel_" + if_ct);
+        button.onclick = function () { tr.destroy();
+            UpdateInterfaces(); };
+        addInputCell(tr, 0, "cr", "if_vid_" + if_ct, 5);
+    }
+    var dhcp_in = addCheckBoxCell(tr, dhcp, "c", "if_dhcp_" + if_ct);
+    var client_id_type_in = addSelectCell(tr, oTClinetIdType, oVClinetIdType, client_id_type, "cl", "if_client_id_type_" + if_ct, null, null, dhcp ? false : true, changeClientIdType);
+    var client_id_if_mac_in = addSelectCell(tr, oTPort, oVPort, client_id_if_mac, "cl", "if_client_id_if_mac_" + if_ct, null, null, oTClinetIdType[client_id_type] != "IF_MAC" ? true : false);
+    var client_id_ascii_in = addInputCell(tr, client_id_ascii, "cr", "if_client_id_ascii_" + if_ct, 8, configIPClientIdLenMax, null, null, oTClinetIdType[client_id_type] != "ASCII" ? true : false);
+    var client_id_hex_in = addInputCell(tr, client_id_hex, "cr", "if_client_id_hex_" + if_ct, 8, configIPClientIdLenMax * 2, null, null, oTClinetIdType[client_id_type] != "HEX" ? true : false);
+    var hostname_in = addInputCell(tr, hostname, "cr", "if_hostname_" + if_ct, 8, configIPHostnameLenMax, null, null, dhcp ? false : true);
+    var tout_in = addInputCell(tr, tout, "c", "if_tout_" + if_ct, 10);
+    if (cur && dhcp) {
+        var cur_in = addInputCell(tr, cur, "c", "cur_" + if_ct, 10);
+        cur_in.setAttribute("readonly", true);
+    } else {
+        addTextCell(tr, "", "");
+    }
+    var addr_in = addInputCell(tr, addr, "c", "if_addr_" + if_ct, 15);
+    var mask_in = addInputCell(tr, mask, "c", "if_mask_" + if_ct, 2);
+    dhcp_in.onchange = function () { client_id_type_in.disabled = hostname_in.disabled = tout_in.disabled = !dhcp_in.checked; if (dhcp_in.checked) { changeClientIdType(client_id_type_in); } else { client_id_if_mac_in.disabled = client_id_ascii_in.disabled = client_id_hex_in.disabled = true; } };
+    tout_in.disabled = !dhcp;
+    if (configDHCPv6Support) {
+        var dhcp6_in = addCheckBoxCell(tr, dhcp6, "c", "if_dhcp6_" + if_ct);
+        var rpcmt_in = addCheckBoxCell(tr, rpcmt, "c", "if_rpcmt_" + if_ct);
+        dhcp6_in.onchange = function () { rpcmt_in.disabled = !dhcp6_in.checked; };
+        rpcmt_in.disabled = !dhcp6;
+        if (curr6) {
+            var curr6_in = addInputCell(tr, curr6, "c", "curr6_" + if_ct, 20);
+            curr6_in.setAttribute("readonly", true);
+        } else {
+            addTextCell(tr, "", "");
+        }
+    }
+    if (configIPv6Support) {
+        var addr6_in = addInputCell(tr, addr6, "c", "if_addr6_" + if_ct, 20);
+        var mask6_in = addInputCell(tr, mask6, "c", "if_mask6_" + if_ct, 2);
+    }
+    frag.appendChild(tr); // Add row to fragment
+    if_ct++;
+}
+
+function AddNewInterface() {
+    var frag = document.createDocumentFragment();
+    addInterfaceRow(if_ct, frag);
+    document.getElementById('tbody_if').appendChild(frag);
+    UpdateInterfaces();
+}
+
+function UpdateRoutes() {
+    var ct = DoStripe('tbody_rt').length;
+    $('add_rt').disabled = (ct >= max_routes);
+}
+
+function addRouteRow(index, frag, values) {
+    var tr = CreateStyledElement("tr", "config");
+    var addr, mask, dest, nhvid, dist;
+    var iclass = "c";
+    if (values) {
+        addr = values[0];
+        mask = values[1];
+        dest = values[2];
+        nhvid = values[3];
+        dist = values[4];
+        addCheckBoxCell(tr, 0, "c", "rt_del_" + rt_ct);
+        addTextCell(tr, addr, "cr");
+        addTextCell(tr, mask, "c");
+        addTextCell(tr, dest, "cr");
+        addTextCell(tr, nhvid, "cr");
+        addTextCell(tr, dist, "cr");
+        iclass = "hidden";
+    } else {
+        addr = mask = dest = "";
+        nhvid = 0;
+        dist = 1;
+        var button = addButtonCell(tr, "Delete", "c", "ifdel_" + rt_ct);
+        button.onclick = function () { tr.destroy();
+            UpdateRoutes(); };
+    }
+    var net_in = addInputCell(tr, addr, iclass, "rt_net_" + rt_ct, 15);
+    var mask_in = addInputCell(tr, mask, iclass, "rt_mask_" + rt_ct, 2);
+    var dest_in = addInputCell(tr, dest, iclass, "rt_dest_" + rt_ct, 15);
+    var nhvid_in = addInputCell(tr, nhvid, iclass, "rt_nhvid_" + rt_ct, 4);
+    var dist_in = addInputCell(tr, dist, iclass, "rt_dist_" + rt_ct, 3);
+    frag.appendChild(tr); // Add row to fragment
+    rt_ct++;
+}
+
+function AddNewRoute() {
+    var frag = document.createDocumentFragment();
+    addRouteRow(rt_ct, frag);
+    document.getElementById('tbody_rt').appendChild(frag);
+    UpdateRoutes();
+}
+
+function processList(values, rowFunc, id) {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < values.length; i++) {
+        if (values[i]) {
+            var ival = values[i].split("#");
+            rowFunc(i, frag, ival);
+        }
+    }
+    var tbody = document.getElementById(id);
+    clearChildNodes(tbody);
+    tbody.appendChild(frag);
+}
+
+function processUpdateData(data) {
+    var cfg = data.split(",");
+    if (cfg[0]) {
+        processGlobal(cfg[0].split(";"));
+    }
+    if_ct = 0;
+    ipInterfaceConfig = null; // Initialize IP interface configuration
+    if (cfg[1]) {
+        ipInterfaceConfig = cfg[1].split("|");
+        processList(ipInterfaceConfig, addInterfaceRow, 'tbody_if');
+        UpdateInterfaces();
+    }
+    rt_ct = 0;
+    if (cfg[2]) {
+        processList(cfg[2].split("|"), addRouteRow, 'tbody_rt');
+        UpdateRoutes();
+    }
+}
+
+function processJsonUpdate(recv_json) {
+    // Stop interface status polling time
+    clearTimeout(timerID);
+
+    // Save the link-up interfaces
+    var linkUpInterfaces = []; // For dynamic table
+    recv_json.each(function (data) {
+        if (data.val.up) {
+            linkUpInterfaces.push(data.key);
+        }
+    }, this);
+
+    // Alert message when IP interface link status is 'UP' but IPv4 address
+    // status is not found in this interface. It may due to the duplicated
+    // address occurred. (RFC5227 - IPv4 Address Conflict Detection)
+    for (var idx = 0; idx < ipInterfaceConfig.length; ++idx) {
+        var ip_intf_conf = ipInterfaceConfig[idx].split("#");
+        var vlan_id = ip_intf_conf[0];
+        var ipv4_addr_conf = ip_intf_conf[8];
+        var ipv4_addr_status = ip_intf_conf[10];
+        if (linkUpInterfaces.indexOf("VLAN " + vlan_id) >= 0 && /* Link-up */
+            ipv4_addr_conf !== "" && /* IP address is actually (attempted) assigned */
+            ipv4_addr_status === "" /* but no current IP address */ ) {
+            alert("Warning!\n\nThe IPv4 address " + ipv4_addr_conf +
+                " is inactive on interface VLAN " + vlan_id +
+                ". Check the syslog to see if an address conflict has occurred. " +
+                "Re-configure the setting again after the conflict is solved.");
+        }
+    }
+}
+
+function processUpdate(req, ref) {
+    reset_data = req.responseText;
+    processUpdateData(reset_data);
+
+    // Get current IP link status iva JSON
+    if (timerID) {
+        clearTimeout(timerID);
+    } else {
+        timerID = setTimeout("requestJsonDoc('ip.status.interface.link.get', null, processJsonUpdate);", 3000);
+    }
+}
+
+function requestUpdate() {
+    UpdateIdSelect('ip_mode', modeT, modeV, 0);
+    loadXMLDoc("/config/ip2_config", processUpdate, null);
+}
+
+    </script>
+</head>
+
+<body class="content" onload="processResponseErrMsg();requestUpdate();">
+    <h1>IP Configuration</h1>
+    <form name="config_form" method="POST" action="/config/ip2_config" onsubmit="return checkForm();">
+        <table summary="Global, DNS settings" class="config hasdns">
+            <tbody>
+                <tr class="config hasdns hidden">
+                    <td class="param_label">Domain Name</td>
+                    <td class="cl">
+                        <select id="ip_dns_domain_type" name="ip_dns_domain_type"></select>
+                        <input type="text" id="ip_dns_domain_value" name="ip_dns_domain_value" size="40" maxlength="254">
+                    </td>
+                </tr>
+                <tr class="config hidden">
+                    <td class="param_label">Mode</td>
+                    <td class="cl">
+                        <select id="ip_mode" name="ip_mode"></select>
+                    </td>
+                </tr>
+                <tr class="config hasdns hidden">
+                    <td class="param_label">DNS Server 0</td>
+                    <td class="cl">
+                        <select id="ip_dns_src_0" name="ip_dns_src_0"></select>
+                        <input type="text" id="ip_dns_value_0" name="ip_dns_value_0" size="40" maxlength="40">
+                    </td>
+                </tr>
+                <tr class="config hasdns hidden">
+                    <td class="param_label">DNS Server 1</td>
+                    <td class="cl">
+                        <select id="ip_dns_src_1" name="ip_dns_src_1"></select>
+                        <input type="text" id="ip_dns_value_1" name="ip_dns_value_1" size="40" maxlength="40">
+                    </td>
+                </tr>
+                <tr class="config hasdns hidden">
+                    <td class="param_label">DNS Server 2</td>
+                    <td class="cl">
+                        <select id="ip_dns_src_2" name="ip_dns_src_2"></select>
+                        <input type="text" id="ip_dns_value_2" name="ip_dns_value_2" size="40" maxlength="40">
+                    </td>
+                </tr>
+                <tr class="config hasdns hidden">
+                    <td class="param_label">DNS Proxy</td>
+                    <td class="cl">
+                        <input type="checkbox" id="ip_dns_proxy" name="ip_dns_proxy">
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <h1>IP Interfaces</h1>
+        <table summary="IP Interfaces" class="config">
+            <thead>
+                <tr class="display_header">
+                    <th rowspan="3">Delete</th>
+                    <th rowspan="3">IF</th>
+                    <th colspan="8">DHCPv4</th>
+                    <th colspan="2">IPv4</th>
+                    <th class="dhcp6 hidden" colspan="3">DHCPv6</th>
+                    <th class="ipv6 hidden" colspan="2">IPv6</th>
+                </tr>
+                <tr class="display_header">
+                    <th rowspan="2">Enable</th>
+                    <th colspan="4">Client ID</th>
+                    <th rowspan="2">Hostname</th>
+                    <th rowspan="2">Fallback</th>
+                    <th rowspan="2">Current Lease</th>
+                    <th rowspan="2">Address</th>
+                    <th rowspan="2">Mask Length</th>
+                    <th class="dhcp6 hidden" rowspan="2">Enable</th>
+                    <th class="dhcp6 hidden" rowspan="2">Rapid Commit</th>
+                    <th class="dhcp6 hidden" rowspan="2">Current Lease</th>
+                    <th class="ipv6 hidden" rowspan="2">Address</th>
+                    <th class="ipv6 hidden" rowspan="2">Mask Length</th>
+                </tr>
+                <tr class="display_header">
+                    <th>Type</th>
+                    <th>IfMac</th>
+                    <th>ASCII</th>
+                    <th>HEX</th>
+                </tr>
+            </thead>
+            <tbody id="tbody_if">
+            </tbody>
+        </table>
+        <p>
+            <input type="button" id="add_if" value="Add Interface" onclick="AddNewInterface()">
+        </p>
+        <h1>IP Routes</h1>
+        <table summary="IP Routes" class="config">
+            <thead>
+                <tr class="display_header">
+                    <th>Delete</th>
+                    <th>Network</th>
+                    <th>Mask Length</th>
+                    <th>Gateway</th>
+                    <th>Next Hop VLAN (IPv6)</th>
+                    <th>Distance</th>
+                </tr>
+            </thead>
+            <tbody id="tbody_rt">
+            </tbody>
+        </table>
+        <p>
+            <input type="button" id="add_rt" value="Add Route" onclick="AddNewRoute()">
+        </p>
+        <p>
+            <input type="submit" value="Save">
+            <input type="reset" value="Reset" onClick="processUpdateData(reset_data); this.blur(); ">
+        </p>
+        <input id="if_ct" name="if_ct" type="hidden">
+        <input id="rt_ct" name="rt_ct" type="hidden">
+    </form>
+</body>
+
+</html>
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

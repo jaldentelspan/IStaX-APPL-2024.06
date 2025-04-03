@@ -1,0 +1,438 @@
+# Copyright (c) 2006-2021 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_DDMI)
+
+INCLUDE_BEGIN
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                         */
+#include "misc_api.h"               /* For uport2iport(), iport2uport()            */
+#include "port_api.h"               /* For port_sfp_transceiver_to_txt()           */
+#include "ddmi_api.h"               /* For ourselves                               */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_iterator_ifindex_front_port() */
+#include "icli_porting_util.h"
+
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define DDMI_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// DDMI_ICFG_global_conf_print()
+/******************************************************************************/
+static mesa_rc DDMI_ICFG_global_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ddmi_global_conf_t conf, default_conf;
+
+    VTSS_RC(vtss_appl_ddmi_global_conf_default_get(&default_conf));
+    VTSS_RC(vtss_appl_ddmi_global_conf_get(&conf));
+
+    if (req->all_defaults || conf.admin_enable != default_conf.admin_enable) {
+        return vtss_icfg_printf(result, "%s%s\n", conf.admin_enable ? "" : "no ", "ddmi");
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// ddmi_icfg_init()
+/******************************************************************************/
+mesa_rc ddmi_icfg_init(void)
+{
+    // Use "show running-config feature ddmi" to short DDMI settings
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_DDMI_GLOBAL_CONF, "ddmi", DDMI_ICFG_global_conf_print));
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+/******************************************************************************/
+// ddmi_icli_itr_t
+/******************************************************************************/
+typedef struct {
+    // Input set by caller
+    bool                         need_global_conf;
+    bool                         need_status;
+    icli_stack_port_range_t      *port_list;
+
+    // Administered internally and may be used by caller
+    bool                         not_first;
+    bool                         has_more_than_one_port;
+    port_iter_t                  pit;
+    vtss_ifindex_t               ifindex;
+    vtss_appl_ddmi_global_conf_t global_conf;
+    vtss_appl_ddmi_port_status_t status;
+} ddmi_icli_itr_t;
+
+/******************************************************************************/
+// DDMI_ICLI_print_error()
+/******************************************************************************/
+static mesa_rc DDMI_ICLI_print_error(ddmi_icli_itr_t &itr, const char *txt, mesa_rc rc)
+{
+    char if_str[40];
+
+    if (rc == VTSS_RC_OK) {
+        return rc;
+    }
+
+    if (itr.has_more_than_one_port) {
+        (void)icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str);
+        if (txt && txt[0] != '\0') {
+            icli_session_self_printf("%% %s: %s: %s\n", if_str, txt, error_txt(rc));
+        } else {
+            icli_session_self_printf("%% %s: %s\n", if_str, error_txt(rc));
+        }
+    } else {
+        if (txt && txt[0] != '\0') {
+            icli_session_self_printf("%% %s: %s\n", txt, error_txt(rc));
+        } else {
+            icli_session_self_printf("%% %s\n", error_txt(rc));
+        }
+    }
+
+    return rc;
+}
+
+/******************************************************************************/
+// DDMI_ICLI_itr()
+/******************************************************************************/
+static bool DDMI_ICLI_itr(ddmi_icli_itr_t &itr)
+{
+    mesa_rc rc;
+
+    if (!itr.not_first) {
+        if ((rc = icli_port_iter_init(&itr.pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL_CPU)) != VTSS_RC_OK) {
+            (void)DDMI_ICLI_print_error(itr, "Unable to initialize port iterator", rc);
+            return false;
+        }
+
+        // Figure out whether this iterator spans more than one port.
+        if (itr.port_list) {
+            if (itr.port_list->cnt == 0) {
+                // No iteration done. Not sure we can get here.
+                return false;
+            } else if (itr.port_list->cnt == 1) {
+                if (itr.port_list->switch_range[0].port_cnt > 1) {
+                    itr.has_more_than_one_port = true;
+                }
+            } else {
+                itr.has_more_than_one_port = true;
+            }
+        } else {
+            // If port_list is NULL, ICLI gets all ports.
+            itr.has_more_than_one_port = true;
+        }
+
+        itr.not_first = true;
+
+        if (itr.need_global_conf) {
+            if ((rc = vtss_appl_ddmi_global_conf_get(&itr.global_conf)) != VTSS_RC_OK) {
+                (void)DDMI_ICLI_print_error(itr, "Unable to get global configuration", rc);
+                return false;
+            }
+        }
+    }
+
+    while (icli_port_iter_getnext(&itr.pit, itr.port_list)) {
+        if ((rc = vtss_ifindex_from_port(VTSS_ISID_START, itr.pit.iport, &itr.ifindex)) != VTSS_RC_OK) {
+            (void)DDMI_ICLI_print_error(itr, "Unable to convert port to interface index", rc);
+            continue;
+        }
+
+        if (itr.need_status) {
+            if ((rc = vtss_appl_ddmi_port_status_get(itr.ifindex, &itr.status)) != VTSS_RC_OK) {
+                (void)DDMI_ICLI_print_error(itr, "Unable to get port status", rc);
+                continue;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// DDMI_ICLI_monitor_status_to_str()
+/******************************************************************************/
+static const char *DDMI_ICLI_monitor_status_to_str(char *buf, const char *type_str, vtss_appl_ddmi_monitor_status_t &monitor_status)
+{
+    sprintf(buf,  "%-15s %10s %-13s %12s %12s %12s %12s\n",
+            type_str,
+            monitor_status.current,
+            ddmi_monitor_state_to_txt(monitor_status.state),
+            monitor_status.warn_lo,
+            monitor_status.warn_hi,
+            monitor_status.alarm_lo,
+            monitor_status.alarm_hi);
+
+    return buf;
+}
+
+/******************************************************************************/
+// DDMI_ICLI_show_port_status()
+/******************************************************************************/
+static void DDMI_ICLI_show_port_status(uint32_t session_id, ddmi_icli_itr_t &itr)
+{
+    char      buf[200];
+    const int width = 14;
+
+    ICLI_PRINTF("%s:\n", icli_port_info_txt(VTSS_USID_START, itr.pit.uport, buf));
+
+    if (!itr.status.a0_supported) {
+        ICLI_PRINTF("%% DDMI not supported on this port\n\n");
+        return;
+    }
+
+    if (!itr.status.sfp_detected) {
+        ICLI_PRINTF("%% No SFP module is detected\n\n");
+        return;
+    }
+
+    ICLI_PRINTF(" Transceiver Information:\n");
+    ICLI_PRINTF("  %-*s %s\n", width, "Vendor:",        itr.status.vendor);
+    ICLI_PRINTF("  %-*s %s\n", width, "Part Number:",   itr.status.part_number);
+    ICLI_PRINTF("  %-*s %s\n", width, "Serial Number:", itr.status.serial_number);
+    ICLI_PRINTF("  %-*s %s\n", width, "Revision:",      itr.status.revision);
+    ICLI_PRINTF("  %-*s %s\n", width, "Date Code:",     itr.status.date_code);
+    ICLI_PRINTF("  %-*s %s\n", width, "Transceiver:",   port_sfp_transceiver_to_txt(itr.status.sfp_type));
+    ICLI_PRINTF("\n");
+
+    ICLI_PRINTF(" DDMI Information:\n");
+
+    if (!itr.status.a2_supported) {
+        ICLI_PRINTF("%% SFP module doesn't support DDMI\n\n");
+        return;
+    }
+
+    ICLI_PRINTF("  Type            Current    Alarm/Warning Low Warning  High Warning Low Alarm    High Alarm\n");
+    ICLI_PRINTF("                                           Threshold    Threshold    Threshold    Threshold\n");
+    ICLI_PRINTF("  --------------- ---------- ------------- ------------ ------------ ------------ ------------\n");
+
+    ICLI_PRINTF("  %s", DDMI_ICLI_monitor_status_to_str(buf, "Temperature (C)", itr.status.monitor_status[VTSS_APPL_DDMI_MONITOR_TYPE_TEMPERATURE]));
+    ICLI_PRINTF("  %s", DDMI_ICLI_monitor_status_to_str(buf, "Voltage (V)",     itr.status.monitor_status[VTSS_APPL_DDMI_MONITOR_TYPE_VOLTAGE]));
+    ICLI_PRINTF("  %s", DDMI_ICLI_monitor_status_to_str(buf, "Tx Bias (mA)",    itr.status.monitor_status[VTSS_APPL_DDMI_MONITOR_TYPE_TX_BIAS]));
+    ICLI_PRINTF("  %s", DDMI_ICLI_monitor_status_to_str(buf, "Tx Power (mW)",   itr.status.monitor_status[VTSS_APPL_DDMI_MONITOR_TYPE_TX_POWER]));
+    ICLI_PRINTF("  %s", DDMI_ICLI_monitor_status_to_str(buf, "Rx Power (mW)",   itr.status.monitor_status[VTSS_APPL_DDMI_MONITOR_TYPE_RX_POWER]));
+    ICLI_PRINTF("\n");
+}
+
+FUNCTION_END
+
+HELP_DDMI = Digital Diagnostics Monitoring Interface
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ddmi
+
+DOC_CMD_DESC    = Enable DDMI
+DOC_CMD_DEFAULT = DDMI is disabled.
+DOC_CMD_USAGE   = Enable DDMI.
+DOC_CMD_EXAMPLE = This example shows how to enable DDMI:
+DOC_CMD_EXAMPLE = # conf t
+DOC_CMD_EXAMPLE = (config)# ddmi
+
+NO_FORM_DOC_CMD_DESC    = Disable DDMI.
+NO_FORM_DOC_CMD_DEFAULT = DDMI is disabled.
+NO_FORM_DOC_CMD_USAGE   = Disable the DDMI.
+NO_FORM_DOC_CMD_EXAMPLE = This example shows how to disable the DDMI:
+NO_FORM_DOC_CMD_EXAMPLE = # conf t
+NO_FORM_DOC_CMD_EXAMPLE = (config)# no ddmi
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+MODE_VAR =
+RUNTIME =
+CMD_VAR =
+
+HELP = ##HELP_DDMI
+
+VARIABLE_BEGIN
+    vtss_appl_ddmi_global_conf_t conf = {};
+VARIABLE_END
+
+CODE_BEGIN
+    conf.admin_enable = true;
+    DDMI_PRINT_RC(vtss_appl_ddmi_global_conf_set(&conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_ddmi_global_conf_t conf = {};
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    conf.admin_enable = false;
+    DDMI_PRINT_RC(vtss_appl_ddmi_global_conf_set(&conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = show interface <port_type_list> transceiver
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = port_list
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_INTERFACE
+HELP      = ##ICLI_HELP_PORT_TYPE_LIST
+HELP      = Show SFP transceiver properties
+
+VARIABLE_BEGIN
+    ddmi_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list        = port_list;
+    itr.need_global_conf = true;
+    itr.need_status      = true;
+
+    while (DDMI_ICLI_itr(itr)) {
+        if (!itr.global_conf.admin_enable) {
+            ICLI_PRINTF("%% DDMI is disabled.\n");
+            return ICLI_RC_OK;
+        }
+
+        DDMI_ICLI_show_port_status(session_id, itr);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = show ddmi
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR   =
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = DDMI configuration
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    vtss_appl_ddmi_global_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    DDMI_PRINT_RC(vtss_appl_ddmi_global_conf_get(&conf));
+
+    ICLI_PRINTF("Current mode: ");
+    if (conf.admin_enable) {
+        ICLI_PRINTF("Enabled\n");
+    } else {
+        ICLI_PRINTF("Disabled\n");
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = debug ddmi interface <port_type_list> {temperature | voltage | bias | tx-power | rx-power} {none | low-warn | high-warn | low-alarm | high-alarm}
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+FUNC_NAME = icli_debug_ddmi_state
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = port_list
+CMD_VAR   = has_temperature
+CMD_VAR   = has_voltage
+CMD_VAR   = has_bias
+CMD_VAR   = has_tx_power
+CMD_VAR   =
+CMD_VAR   = has_none
+CMD_VAR   = has_low_warn
+CMD_VAR   = has_high_warn
+CMD_VAR   = has_low_alarm
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+HELP      =
+HELP      =
+HELP      =
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    ddmi_icli_itr_t                itr = {};
+    vtss_appl_ddmi_monitor_type_t  type;
+    vtss_appl_ddmi_monitor_state_t state;
+    char                           buf[20];
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list        = port_list;
+    itr.need_global_conf = true;
+
+    type = has_temperature ? VTSS_APPL_DDMI_MONITOR_TYPE_TEMPERATURE :
+           has_voltage     ? VTSS_APPL_DDMI_MONITOR_TYPE_VOLTAGE     :
+           has_bias        ? VTSS_APPL_DDMI_MONITOR_TYPE_TX_BIAS     :
+           has_tx_power    ? VTSS_APPL_DDMI_MONITOR_TYPE_TX_POWER    :
+                             VTSS_APPL_DDMI_MONITOR_TYPE_RX_POWER;
+
+    state = has_none      ? VTSS_APPL_DDMI_MONITOR_STATE_NONE     :
+            has_low_warn  ? VTSS_APPL_DDMI_MONITOR_STATE_WARN_LO  :
+            has_high_warn ? VTSS_APPL_DDMI_MONITOR_STATE_WARN_HI  :
+            has_low_alarm ? VTSS_APPL_DDMI_MONITOR_STATE_ALARM_LO :
+                            VTSS_APPL_DDMI_MONITOR_STATE_ALARM_HI;
+
+    while (DDMI_ICLI_itr(itr)) {
+        if (!itr.global_conf.admin_enable) {
+            ICLI_PRINTF("%% DDMI is disabled.\n");
+            return ICLI_RC_OK;
+        }
+
+        mesa_rc ddmi_debug_monitor_state_set(mesa_port_no_t port_no, vtss_appl_ddmi_monitor_type_t type, vtss_appl_ddmi_monitor_state_t state);
+
+        ICLI_PRINTF("ddmi_debug_monitor_state_set(%s, type = %d, state = %s)\n", icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, buf), type, ddmi_monitor_state_to_txt(state));
+        if (ddmi_debug_monitor_state_set(itr.pit.iport, type, state) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Fail\n");
+        }
+    }
+CODE_END
+CMD_END
+

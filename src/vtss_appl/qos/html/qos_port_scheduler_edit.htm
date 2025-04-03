@@ -1,0 +1,1015 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ 
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+ 
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>QoS Egress Port Scheduler and Shaper Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/qos_util.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_qos_port_scheduler_edit.htm";
+
+// Positioning definitions
+var headerTop                  =   0;  // Top position of headers
+var queueTop                   =  75;  // Top position of first queue
+var queueTopOffset             =  50;  // Top offset between queues
+var optionsTopOffset           =  10;  // Top offset between shaper and options
+var portShaperTop              = 260;  // Top position of port shaper
+
+var queueShaperHeaderLeft      =   0;  // Left position of "Queue Shaper" header
+var queueShaperPreWidth        =  30;  // Space before first queue shaper object
+var queueShaperEnabledWidth    =  20;  // Width of Enable
+var queueShaperRateWidth       =  60;  // Width of Rate
+var queueShaperUnitWidth       =  60;  // Width of Unit
+var queueShaperModeWidth       =  70;  // Width of Mode
+var queueShaperExcessWidth     =  70;  // Width of Excess
+var queueShaperCreditWidth     =  60;  // Width of Credit
+var queueShaperPostWidth       =  10;  // Space after last queue shaper object
+
+var queueSchedulerHeaderLeft   =   0;  // Runtime! Left position of "Queue Scheduler" header
+var queueSchedulerPreWidth     =   3;  // Space before first queue scheduler object
+var queueSchedulerCTWidth      = 110;  // Width of Cut Through
+var queueSchedulerFPWidth      = 100;  // Width of Frame Preemption
+var queueSchedulerWeightWidth  =  70;  // Width of Weight
+var queueSchedulerPercentWidth =  70;  // Width of Percent
+var queueSchedulerPostWidth    =   0;  // Space after last queue scheduler object
+
+var dwrrEllipseLeft            =   0;  // Runtime! Left position of DWRR ellipse
+var dwrrEllipseWidth           =  60;  // Width of dwrrElipse
+var strictEllipseLeft          =   0;  // Runtime! Left position of STRICT ellipse
+var strictEllipseWidth         =  40;  // Width of strictElipse
+
+var portShaperHeaderLeft       =   0;  // Runtime! Left position of "Port Shaper" header
+var portShaperPreWidth         =  10;  // Space before first port shaper object
+var portShaperEnabledWidth     =  20;  // Width of Enable
+var portShaperRateWidth        =  60;  // Width of Rate
+var portShaperUnitWidth        =  60;  // Width of Unit
+var portShaperModeWidth        =  70;  // Width of Mode
+
+// Global configuration
+var queueWeightData;
+var queueWeightCnt;
+
+var queueShaperData;
+var queueShaperCnt;
+var queueExcessSupport;
+var queueCreditSupport;
+
+var queueCutThroughSupport;
+var queueCutThroughData;
+
+var framePreemptionSupport;
+var framePreemptionData;
+
+var queueWeightCntSupport;
+
+var portShaperData;
+var portShaperDecouple;
+
+var shaperRateTypeSupport;
+
+var frameBasedEgressQueueShaperSupport;
+
+var pageArgs = searchArgs(window.location.search);
+
+var selectedPort = configPortMin; // The default selected port
+if (pageArgs.port) {
+    selectedPort = parseInt(pageArgs.port, 10);
+}
+
+var oTRateUnit = ["kbps", "Mbps"];
+var oVRateUnit = [0, 1]; /* Must correspond to the enum returned by qos_display_rate_unit() */
+
+var oTMode = Array("Line", "Data");
+var oVMode = genArrayInt(0, 1);
+
+var svgNS = "http://www.w3.org/2000/svg";
+
+function creditEnableDisable ()
+{
+    var elem = document.getElementById(this.id.replace("credit", "excess"));
+    if (elem) {
+        elem.disabled = this.checked;
+    }
+}
+
+function excessEnableDisable ()
+{
+    var elem = document.getElementById(this.id.replace("excess", "credit"));
+    if (elem) {
+        elem.disabled = this.checked;
+    }
+}
+
+function shaperEnableDisable()
+{
+    document.getElementById(this.id.replace("enable", "display_rate")).disabled = !this.checked;
+    document.getElementById(this.id.replace("enable", "display_unit")).disabled = !this.checked;
+    var elem = document.getElementById(this.id.replace("enable", "excess"));
+    if (elem) { // This element is only present for queue shapers and not for the port shaper
+        elem.disabled = !this.checked;
+    }
+    var elem2 = document.getElementById(this.id.replace("enable", "mode"));
+    if (elem2) {
+        elem2.disabled = !this.checked;
+    }
+    var elem3 = document.getElementById(this.id.replace("enable", "credit"));
+    if (elem3) { // This element is only present for queue shapers and not for the port shaper
+        elem3.disabled = !this.checked;
+    }
+
+}
+
+function updatePct()
+{
+    var i;
+    var weight = [];
+    var pct    = [];
+
+    for (i = 0; i < queueWeightCnt; i++) {
+        weight[i] = parseInt(document.getElementById("weight_" + i).value, 10);
+    }
+
+    if (qos_weight2pct(weight, 5, pct)) {
+        for (i = 0; i < queueWeightCnt; i++) {
+            if (pct < 10) {
+                UpdateId("pct_" + i, "&nbsp;" + pct[i] + "%");
+            } else {
+                UpdateId("pct_" + i, pct[i] + "%");
+            }
+        }
+    } else {
+        for (i = 0; i < queueWeightCnt; i++) {
+            UpdateId("pct_" + i, "");
+        }
+    }
+}
+
+function setAbsolutePosition(elem, top, left)
+{
+    elem.style.position = "absolute";
+    elem.style.zIndex = 2;
+    elem.style.top = top + "px";
+    elem.style.left = left + "px";
+}
+
+function addAbsoluteTextCell(frag, value, name, top, left)
+{
+    var elem = document.createElement("div");
+    elem.id = elem.name = name;
+    if (value) {
+        elem.appendChild(document.createTextNode(value));
+    }
+    setAbsolutePosition(elem, top, left);
+    frag.appendChild(elem);
+    return elem;
+}
+
+function addAbsoluteInputCell(frag, value, name, size, maxSize, top, left)
+{
+    var elem = document.createElement("input");
+    elem.id = elem.name = name;
+    elem.style.width = size + "em";
+    elem.setAttribute("maxLength", maxSize);
+    elem.setAttribute("value", value);
+    elem.setAttribute("defaultValue", value);
+    elem.defaultValue = value; // Needed for MSIE 8
+    setAbsolutePosition(elem, top, left);
+    frag.appendChild(elem);
+    return elem;
+}
+
+function addAbsoluteCheckBoxCell(frag, value, name, top, left)
+{
+    var elem = document.createElement("input");
+    elem.type = "checkbox";
+    elem.id = elem.name = name;
+    if (value) {
+        elem.setAttribute("checked", true); // FF
+        elem.setAttribute("defaultChecked", true); // MSIE+W3C
+    }
+    setAbsolutePosition(elem, top, left);
+    frag.appendChild(elem);
+    return elem;
+}
+
+function addAbsoluteSelectCell(frag, oT, oV, value, name, top, left)
+{
+    var elem = document.createElement("select");
+    elem.id = elem.name = name;
+    for (var x = 0; x < oT.length; x++) {
+        var optionItem = document.createElement('option');
+        optionItem.value = oV[x];
+        if(value == optionItem.value) {
+            optionItem.setAttribute("selected", true);
+            optionItem.setAttribute("defaultSelected", true);
+            optionItem.defaultSelected = true; // Needed for MSIE 8
+        }
+        optionItem.appendChild(document.createTextNode(oT[x]));
+        elem.appendChild(optionItem);
+    }
+    setAbsolutePosition(elem, top, left);
+    frag.appendChild(elem);
+    return elem;
+}
+
+function addAbsoluteHeader(frag, title, value, top, left)
+{
+    var thead = document.createElement("thead");
+    var tr = document.createElement("tr");
+    addTextHeaderCell(tr, title, "cl", value.length);
+    thead.appendChild(tr);
+    tr = document.createElement("tr");
+    for (var i = 0; i < value.length; i++) {
+        addTextHeaderCell(tr, value[i], "cl");
+    }
+    thead.appendChild(tr);
+    var table = CreateStyledElement("table", "config");
+    table.appendChild(thead);
+    setAbsolutePosition(table, top, left);
+    frag.appendChild(table);
+}
+
+function addSVGScheduler(svg, dwrr_cnt)
+{
+    var strictEllipseYRadius = configQosQueueCount * queueTopOffset / 2;
+    var strictEllipseY = queueTop + (configQosQueueCount / 2 - 0.5) * queueTopOffset;
+
+    if (dwrr_cnt > 0) {
+        var dwrrEllipseYRadius = dwrr_cnt * queueTopOffset / 2;
+        var dwrrEllipseY = queueTop + (configQosQueueCount - 0.5) * queueTopOffset - dwrrEllipseYRadius;
+        var arrowX = strictEllipseLeft + 20 - Math.sqrt(1-Math.pow((dwrrEllipseYRadius - strictEllipseYRadius)/strictEllipseYRadius, 2)) * 20 - 5;
+        
+        var dwrrArrowPath = document.createElementNS(svgNS, "path");
+        if (dwrr_cnt < 8) {
+            dwrrArrowPath.setAttribute("d", "M" + (dwrrEllipseLeft + 40) + "," + dwrrEllipseY + " L" + arrowX + "," + dwrrEllipseY);
+        } else {
+            if (portShaperDecouple) {
+                dwrrArrowPath.setAttribute("d", "M" + (dwrrEllipseLeft + 40) + "," + dwrrEllipseY + " L" + (strictEllipseLeft + 185) + "," + dwrrEllipseY);
+            } else {
+                dwrrArrowPath.setAttribute("d", "M" + (dwrrEllipseLeft + 40) + "," + dwrrEllipseY + " L" + (strictEllipseLeft + 45) + "," + dwrrEllipseY);
+            }
+        }
+        dwrrArrowPath.setAttribute("style", "marker-end:url(#arrow)");
+        svg.appendChild(dwrrArrowPath);
+        
+        var dwrrEllipse = document.createElementNS(svgNS, "ellipse");
+        dwrrEllipse.setAttribute("cx", dwrrEllipseLeft + 20);
+        dwrrEllipse.setAttribute("cy", dwrrEllipseY);
+        dwrrEllipse.setAttribute("rx", "20");
+        dwrrEllipse.setAttribute("ry", dwrrEllipseYRadius);
+        dwrrEllipse.setAttribute("style", "fill:#abbdcb;stroke-width:2");
+        svg.appendChild(dwrrEllipse);
+        
+        var dwrrText = document.createElementNS(svgNS, "text");
+        dwrrText.setAttribute("x", dwrrEllipseLeft + 20);
+        dwrrText.setAttribute("y", dwrrEllipseY);
+        dwrrText.setAttribute("style", "text-anchor:middle;font-size:11pt;font-weight:bold;stroke-width:0");
+        
+        var dwrrTextArray = "DWRR".split("");
+        for (i = 0; i < dwrrTextArray.length; i++) {
+            var dwrrTextTspan = document.createElementNS(svgNS, "tspan");
+            dwrrTextTspan.setAttribute("x", dwrrEllipseLeft + 20);
+            dwrrTextTspan.setAttribute("y", dwrrEllipseY - (dwrrTextArray.length - 1) * 10 + i * 20);
+            dwrrTextTspan.appendChild(document.createTextNode(dwrrTextArray[i]));
+            dwrrText.appendChild(dwrrTextTspan);
+        }
+        svg.appendChild(dwrrText);
+    }
+    
+    if (dwrr_cnt < 8) {
+        var strictArrowPath = document.createElementNS(svgNS, "path");
+        if (portShaperDecouple) {
+            strictArrowPath.setAttribute("d", "M" + (strictEllipseLeft + 40) + "," + strictEllipseY + " L" + (strictEllipseLeft + 185) + "," + strictEllipseY);
+        } else {
+            strictArrowPath.setAttribute("d", "M" + (strictEllipseLeft + 40) + "," + strictEllipseY + " L" + (strictEllipseLeft + 45) + "," + strictEllipseY);
+        }
+        strictArrowPath.setAttribute("style", "marker-end:url(#arrow)");
+        svg.appendChild(strictArrowPath);
+    }
+    
+    if (!portShaperDecouple) {
+        var shaperArrowPath = document.createElementNS(svgNS, "path");
+        shaperArrowPath.setAttribute("d", "M" + (strictEllipseLeft + 70) + "," + strictEllipseY + " L" + (strictEllipseLeft + 185) + "," + strictEllipseY);
+        shaperArrowPath.setAttribute("style", "marker-end:url(#arrow)");
+        svg.appendChild(shaperArrowPath);
+        
+        var shaperCircle = document.createElementNS(svgNS, "circle");
+        shaperCircle.setAttribute("cx", strictEllipseLeft + 60);
+        shaperCircle.setAttribute("cy", strictEllipseY);
+        shaperCircle.setAttribute("r", "10");
+        shaperCircle.setAttribute("style", "fill:#abbdcb;stroke-width:2");
+        svg.appendChild(shaperCircle);
+        
+        var shaperText = document.createElementNS(svgNS, "text");
+        shaperText.setAttribute("x", strictEllipseLeft + 60);
+        shaperText.setAttribute("y", strictEllipseY);
+        shaperText.setAttribute("dy", ".35em");
+        shaperText.setAttribute("style", "text-anchor:middle;font-size:8pt;font-weight:bold;stroke-width:0");
+        shaperText.appendChild(document.createTextNode("S"));
+        svg.appendChild(shaperText);
+    }
+    
+    if (dwrr_cnt < 8) {
+        var strictEllipse = document.createElementNS(svgNS, "ellipse");
+        strictEllipse.setAttribute("cx", strictEllipseLeft + 20);
+        strictEllipse.setAttribute("cy", strictEllipseY);
+        strictEllipse.setAttribute("rx", "20");
+        strictEllipse.setAttribute("ry", strictEllipseYRadius);
+        strictEllipse.setAttribute("style", "fill:#abbdcb;stroke-width:2");
+        svg.appendChild(strictEllipse);
+    
+        var strictText = document.createElementNS(svgNS, "text");
+        strictText.setAttribute("x", strictEllipseLeft + 20);
+        strictText.setAttribute("y", strictEllipseY);
+        strictText.setAttribute("style", "text-anchor:middle;font-size:11pt;font-weight:bold;stroke-width:0");
+    
+        var strictTextArray = "STRICT".split("");
+        for (i = 0; i < strictTextArray.length; i++) {
+            var strictTextTspan = document.createElementNS(svgNS, "tspan");
+            strictTextTspan.setAttribute("x", strictEllipseLeft + 20);
+            strictTextTspan.setAttribute("y", strictEllipseY - (strictTextArray.length - 1) * 10 + i * 20);
+            strictTextTspan.appendChild(document.createTextNode(strictTextArray[i]));
+            strictText.appendChild(strictTextTspan);
+        }
+        svg.appendChild(strictText);
+    }
+}
+
+function addSVGQueue(svg, queue, dwrr_cnt, draw_shaper)
+{
+    var y = queueTop + (configQosQueueCount - queue - 1) * queueTopOffset;
+    
+    var arrowX;
+    var ellipseYRadius;
+    if (queue < dwrr_cnt) {
+        arrowX = dwrrEllipseLeft;
+        ellipseYRadius = dwrr_cnt * queueTopOffset / 2;
+    } else {
+        arrowX = strictEllipseLeft;
+        ellipseYRadius = configQosQueueCount * queueTopOffset / 2;
+    }
+    arrowX += 20 - Math.sqrt(1-Math.pow((queue * queueTopOffset + queueTopOffset / 2 - ellipseYRadius)/ellipseYRadius, 2)) * 20 - 5;
+
+    var queuePath = document.createElementNS(svgNS, "path");
+    queuePath.setAttribute("d", "M0," + (y - 10) + " L20," + (y - 10) + " L20," + (y + 10) + " L0 " + (y + 10));
+    queuePath.setAttribute("style", "fill:#abbdcb;stroke-width:2");
+    svg.appendChild(queuePath);
+    
+    var queueText = document.createElementNS(svgNS, "text");
+    queueText.setAttribute("x", "10");
+    queueText.setAttribute("y", y);
+    queueText.setAttribute("dy", ".35em");
+    queueText.setAttribute("style", "text-anchor:middle;font-size:8pt;font-weight:bold;stroke-width:0");
+    queueText.appendChild(document.createTextNode("Q" + queue));
+    svg.appendChild(queueText);
+    
+    var queueArrowPath;
+    if (draw_shaper) {
+    
+        queueArrowPath = document.createElementNS(svgNS, "path");
+        queueArrowPath.setAttribute("d", "M21," + y + " L25," + y);
+        queueArrowPath.setAttribute("style", "marker-end:url(#arrow)");
+        svg.appendChild(queueArrowPath);
+        
+        var shaperArrowPath = document.createElementNS(svgNS, "path");
+        shaperArrowPath.setAttribute("d", "M50," + y + " L" + arrowX + "," + y);
+        shaperArrowPath.setAttribute("style", "marker-end:url(#arrow)");
+        svg.appendChild(shaperArrowPath);
+        
+        var shaperCircle = document.createElementNS(svgNS, "circle");
+        shaperCircle.setAttribute("cx", "40");
+        shaperCircle.setAttribute("cy", y);
+        shaperCircle.setAttribute("r", "10");
+        shaperCircle.setAttribute("style", "fill:#abbdcb;stroke-width:2");
+        svg.appendChild(shaperCircle);
+        
+        var shaperText = document.createElementNS(svgNS, "text");
+        shaperText.setAttribute("x", "40");
+        shaperText.setAttribute("y", y);
+        shaperText.setAttribute("dy", ".35em");
+        shaperText.setAttribute("style", "text-anchor:middle;font-size:8pt;font-weight:bold;stroke-width:0");
+        shaperText.appendChild(document.createTextNode("S"));
+        svg.appendChild(shaperText);
+    
+    } else {
+    
+        queueArrowPath = document.createElementNS(svgNS, "path");
+        queueArrowPath.setAttribute("d", "M21," + y + " L" + arrowX + "," + y);
+        queueArrowPath.setAttribute("style", "marker-end:url(#arrow)");
+        svg.appendChild(queueArrowPath);
+        
+    }
+}
+
+function updateImage()
+{
+    var i;
+    var elem, table, tr;
+    var offset_top, offset_left;
+    
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("version", "1.1");
+    svg.setAttribute("width", "1100");
+    svg.setAttribute("height", "460");
+    svg.setAttribute("style", "stroke:black;stroke-width:1");
+    
+    var arrowPath = document.createElementNS(svgNS, "path");
+    arrowPath.setAttribute("d", "M0,0 L5,2.5 L0,5 Q1,2.5 0,0 z");
+    arrowPath.setAttribute("style", "stroke-width:0");
+    var arrowMarker = document.createElementNS(svgNS, "marker");
+    arrowMarker.setAttribute("orient", "auto");
+    arrowMarker.setAttribute("refX", "1");
+    arrowMarker.setAttribute("refY", "2.5");
+    arrowMarker.setAttribute("id", "arrow");
+    arrowMarker.setAttribute("markerWidth", "5");
+    arrowMarker.setAttribute("markerHeight", "5");
+    arrowMarker.appendChild(arrowPath);
+    var arrowDefs = document.createElementNS(svgNS, "defs");
+    arrowDefs.appendChild(arrowMarker);
+    svg.appendChild(arrowDefs);
+        
+    var container = document.createElement("div");        
+    container.id = "container";
+    container.style.position = "relative";
+    container.appendChild(svg);
+
+    var frag = document.createDocumentFragment();
+    
+    var shaper;
+    var header_queue_shaper = ["Enable", "Rate", "Unit"];
+
+    if (shaperRateTypeSupport && queueShaperCnt === 8) {
+        header_queue_shaper.push("Rate-type");
+    }
+
+    if (queueExcessSupport) {
+        header_queue_shaper.push("Excess");
+    }
+
+    if (queueCreditSupport) { 
+        header_queue_shaper.push("Credit");
+    }
+ 
+    addAbsoluteHeader(frag, "Queue Shaper", header_queue_shaper, headerTop, queueShaperHeaderLeft);
+
+    max_input_value = qos_rate_max(configQosQueueShaperBitRateMax, configQosQueueShaperFrameRateMax);
+    for (i = configQosQueueCount - 1; i >= configQosQueueCount - queueShaperCnt; i--) {
+        offset_left = queueShaperHeaderLeft + queueShaperPreWidth;
+        offset_top = queueTop + optionsTopOffset + queueTopOffset * (configQosQueueCount - i - 1);
+        shaper = queueShaperData[i - (configQosQueueCount - queueShaperCnt)].split("|");
+        elem = addAbsoluteCheckBoxCell(frag, parseInt(shaper[0], 10), "q_shaper_enable_" + i, offset_top, offset_left);
+        offset_left += queueShaperEnabledWidth;
+        elem.onclick = shaperEnableDisable;
+        // q_shaper_rate_x is the actual rate value that is transmitted between the webserver and the browser.
+        // It is not shown in the user interface.
+        addHiddenParam(frag, "q_shaper_rate_" + i, parseInt(shaper[1], 10));
+        // The purpose of q_shaper_display_rate_x and q_shaper_display_unit_x is to make the user interface a little more friendly.
+        // When the form is submitted, q_shaper_rate_x is recalculated from these two parameters.
+        elem = addAbsoluteInputCell(frag, qos_display_rate(parseInt(shaper[1], 10)), "q_shaper_display_rate_" + i, 3.8, max_input_value.toString(10).length, offset_top - 4, offset_left);
+        offset_left += queueShaperRateWidth;
+        if (!parseInt(shaper[0], 10)) {
+            elem.disabled = true;
+        }
+
+        elem = addAbsoluteSelectCell(frag, oTRateUnit, oVRateUnit, qos_display_rate_unit(parseInt(shaper[1], 10), parseInt(shaper[2], 10)==2),  "q_shaper_display_unit_" + i, offset_top - 3, offset_left);
+        offset_left += queueShaperUnitWidth;
+        if (!parseInt(shaper[0], 10)) {
+            elem.disabled = true;
+        }
+
+        if (shaperRateTypeSupport) {
+            if (queueShaperCnt != 8) {
+            } else {
+                elem = addAbsoluteSelectCell(frag, oTMode, oVMode, parseInt(shaper[2], 10),  "q_shaper_mode_" + i, offset_top - 3, offset_left);
+                offset_left += queueShaperModeWidth;
+                if (!parseInt(shaper[0], 10)) {
+                    elem.disabled = true;
+                }
+            }
+        }
+        if (queueExcessSupport) {
+            elem = addAbsoluteCheckBoxCell(frag, parseInt(shaper[3], 10), "q_shaper_excess_" + i, offset_top, offset_left);
+            offset_left += queueShaperModeWidth;
+            if (!parseInt(shaper[0], 10)) {
+                elem.disabled = true;
+            }
+            elem.onclick = excessEnableDisable;
+        }
+        if (queueCreditSupport) {
+            var index = queueExcessSupport?4:3;
+            elem = addAbsoluteCheckBoxCell(frag, parseInt(shaper[index], 10), "q_shaper_credit_" + i, offset_top, offset_left);
+            offset_left += queueShaperCreditWidth;
+            if (!parseInt(shaper[0], 10)) {
+                elem.disabled = true;
+            }
+            elem.onclick = creditEnableDisable;
+        }
+    }
+
+    queueSchedulerHeaderLeft = offset_left + queueShaperPostWidth;
+    var header_scheduler = [];
+    if (queueCutThroughSupport) {
+        header_scheduler.push("Cut-through");
+    }
+    if (framePreemptionSupport) {
+        header_scheduler.push("Preemption");
+    }
+    if (queueWeightCnt) {
+        header_scheduler.push("Weight");
+        header_scheduler.push("Percent");
+    }
+
+    if (header_scheduler.length !== 0) {
+        addAbsoluteHeader(frag, "Queue Scheduler", header_scheduler, headerTop, queueSchedulerHeaderLeft);
+    }
+
+    for (i = configQosQueueCount - 1; i >= 0; i--) {
+        offset_left = queueSchedulerHeaderLeft + queueSchedulerPreWidth;
+        offset_top = queueTop + optionsTopOffset + queueTopOffset * (configQosQueueCount - i - 1);
+        if (queueCutThroughSupport) {
+            elem = addAbsoluteCheckBoxCell(frag, parseInt(queueCutThroughData[i], 10), "q_cut_through_" + i, offset_top, offset_left);
+            offset_left += queueSchedulerCTWidth;
+
+        }
+        if (framePreemptionSupport) {
+            elem = addAbsoluteCheckBoxCell(frag, parseInt(framePreemptionData[i], 10), "q_frame_preemption_" + i, offset_top, offset_left);
+            offset_left += queueSchedulerFPWidth;
+
+        }
+        if (i < queueWeightCnt) {
+            elem = addAbsoluteInputCell(frag, parseInt(queueWeightData[i], 10), "weight_" + i, 2, 3, offset_top - 4, offset_left);
+            offset_left += queueSchedulerWeightWidth;
+            elem.onkeyup = updatePct;
+            addAbsoluteTextCell(frag, null, "pct_" + i, offset_top + 1, offset_left);
+            offset_left += queueSchedulerPercentWidth;
+        }
+    }
+
+    dwrrEllipseLeft = offset_left + queueSchedulerPostWidth;
+    strictEllipseLeft = dwrrEllipseLeft + dwrrEllipseWidth;
+    
+    for (i = configQosQueueCount - 1; i >= configQosQueueCount - queueShaperCnt; i--) {
+        addSVGQueue(svg, i, queueWeightCnt, true);
+    }
+    for (i = configQosQueueCount - queueShaperCnt - 1; i >= 0; i--) {
+        addSVGQueue(svg, i, queueWeightCnt, false);
+    }
+    addSVGScheduler(svg, queueWeightCnt);
+
+    portShaperHeaderLeft = strictEllipseLeft + strictEllipseWidth;
+    shaper = portShaperData.split("|");
+
+    if (portShaperDecouple) {
+        table = CreateStyledElement("table", "config");
+        table.summary = "Guaranteed Bandwidth Configuration";
+
+        tr = CreateStyledElement("tr", "config_header");
+        addTextHeaderCell(tr, "", "cl");
+        addTextHeaderCell(tr, "Enable", "cl");
+        addTextHeaderCell(tr, "Rate", "cl");
+        addTextHeaderCell(tr, "Unit", "cl");
+        addTextHeaderCell(tr, "Rate-type", "cl");
+        table.appendChild(tr);
+
+        tr = document.createElement("tr");
+        addLabelTextCell(tr, "Port Shaper", "param_label", "p_shaper_enable");
+        elem = addCheckBoxCell(tr, parseInt(shaper[0], 10), "cr", "p_shaper_enable");
+        elem.onclick = shaperEnableDisable;
+        // p_shaper_rate_x is the actual rate value that is transmitted between the webserver and the browser.
+        // It is not shown in the user interface.
+        addHiddenParam(frag, "p_shaper_rate", parseInt(shaper[1], 10));
+        // The purpose of p_shaper_display_rate_x and p_shaper_display_unit_x is to make the user interface a little more friendly.
+        // When the form is submitted, p_shaper_rate_x is recalculated from these two parameters.
+        elem = addInputCell(tr, qos_display_rate(parseInt(shaper[1], 10)), "cr", "p_shaper_display_rate", 3.8, max_input_value.toString().length);
+        if (!parseInt(shaper[0], 10)) {
+            elem.disabled = true;
+        }
+        elem = addSelectCell(tr, oTRateUnit, oVRateUnit, qos_display_rate_unit(parseInt(shaper[1], 10)), "cr", "p_shaper_display_unit");
+        if (!parseInt(shaper[0], 10)) {
+            elem.disabled = true;
+        }
+        elem = addSelectCell(tr, oTMode, oVMode, parseInt(shaper[2], 10), "cr",  "p_shaper_mode");
+        if (!parseInt(shaper[0], 10)) {
+            elem.disabled = true;
+        }
+        table.appendChild(tr);
+
+        frag.appendChild(table);
+    } else {
+        var header_tmp = ["Enable", "Rate", "Unit"];
+        var table_header = "Port Shaper";
+        if (shaperRateTypeSupport) {
+            header_tmp.push("Rate-type");
+        }
+
+        addAbsoluteHeader(frag, table_header, header_tmp, headerTop, portShaperHeaderLeft);
+
+        offset_left = portShaperHeaderLeft + portShaperPreWidth;
+        elem = addAbsoluteCheckBoxCell(frag, parseInt(shaper[0], 10), "p_shaper_enable", portShaperTop, offset_left);
+        offset_left += portShaperEnabledWidth;
+        elem.onclick = shaperEnableDisable;
+        // p_shaper_rate_x is the actual rate value that is transmitted between the webserver and the browser.
+        // It is not shown in the user interface.
+        addHiddenParam(frag, "p_shaper_rate", parseInt(shaper[1], 10));
+        // The purpose of p_shaper_display_rate_x and p_shaper_display_unit_x is to make the user interface a little more friendly.
+        // When the form is submitted, p_shaper_rate_x is recalculated from these two parameters.
+        elem = addAbsoluteInputCell(frag, qos_display_rate(parseInt(shaper[1], 10)), "p_shaper_display_rate", 3.8, max_input_value.toString(10).length, portShaperTop - 4, offset_left);
+        offset_left += portShaperRateWidth;
+        if (!parseInt(shaper[0], 10)) {
+            elem.disabled = true;
+        }
+        elem = addAbsoluteSelectCell(frag, oTRateUnit, oVRateUnit, qos_display_rate_unit(parseInt(shaper[1], 10)), "p_shaper_display_unit", portShaperTop - 3, offset_left);
+        offset_left += portShaperUnitWidth;
+        if (!parseInt(shaper[0], 10)) {
+            elem.disabled = true;
+        }
+        if (shaperRateTypeSupport) {
+            elem = addAbsoluteSelectCell(frag, oTMode, oVMode, parseInt(shaper[2], 10), "p_shaper_mode", portShaperTop - 3, offset_left);
+            offset_left += portShaperModeWidth;
+            if (!parseInt(shaper[0], 10)) {
+                elem.disabled = true;
+            }
+        }
+    }
+
+    container.appendChild(frag);
+
+    var drawing_area = document.getElementById('drawing_area');
+    clearChildNodes(drawing_area);
+    drawing_area.appendChild(container);
+
+    if (queueWeightCnt > 0) {
+        updatePct();
+    }
+}
+
+function addOption(frag, value, text, selected)
+{
+    var option = document.createElement('option');
+    option.value = value;
+    option.appendChild(document.createTextNode(text));
+    if (selected) {
+        option.selected = true;
+    }
+    frag.appendChild(option);
+}
+
+function updateDWRRList()
+{
+    var frag = document.createDocumentFragment();
+    
+    addOption(frag, 0, "Strict Priority");
+    if (queueWeightCntSupport) {
+        addOption(frag, 2, "2 Queues Weighted");
+        addOption(frag, 3, "3 Queues Weighted");
+        addOption(frag, 4, "4 Queues Weighted");
+        addOption(frag, 5, "5 Queues Weighted");
+    }
+    addOption(frag, 6, "6 Queues Weighted");
+    if (queueWeightCntSupport) {
+        addOption(frag, 7, "7 Queues Weighted");
+        addOption(frag, 8, "8 Queues Weighted");
+    }
+    addFragment(frag, "dwrr_cnt", true);
+}
+
+/* Format:
+ * <port_no>#<excess_support>#<credit_support>#<rate_type_support>#<cut_through_support>#<cut_through>#
+ *  <fp_support>#<fp>#<dwrr_cnt_support#<dwrr_cnt>#<queue_weights>#<queue_shapers>#<port_shaper>
+ *
+ * port_no            :== 1..max
+ * excess_support     :== 0..1           // 0: Excess is not supported on the queue shapers, 1: Excess is supported on the queue shapers
+ * credit_support     :== 0..1           // 0: Credit-based shaper is not supported on the queue shapers, 1: Credit-based shaper is supported on the queue shapers
+ * rate_type_support  :== 0..1           // 0: Shaper rate type is fixed to line rate, 1: Rate type is configurable between line and data rate
+ * cut_through_support:== 0..1           // 0: Cut-through is not supported, 1: Cut-through is supported
+ * cut_through        :== <queue_1_ct>/<queue_2_ct>/...<queue_n_ct>  // n is 8.
+ *   queue_x_ct       :== 0..1           // 0: Cut-through is disabled on the queue, 1: Cut-through is enabled on the queue
+ * fp_support         :== 0..1           // 0: Frame preemption is not supported, 1: Frame preemption is supported
+ * fp                 :== <queue_1_fp>/<queue_2_fp>/...<queue_n_fp>  // n is 8.
+ *   queue_x_fp       :== 0..1           // 0: Frame preemption is disabled on the queue, 1: Frame preemption is enabled on the queue
+ * dwrr_cnt_support   :== 0..1           // 0: Only 6 weighted queues are supported in non-service, 1: 2-8 weighted queues are supported in non-service
+ * dwrr_cnt           :== 0..8           // 0-1: Strict Priority, 2-8: Weighted
+ * queue_weights      :== <queue_1_weight>/<queue_2_weight>/...<queue_n_weight>  // n is 8.
+ *   queue_x_weight   :== 1..100         // Just a number. If you set all 6 weights to 100, each queue will have a weigth of 100/6 = 16.7 ~ 17%
+ * queue_shapers      :== <queue_shaper_1>/<queue_shaper_2>/...<queue_shaper_n>  // n is 2 or 8.
+ *   queue_shaper_x   :== <enable|rate(|excess)>
+ *     enable         :== 0..1           // 0: Shaper is disabled, 1: Shaper is enabled
+ *     rate           :== 0..0xffffffff  // Actual bit rate in kbps
+ *     excess         :== 0..1           // 0: Excess bandwidth disabled, 1: Excess bandwidth enabled
+ * port_shaper        :== <enable|rate>  //
+ *   enable           :== 0..1           // 0: Shaper is disabled, 1: Shaper is enabled
+ *   rate             :== 0..0xffffffff  // Actual bit rate in kbps
+ */
+
+function processUpdate(req, ref)
+{
+    if (redirectOnError(req)) {
+        return;
+    }
+
+    if (req.responseText) {
+        var cfg = req.responseText.split("#");
+        
+        selectedPort = parseInt(cfg[0], 10);
+        SpomUpdatePortSelector("portselect", selectedPort);
+        
+        queueExcessSupport = parseInt(cfg[1], 10);
+
+        queueCreditSupport = parseInt(cfg[2], 10);
+
+        shaperRateTypeSupport = parseInt(cfg[3], 10);
+
+        queueCutThroughSupport = parseInt(cfg[4], 10);
+
+        queueCutThroughData = cfg[5].split("/");
+
+        framePreemptionSupport = parseInt(cfg[6], 10);
+
+        framePreemptionData = cfg[7].split("/");
+
+        queueWeightCntSupport = parseInt(cfg[8], 10);
+
+        queueWeightCnt = parseInt(cfg[9], 10);
+        if (queueWeightCnt < 2) {
+            queueWeightCnt = 0;
+        }
+        updateDWRRList();
+        UpdateIdSetSelect("dwrr_cnt", queueWeightCnt);
+
+        // Save configuration in global data for later use
+        queueWeightData = cfg[10].split("/");
+
+        queueShaperData = cfg[11].split("/");
+        queueShaperCnt = queueShaperData.length;
+
+        portShaperData = cfg[12];
+        portShaperDecouple = false;
+
+        frameBasedEgressQueueShaperSupport = parseInt(cfg[13], 10);
+        if (frameBasedEgressQueueShaperSupport) {
+            oTRateUnit.push("fps");
+            oTRateUnit.push("kfps");
+            oVRateUnit.push(2);
+            oVRateUnit.push(3);
+
+            oTMode.push("Frame");
+            oVMode.push(2);
+        }
+
+
+        updateImage();
+
+        UpdateIdValue('submit_port', selectedPort);
+        UpdateId("display_port", configPortName(selectedPort, 1));
+    } else {
+        SpomHandleError();
+    }
+}
+
+function requestUpdate() {
+    var url;
+    
+    if (SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    
+    url = SpomAddSidArg("/config/qos_port_scheduler_edit?port=" + selectedPort);
+    loadXMLDoc(url, processUpdate);
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function checkForm()
+{
+    var i, min, max, rate, mode;
+
+    for (i = 0; i < queueWeightCnt; i++) {
+        if (!isWithinRange("weight_" + i, 1, 100, "'Weight'")) {
+            return false;
+        }
+            
+    }
+
+    min = qos_rate_min(configQosQueueShaperBitRateMin, configQosQueueShaperFrameRateMin);
+    max = qos_rate_max(configQosQueueShaperBitRateMax, configQosQueueShaperFrameRateMax);
+    for (i = configQosQueueCount - 1; i >= configQosQueueCount - queueShaperCnt; i--) {
+        if (document.getElementById("q_shaper_enable_" + i).checked) {
+            rate = document.getElementById("q_shaper_display_rate_" + i).value;
+            switch (document.getElementById("q_shaper_display_unit_" + i).value) {
+            case "0": // kbps
+                if (!isWithinRange("q_shaper_display_rate_" + i, min, max, "'Queue Shaper Rate'", " kbps.")) {
+                    return false;
+                }
+                if (parseInt(document.getElementById("q_shaper_mode_" + i).value, 10) > 1) {
+                    // Mode 0, 1 are Line, Data
+                    return GiveAlert("Invalid unit '" + oTRateUnit[document.getElementById("q_shaper_display_unit_" + i).value] + "' for rate-type '" + oTMode[document.getElementById("q_shaper_mode_" + i).value] + "'");
+                }
+                break;
+            case "1": // Mbps
+                rate *= 1000;
+                if (!isWithinRange("q_shaper_display_rate_" + i, 1, Math.floor(max / 1000), "'Queue Shaper Rate'", " Mbps.")) {
+                    return false;
+                }
+                if (parseInt(document.getElementById("q_shaper_mode_" + i).value, 10) > 1) {
+                    // Mode 0, 1 are Line, Data
+                    return GiveAlert("Invalid unit '" + oTRateUnit[document.getElementById("q_shaper_display_unit_" + i).value] + "' for rate-type '" + oTMode[document.getElementById("q_shaper_mode_" + i).value] + "'");
+                }
+                break;
+            case "2": // fps
+                if (!isWithinRange("q_shaper_display_rate_" + i, configQosQueueShaperFrameRateMin, configQosQueueShaperFrameRateMax, "'Queue Shaper Rate'", " fps.")) {
+                    return false;
+                }
+                if (parseInt(document.getElementById("q_shaper_mode_" + i).value, 10) != 2) {
+                    // Mode 0, 1 are Line, Data
+                    return GiveAlert("Invalid unit '" + oTRateUnit[document.getElementById("q_shaper_display_unit_" + i).value] + "' for rate-type '" + oTMode[document.getElementById("q_shaper_mode_" + i).value] + "'");
+                }
+                break;
+            case "3": // kfps
+                rate *= 1000;
+                if (!isWithinRange("q_shaper_display_rate_" + i, 1, Math.floor(configQosQueueShaperFrameRateMax / 1000), "'Queue Shaper Rate'", " kfps.")) {
+                    return false;
+                }
+                if (parseInt(document.getElementById("q_shaper_mode_" + i).value, 10) != 2) {
+                    // Mode 0, 1 are Line, Data
+                    return GiveAlert("Invalid unit '" + oTRateUnit[document.getElementById("q_shaper_display_unit_" + i).value] + "' for rate-type '" + oTMode[document.getElementById("q_shaper_mode_" + i).value] + "'");
+                }
+                break;
+            default:
+                // Shall never hapen
+                return GiveAlert("Invalid 'Unit'", document.getElementById("q_shaper_display_unit_" + i));
+            }
+            document.getElementById("q_shaper_rate_" + i).value = rate;
+        }
+    }
+
+    min = qos_rate_min(configQosPortShaperBitRateMin, configQosPortShaperFrameRateMin);
+    max = qos_rate_max(configQosPortShaperBitRateMax, configQosPortShaperFrameRateMax);
+    if (document.getElementById("p_shaper_enable").checked) {
+        rate = document.getElementById("p_shaper_display_rate").value;
+        switch (document.getElementById("p_shaper_display_unit").value) {
+        case "0": // kbps
+            if (!isWithinRange("p_shaper_display_rate", min, max, "'Port Shaper Rate'", " kbps.")) {
+                return false;
+            }
+            break;
+        case "1": // Mbps
+            rate *= 1000;
+            if (!isWithinRange("p_shaper_display_rate", 1, Math.floor(max / 1000), "'Port Shaper Rate'", " Mbps.")) {
+                return false;
+            }
+            break;
+        default:
+            // Shall never hapen
+            return GiveAlert("Invalid 'Unit'", document.getElementById("p_shaper_display_unit"));
+        }
+        document.getElementById("p_shaper_rate").value = rate;
+    }
+    
+    return true;
+}
+
+function resetForm(form)
+{
+    form.reset();
+    schedulerModeChange(document.getElementById("dwrr_cnt"));
+    updateImage();
+}
+
+function schedulerModeChange(sel)
+{
+    queueWeightCnt = parseInt(sel.options[sel.selectedIndex].value, 10);
+    updateImage();
+}
+
+function PortSelect(sel)
+{
+    selectedPort = sel.options[sel.selectedIndex].value; 
+    requestUpdate();
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    selectedPort = SpomUpdatePortSelector("portselect", selectedPort);
+    requestUpdate();            // Update page to reflect selector
+}
+
+function docLoad()
+{
+    var slashIx;
+    var referrer;
+
+    if (document.referrer && (document.referrer.search(document.location.pathname) === -1)) { // Save the referrer for later use if it is not ourselves
+        slashIx = document.referrer.lastIndexOf('/');
+        if (slashIx === -1) {
+            referrer = document.referrer; // Use whole string
+        } else {
+            referrer = document.referrer.substring(slashIx + 1); // Use substring after last '/'
+        }
+        if (parent.setPageData) {
+            parent.setPageData("qos", "referrer", referrer);
+        }
+    }
+    selectedPort = SpomUpdatePortSelector("portselect", selectedPort);
+    requestUpdate();
+}
+
+function goBack()
+{
+    if (parent.getPageData) {
+        document.location.href = parent.getPageData("qos", "referrer");
+    }
+}
+
+ </script>
+</head>
+
+<body class="content" onload="docLoad();">
+
+<div class="refreshbar">
+ <form action="#">
+  <select id="portselect" onchange="PortSelect(this);">
+    <option value="1">Port 1</option>
+    <option value="99">Port 99</option>
+   </select>
+ </form>
+</div>
+
+<form id="qos_port_scheduler_edit" method="POST" onsubmit="return checkForm();" action="/config/qos_port_scheduler_edit">
+
+<h1>QoS Egress Port Scheduler and Shapers <span id="display_sid"></span> <span id="display_port"></span></h1>
+
+<table summary="Scheduler Mode Configuration" class="config">
+  <tbody>
+   <tr class="config">
+    <td class="param_label"><label for="dwrr_cnt">Scheduler Mode</label></td>
+    <td>
+     <select onchange="schedulerModeChange(this);" name="dwrr_cnt" id="dwrr_cnt">
+      <option value="0">Strict Priority</option>
+      <option value="1">Weighted</option>
+     </select>
+    </td>
+   </tr>
+  </tbody>
+</table>
+<br>
+<br>
+
+<div id="drawing_area"></div>
+
+<p>
+ <input type="hidden" id="submit_sid" name="sid">    
+ <input type="hidden" id="submit_port" name="port">
+ <input type="submit" value="Save">
+ <input type="button" value="Reset" onclick="resetForm(this.form);">
+ <input type="button" value="Back" onclick="goBack();">
+</p>
+
+</form>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

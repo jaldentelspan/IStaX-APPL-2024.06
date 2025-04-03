@@ -1,0 +1,363 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>MVRP Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript">
+
+
+// Help page macic
+var help_page = "/help/help_mvrp_config.htm";
+
+var pageArgs = searchArgs(window.location.search);
+if (pageArgs.error_code && parseInt(pageArgs.error_code, 10) == 1) {
+    alert("Warning: GVRP is currently enabled - disable it first in order to change MVRP global state. MVRP parameters can however be updated.");
+}
+
+var style_width = "100%";
+var oTEnable    = Array(" Disabled ", " Enabled ");
+var oVEnable    = genArrayInt(0, 1);
+var portCnt     = 0; // The number of ports shown on the web page are determined at runtime
+
+function addHeader()
+{
+    var thead;
+    var frag = document.createDocumentFragment();
+    var tr   = CreateStyledElement("tr", "config_header");
+    addTextHeaderCell(tr, "Port");
+    addTextHeaderCell(tr, "Enabled");
+    frag.appendChild(tr);
+    thead = document.getElementById('mvrp_port_thead');
+    clearChildNodes(thead);
+    thead.appendChild(frag);
+}
+
+function addRow(index, frag, values) {
+    var pdata   = values.split("/");
+    var portno  = parseInt(pdata[0], 10);
+    var enabled = parseInt(pdata[1], 10);
+    var tr;
+    
+    tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    addTextCell(tr, configPortName(pdata[0], 0), "cr");
+    addCheckBoxCell(tr, enabled, "c", "enabled_" + index);
+    frag.appendChild(tr); // Add row to fragment
+}
+
+/* Format:
+ * <state>#<vlans>#<all_port_conf>
+ * state         :== 0..1                             // 0: Disabled (default), 1: Enabled
+ * vlans         :== Vlan list of managed VLANs
+ * all_port_conf :== <port 1>,<port 2>,<port 3>,...<port n>
+ * 
+ * port x :== <port_no>/<state>
+ *   port_no :== 1..max
+ *   state   :== 0..1   // 0: Disabled (default), 1: Enabled
+ */
+function processUpdate(req)
+{
+    if (redirectOnError(req)) {
+        return;
+    }
+
+    if (req.responseText) {
+        var values    = req.responseText.split("#");
+        var port_data = values[2].split(",");
+        var frag      = document.createDocumentFragment();
+        var i;
+        var tbody;
+        var cBar;
+        var tr;
+
+        /* MVRP Global table */
+        tr = document.createElement("tr");
+        addLabelTextCell(tr, "Global State", "param_label", "global_state");
+        addSelectCell(tr, oTEnable, oVEnable, parseInt(values[0], 10), "c", "global_state_", style_width);
+        frag.appendChild(tr);
+        tr = document.createElement("tr");
+        addLabelTextCell(tr, "Managed VLANs", "param_label", "vlans");
+        addInputCell(tr, unescape(values[1]), "cl", "vlans_", 9685, 9685, "300px");
+        frag.appendChild(tr);
+        tbody = document.getElementById('mvrp_tbody');
+        clearChildNodes(tbody);
+        tbody.appendChild(frag);
+        /* MVRP Port table */
+        portCnt = port_data.length;
+        addHeader();
+        for (i = 0; i < portCnt; i++) {
+            addRow(i, frag, port_data[i]);
+        }
+        tbody = document.getElementById('mvrp_port_tbody');
+        clearChildNodes(tbody);
+        tbody.appendChild(frag);
+        cBar = new HeaderControlBar([{text: "*", className: "cr"},
+                                     {name: "enabled_"}]);
+        cBar.construct('mvrp_port_tbody');
+    } else {
+        SpomHandleError();
+    }
+}
+
+function requestUpdate() {
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    loadXMLDoc(SpomAddSidArg("/config/mvrp_conf"), processUpdate);
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+//------------------------------------------------------------------------------
+// remove_ws()
+// Returns (in x.str) a string where all white space is removed.
+// If two consecutive numbers are only having white space between them,
+// the function returns false. Otherwise true.
+//------------------------------------------------------------------------------
+function remove_ws(x)
+{
+    var result = "", whitespace_seen = false;
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c != ' ') {
+            if (whitespace_seen && result.length > 0 && result.charAt(result.length - 1) >= '0' && result.charAt(result.length - 1) <= '9') {
+                return false;
+            }
+            result += c;
+            whitespace_seen = false;
+        } else {
+            whitespace_seen = true;
+        }
+
+        x.idx++;
+    }
+
+    x.str = result;
+    x.idx = 0;
+    x.len = x.str.length;
+    return true;
+}
+
+//------------------------------------------------------------------------------
+// strtoul()
+//------------------------------------------------------------------------------
+function strtoul(x)
+{
+    var len = x.str.length;
+    var sub = "";
+
+    if (x.idx == x.len) {
+        // No more characters in string
+        return -1;
+    }
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c < '0' || c > '9') {
+            break;
+        }
+
+        x.idx++;
+        sub += c;
+    }
+
+    if (sub.length === 0) {
+        return -1;
+    }
+
+    return parseInt(sub, 10);
+}
+
+//------------------------------------------------------------------------------
+// is_vlan_list()
+//------------------------------------------------------------------------------
+function is_vlan_list(id, print_warning_if_empty)
+{
+    var fld = $(id);
+
+    if (!fld) {
+        alert("Ehh: " + id);
+    }
+
+    var x = {str:fld.value};
+    x.idx = 0;
+    x.len = x.str.length;
+
+    if (!remove_ws(x)) {
+        GiveAlert("VLANs must be separated by commas, not spaces", fld);
+        return false;
+    }
+
+    if (x.idx == x.len) {
+        if (print_warning_if_empty) {
+            if (confirm("You are about to delete all VLANs on the switch, and may lose connectivity. Continue?")) {
+                return true; // Accept an empty string.
+            } else {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    var range = false, comma = false;
+    var start;
+
+    while (x.idx < x.len) {
+        var n = strtoul(x);
+
+        if (n < 0) {
+            GiveAlert("Invalid character ('" + x.str.charAt(x.idx) + "') found in VLAN list", fld);
+            return false;
+        }
+
+        if (n < configMvrpVlanIdMin || n > configMvrpVlanIdMax) {
+            GiveAlert("VLAN IDs must be integers between " + configMvrpVlanIdMin + " and " + configMvrpVlanIdMax, fld);
+            return false;
+        }
+
+        if (range) {
+            // End of range has been reached
+            range = 0;
+            if (n < start) {
+                GiveAlert("Invalid range detected in VLAN list", fld);
+                return false;
+            }
+        } else if (x.str.charAt(x.idx) == '-') {
+            // Start of range
+            start = n;
+            range = true;
+            x.idx++;
+        }
+
+        comma = false;
+        if (!range && x.str.charAt(x.idx) == ',') {
+            comma = true;
+            x.idx++;
+        }
+    }
+
+    // Check for trailing comma/dash
+    if (comma || range) {
+        GiveAlert("VLAN list cannot end with a comma or a dash", fld);
+        return false;
+    }
+
+    return true;
+}
+
+function checkForm(form)
+{
+    // Check created VLANs
+    if (!is_vlan_list("vlans_", true)) {
+        return false;
+    }
+
+	return true;
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    requestUpdate();            // Update page to reflect selector
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<div class="refreshbar">
+ <form action="#">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+  <input type="button"   value="Refresh"    id="refresh"     onclick="requestUpdate();    this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+ </form>
+</div>
+
+<div id="control_bar_tbl">
+
+<form method="POST" action="/config/mvrp_conf" onsubmit="return checkForm(this);"> 
+
+<h1>MVRP Global Configuration</h1>
+<table summary="MVRP Global Configuration" class="config" cellspacing="0" cellpadding="3">
+ <thead id="mvrp_thead">
+ </thead>
+ <tbody id="mvrp_tbody">
+ </tbody>
+</table>
+
+<h1>MVRP Port Configuration <span id="display_sid"></span></h1>
+<table summary="MVRP Port Configuration" class="config" cellspacing="0" cellpadding="3">
+ <thead id="mvrp_port_thead">
+ </thead>
+ <tbody id="mvrp_port_tbody">
+ </tbody>
+</table>
+
+<p>
+<input type="hidden" id="submit_sid" name="sid">    
+<input type="submit" value="Save">
+<input type="reset" value="Reset">
+</p>
+
+</form>
+
+</div>
+
+<!-- IE caching bug -->
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</body>
+</html>
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

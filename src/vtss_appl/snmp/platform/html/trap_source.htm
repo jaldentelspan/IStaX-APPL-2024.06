@@ -1,0 +1,251 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>SNMP Trap Source Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_trap_source.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities = {"MaxEntries":configTrapSourcesMax,"MaxOidLen":255,"MaxSourceFilterId":configTrapSourceFilterIdMax};
+
+var oVSourceName = Array("coldStart","warmStart","linkUp","linkDown","authenticationFailure","entConfigChange");
+var oVType = Array("included","excluded");
+
+// Add dynamic source names
+if (!getCssStyle(".has_mstp")) {
+    oVSourceName.push("newRoot");
+    oVSourceName.push("topologyChange");
+}
+if (!getCssStyle(".has_lldp")) {
+    oVSourceName.push("lldpRemTablesChange");
+}
+if (!getCssStyle(".has_rmon")) {
+    oVSourceName.push("risingAlarm");
+    oVSourceName.push("fallingAlarm");
+}
+
+function changeOid()
+{
+    // Update the IndexMask field
+    if (isValidOid(this.id, "OID", myCapabilities.MaxOidLen, true)) {
+        if (this.value.length) {
+            var mask = 0, oids = this.value.split('.');
+            for (var i = 0; i < ((oids.length + 7) >> 3) * 8; i++) {
+                mask = mask << 1;
+                if (i < oids.length && oids[i] != "*") {
+                    mask |= 1;
+                }
+            }
+            $(this.id.replace(RegExp("IndexFilter", "g"), "IndexMask")).value = mask.toString(16).toUpperCase();
+        } else {
+            $(this.id.replace(RegExp("IndexFilter", "g"), "IndexMask")).value = "";
+        }
+    }
+}
+
+function checkForm()
+{
+    // Convert source OID without mask filter (Convert '*' to '0')
+    var elems = $$('[id^=IndexFilter]');
+    elems.each(function(elem, idx) {
+        elems[idx].value = elem.value.replace("*", "0");
+    });
+
+    return true;
+}
+
+function geRowDefaultValue()
+{
+    var def_val = {"IndexFilter":"", "IndexMask":"", "FilterType":"included"};
+    return def_val;
+}
+
+function addHeader(table_rows)
+{
+    var row = {fields:[
+             {type:"disp_hdr", params:["Delete"]},
+             {type:"disp_hdr", params:["Name"]},
+             {type:"disp_hdr", params:["Filter ID"], "hidden":true},
+             {type:"disp_hdr", params:["Type"]},
+             {type:"disp_hdr", params:["Subset OID"]},
+             {type:"disp_hdr", params:["Mask"], "hidden":true}
+            ]
+          };
+    table_rows.push(row);
+}
+
+function addRow(key, val, key_prefix)
+{
+    var use_defval = false;
+
+    if (!val) { // Use default value, it is used for new row
+        use_defval = true;
+        val = geRowDefaultValue();
+    }
+    var row_affix = (use_defval ? key_prefix : myDynamicTable.getRowPrefixs("rowKeyPrefix")) + rowKey2Id(key);
+    var row = {
+        "key":key,
+        fields:[
+            {type:"chkbox", params:[0, "c", key_prefix + rowKey2Id(key)]},
+            {type:"text",   params:[key.Name]},
+            {type:"digit",  params:[key.IndexFilterID], "hidden":true},
+            {type:"select", params:[oVType, oVType, val.FilterType, "c", "FilterType_" + row_affix]},
+            {type:"input",  params:[val.IndexFilter, "cr", "IndexFilter_" + row_affix, 64, myCapabilities.MaxOidLen, null, null, null, changeOid],
+                            validate:{func:isValidOid, params:["IndexFilter_" + row_affix, "OID", myCapabilities.MaxOidLen]}},
+            {type:"input",  params:[val.IndexMask, "cr", "IndexMask_" + row_affix, 16, 16], "hidden":true}
+           ]
+    };
+
+    if (use_defval) { // Change field for new row
+        // Use <input> for new key
+        row.fields[1] = {type:"select", params:[oVSourceName, oVSourceName, oVSourceName[0], "c", key_prefix + key + "_Name"]};
+        row.fields[2] = {type:"input", params:[myCapabilities.MaxSourceFilterId + 1, "cr", key_prefix + key + "_IndexFilterID"],
+                                       "hidden":true,
+                                       validate:{func:isWithinRange, params:[key_prefix + key + "_IndexFilterID", myCapabilities.MaxSourceFilterId + 1, myCapabilities.MaxSourceFilterId + 1, "Trap Source Filter ID"]}};
+    }
+
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var row, empty_colspan = 6;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function(record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row
+    if (!recv_json.length) {
+        table_rows.push({fields:[{type:"empty_row", params:[empty_colspan]}]});
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Convert source OID with its mask (Convert to '*' when mask bit is 0)
+    for (var i = 0; i < recv_json.length; i++) {
+        if (recv_json[i].val.IndexMask.length) {
+            var oids = recv_json[i].val.IndexFilter.split(".");
+            var mask = parseInt(recv_json[i].val.IndexMask, 16).toString(2);
+            for (var j = 0; j < mask.length && j < oids.length; j++) {
+                if (mask.charAt(j) == '0') {
+                    oids[j] = '*';
+                }
+            }
+            recv_json[i].val.IndexFilter = oids.join(".");
+        }
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addNewRowButton(addRow, myCapabilities.MaxEntries);
+    myDynamicTable.addSubmitButton("config", "snmp.config.trap_source", requestUpdate);
+    myDynamicTable.addResetButton();
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("snmp.config.trap_source.get", null, processUpdate, "config");
+}
+
+function updateSourceName(req)
+{
+    if (req.responseText) {
+        // Beside the default standard trap name, the private trap names is get
+        // by AJAX and them need to be added in the 'dyna_source_name' too.
+        var dyna_source_name = req.responseText.split("/");
+        for(var i = 0; i < dyna_source_name.length && dyna_source_name[i]; i++) {
+            oVSourceName.push(dyna_source_name[i]);
+        }
+    }
+    requestUpdate();
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", {func:checkForm, params:[]});
+    myDynamicTable.rowKeyIsHashObj(true);
+
+    // We use AJAX to get the dynamic source names since the information cannot get via JSON method.
+    loadXMLDoc("stat/trap_dyna_source_name", updateSourceName);
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>Trap Configuration</h1>
+<h2>Trap Source Configurations</h2>
+
+<div class="refreshbar">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+</body>
+</html>
+

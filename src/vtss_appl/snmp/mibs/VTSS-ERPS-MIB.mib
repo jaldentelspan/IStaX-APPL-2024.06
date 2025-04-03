@@ -1,0 +1,1781 @@
+-- *****************************************************************
+-- ERPS-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-ERPS-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Counter64 FROM SNMPv2-SMI
+    Integer32 FROM SNMPv2-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    MacAddress FROM SNMPv2-TC
+    TruthValue FROM SNMPv2-TC
+    VTSSDisplayString FROM VTSS-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    VTSSUnsigned64 FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    VTSSVlanListQuarter FROM VTSS-TC
+    ;
+
+vtssErpsMib MODULE-IDENTITY
+    LAST-UPDATED "201911010000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "Private MIB for Ethernet Ring Protection Switching, ERPS."
+    REVISION    "201911010000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 72 }
+
+
+VTSSErpsCommand ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies the ERPS command."
+    SYNTAX      INTEGER { noRequest(0), forceSwitchToPort0(1),
+                          forceSwitchToPort1(2),
+                          manualSwitchToPort0(3),
+                          manualSwitchToPort1(4), clear(5) }
+
+VTSSErpsNodeState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies a node state."
+    SYNTAX      INTEGER { init(0), idle(1), protection(2), ms(3),
+                          fs(4), pending(5) }
+
+VTSSErpsOperState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies an operational state."
+    SYNTAX      INTEGER { disabled(0), active(1), internalError(2) }
+
+VTSSErpsOperWarning ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Operational warnings of an ERPS instance."
+    SYNTAX      INTEGER { none(0), port0NotMemberOfControlVlan(1),
+                          port1NotMemberOfControlVlan(2),
+                          port0UntagsControlVlan(3),
+                          port1UntagsControlVlan(4),
+                          port0MepNotFound(5), port1MepNotFound(6),
+                          port0MepAdminDisabled(7),
+                          port1MepAdminDisabled(8),
+                          port0MepNotDownMep(9),
+                          port1MepNotDownMep(10),
+                          port0AndMepIfindexDiffer(11),
+                          port1AndMepIfindexDiffer(12),
+                          portMepShadowsPort0Mip(13),
+                          portMepShadowsPort1Mip(14),
+                          mepShadowsPort0Mip(15),
+                          mepShadowsPort1Mip(16),
+                          connectedRingDoesntExist(17),
+                          connectedRingIsAnInterconnectedSubRing(18),
+                          connectedRingIsNotOperative(19),
+                          connectedRingInterfaceConflict(20),
+                          connectedRingDoesntProtectControlVlan(21) }
+
+VTSSErpsRequestState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies a request state."
+    SYNTAX      INTEGER { noRequest(0), manualSwitch(7),
+                          signalFailed(11), forceSwitch(13),
+                          event(14) }
+
+VTSSErpsRingPort ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies a particular logical ring port."
+    SYNTAX      INTEGER { ringPort0(0), ringPort1(1) }
+
+VTSSErpsRingType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies the ERPS ring type."
+    SYNTAX      INTEGER { major(0), sub(1), interconnectedSub(2) }
+
+VTSSErpsRplMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies the Ring Protection Link mode. Use 'none' if port is neither
+         RPL owner nor neighbor."
+    SYNTAX      INTEGER { none(0), owner(1), neighbor(2) }
+
+VTSSErpsSfTrigger ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Signal fail can either come from the physical link on a given port or
+         from a Down-MEP."
+    SYNTAX      INTEGER { link(0), mep(1) }
+
+VTSSErpsVersion ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Specifies the ERPS protocol version."
+    SYNTAX      INTEGER { v1(0), v2(1) }
+
+vtssErpsMibObjects OBJECT IDENTIFIER
+    ::= { vtssErpsMib 1 }
+
+vtssErpsCapabilities OBJECT IDENTIFIER
+    ::= { vtssErpsMibObjects 1 }
+
+vtssErpsCapabilitiesInstanceMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of created ERPS instances."
+    ::= { vtssErpsCapabilities 1 }
+
+vtssErpsCapabilitiesWtrSecsMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum WTR timer value in secs."
+    ::= { vtssErpsCapabilities 2 }
+
+vtssErpsCapabilitiesGuardTimeMsecsMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum Guard timer value in msec."
+    ::= { vtssErpsCapabilities 3 }
+
+vtssErpsCapabilitiesHoldOffMsecsMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum Hold Off timer value in msec."
+    ::= { vtssErpsCapabilities 4 }
+
+vtssErpsConfig OBJECT IDENTIFIER
+    ::= { vtssErpsMibObjects 2 }
+
+vtssErpsConfigTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSErpsConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is the ERPS group configuration table."
+    ::= { vtssErpsConfig 1 }
+
+vtssErpsConfigEntry OBJECT-TYPE
+    SYNTAX      VTSSErpsConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents an ERPS group."
+    INDEX       { vtssErpsConfigGroupIndex }
+    ::= { vtssErpsConfigTable 1 }
+
+VTSSErpsConfigEntry ::= SEQUENCE {
+    vtssErpsConfigGroupIndex              Integer32,
+    vtssErpsConfigAdminActive             TruthValue,
+    vtssErpsConfigVersion                 VTSSErpsVersion,
+    vtssErpsConfigRingType                VTSSErpsRingType,
+    vtssErpsConfigVirtualChannel          TruthValue,
+    vtssErpsConfigConnectedRingId         Unsigned32,
+    vtssErpsConfigConnectedRingPropagate  TruthValue,
+    vtssErpsConfigRingId                  VTSSUnsigned8,
+    vtssErpsConfigNodeId                  MacAddress,
+    vtssErpsConfigLevel                   VTSSUnsigned8,
+    vtssErpsConfigControlVlan             VTSSUnsigned16,
+    vtssErpsConfigPcp                     VTSSUnsigned8,
+    vtssErpsConfigPort0SfTrigger          VTSSErpsSfTrigger,
+    vtssErpsConfigPort0If                 VTSSInterfaceIndex,
+    vtssErpsConfigPort0MEPDomain          VTSSDisplayString,
+    vtssErpsConfigPort0MEPService         VTSSDisplayString,
+    vtssErpsConfigPort0MEPId              Unsigned32,
+    vtssErpsConfigPort0Smac               MacAddress,
+    vtssErpsConfigPort1SfTrigger          VTSSErpsSfTrigger,
+    vtssErpsConfigPort1If                 VTSSInterfaceIndex,
+    vtssErpsConfigPort1MEPDomain          VTSSDisplayString,
+    vtssErpsConfigPort1MEPService         VTSSDisplayString,
+    vtssErpsConfigPort1MEPId              Unsigned32,
+    vtssErpsConfigPort1Smac               MacAddress,
+    vtssErpsConfigRevertive               TruthValue,
+    vtssErpsConfigWaitToRestoreTime       Unsigned32,
+    vtssErpsConfigGuardTime               Unsigned32,
+    vtssErpsConfigHoldOffTime             Unsigned32,
+    vtssErpsConfigRplMode                 VTSSErpsRplMode,
+    vtssErpsConfigRplPort                 VTSSErpsRingPort,
+    vtssErpsConfigProtectedVlans0Kto1K    VTSSVlanListQuarter,
+    vtssErpsConfigProtectedVlans1Kto2K    VTSSVlanListQuarter,
+    vtssErpsConfigProtectedVlans2Kto3K    VTSSVlanListQuarter,
+    vtssErpsConfigProtectedVlans3Kto4K    VTSSVlanListQuarter,
+    vtssErpsConfigAction                  VTSSRowEditorState
+}
+
+vtssErpsConfigGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "ERPS group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the ERPS
+         capabilities."
+    ::= { vtssErpsConfigEntry 1 }
+
+vtssErpsConfigAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The administrative state of this ERPS instance. Set to true to make it
+         function normally and false to make it cease functioning."
+    ::= { vtssErpsConfigEntry 2 }
+
+vtssErpsConfigVersion OBJECT-TYPE
+    SYNTAX      VTSSErpsVersion
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "ERPS protocol version."
+    ::= { vtssErpsConfigEntry 3 }
+
+vtssErpsConfigRingType OBJECT-TYPE
+    SYNTAX      VTSSErpsRingType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Type of ring."
+    ::= { vtssErpsConfigEntry 4 }
+
+vtssErpsConfigVirtualChannel OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Whether to use a virtual channel. Controls whether to use a virtual
+         channel with a sub-ring."
+    ::= { vtssErpsConfigEntry 5 }
+
+vtssErpsConfigConnectedRingId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For a sub-ring on an interconnection node, this must reference the
+         instance ID of the ring to which this sub-ring is connected."
+    ::= { vtssErpsConfigEntry 6 }
+
+vtssErpsConfigConnectedRingPropagate OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether the ring referenced by connected_ring_inst shall
+         propagate R-APS flush PDUs whenever this sub-ring's topology changes."
+    ::= { vtssErpsConfigEntry 7 }
+
+vtssErpsConfigRingId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The Ring ID is used - along with the control VLAN - to identify R-APS
+         PDUs as belonging to a particular ring."
+    ::= { vtssErpsConfigEntry 8 }
+
+vtssErpsConfigNodeId OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The Node ID is used inside the R-APS specific PDU to uniquely identify
+         this node (switch) on the ring."
+    ::= { vtssErpsConfigEntry 9 }
+
+vtssErpsConfigLevel OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MD/MEG Level of R-APS PDUs we transmit."
+    ::= { vtssErpsConfigEntry 10 }
+
+vtssErpsConfigControlVlan OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN on which R-APS PDUs are transmitted and received on the ring
+         ports."
+    ::= { vtssErpsConfigEntry 11 }
+
+vtssErpsConfigPcp OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The PCP value used in the VLAN tag of the R-APS PDUs."
+    ::= { vtssErpsConfigEntry 12 }
+
+vtssErpsConfigPort0SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSErpsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Selects whether Signal Fail (SF) comes from the link state of a given
+         interface, or from a Down-MEP."
+    ::= { vtssErpsConfigEntry 13 }
+
+vtssErpsConfigPort0If OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of ring protection port 0."
+    ::= { vtssErpsConfigEntry 14 }
+
+vtssErpsConfigPort0MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name name of Port0 MEP."
+    ::= { vtssErpsConfigEntry 15 }
+
+vtssErpsConfigPort0MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of Port0 MEP."
+    ::= { vtssErpsConfigEntry 16 }
+
+vtssErpsConfigPort0MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID of Port0 MEP."
+    ::= { vtssErpsConfigEntry 17 }
+
+vtssErpsConfigPort0Smac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source MAC address (must be unicast) used in R-APS PDUs sent on this
+         ring-port."
+    ::= { vtssErpsConfigEntry 18 }
+
+vtssErpsConfigPort1SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSErpsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Selects whether Signal Fail (SF) comes from the link state of a given
+         interface, or from a Down-MEP."
+    ::= { vtssErpsConfigEntry 19 }
+
+vtssErpsConfigPort1If OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of ring protection port 1."
+    ::= { vtssErpsConfigEntry 20 }
+
+vtssErpsConfigPort1MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name name of Port1 MEP."
+    ::= { vtssErpsConfigEntry 21 }
+
+vtssErpsConfigPort1MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of Port1 MEP."
+    ::= { vtssErpsConfigEntry 22 }
+
+vtssErpsConfigPort1MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID of Port1 MEP."
+    ::= { vtssErpsConfigEntry 23 }
+
+vtssErpsConfigPort1Smac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source MAC address (must be unicast) used in R-APS PDUs sent on this
+         ring-port."
+    ::= { vtssErpsConfigEntry 24 }
+
+vtssErpsConfigRevertive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Revertive (true) or Non-revertive (false) mode."
+    ::= { vtssErpsConfigEntry 25 }
+
+vtssErpsConfigWaitToRestoreTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Wait-to-Restore time in seconds. Valid range is 1-720."
+    ::= { vtssErpsConfigEntry 26 }
+
+vtssErpsConfigGuardTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Guard time in ms. Valid range is 10-2000 ms."
+    ::= { vtssErpsConfigEntry 27 }
+
+vtssErpsConfigHoldOffTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Hold off time in ms. Value is rounded down to 100ms precision. Valid
+         range is 0-10000 ms"
+    ::= { vtssErpsConfigEntry 28 }
+
+vtssErpsConfigRplMode OBJECT-TYPE
+    SYNTAX      VTSSErpsRplMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Ring Protection Link mode."
+    ::= { vtssErpsConfigEntry 29 }
+
+vtssErpsConfigRplPort OBJECT-TYPE
+    SYNTAX      VTSSErpsRingPort
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether it is port0 or port1 that is the RPL."
+    ::= { vtssErpsConfigEntry 30 }
+
+vtssErpsConfigProtectedVlans0Kto1K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "First quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigEntry 31 }
+
+vtssErpsConfigProtectedVlans1Kto2K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Second quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigEntry 32 }
+
+vtssErpsConfigProtectedVlans2Kto3K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Third quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigEntry 33 }
+
+vtssErpsConfigProtectedVlans3Kto4K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Fourth quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigEntry 34 }
+
+vtssErpsConfigAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssErpsConfigEntry 100 }
+
+vtssErpsConfigRowEditor OBJECT IDENTIFIER
+    ::= { vtssErpsConfig 2 }
+
+vtssErpsConfigRowEditorGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "ERPS group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the ERPS
+         capabilities."
+    ::= { vtssErpsConfigRowEditor 1 }
+
+vtssErpsConfigRowEditorAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The administrative state of this ERPS instance. Set to true to make it
+         function normally and false to make it cease functioning."
+    ::= { vtssErpsConfigRowEditor 2 }
+
+vtssErpsConfigRowEditorVersion OBJECT-TYPE
+    SYNTAX      VTSSErpsVersion
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "ERPS protocol version."
+    ::= { vtssErpsConfigRowEditor 3 }
+
+vtssErpsConfigRowEditorRingType OBJECT-TYPE
+    SYNTAX      VTSSErpsRingType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Type of ring."
+    ::= { vtssErpsConfigRowEditor 4 }
+
+vtssErpsConfigRowEditorVirtualChannel OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Whether to use a virtual channel. Controls whether to use a virtual
+         channel with a sub-ring."
+    ::= { vtssErpsConfigRowEditor 5 }
+
+vtssErpsConfigRowEditorConnectedRingId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For a sub-ring on an interconnection node, this must reference the
+         instance ID of the ring to which this sub-ring is connected."
+    ::= { vtssErpsConfigRowEditor 6 }
+
+vtssErpsConfigRowEditorConnectedRingPropagate OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether the ring referenced by connected_ring_inst shall
+         propagate R-APS flush PDUs whenever this sub-ring's topology changes."
+    ::= { vtssErpsConfigRowEditor 7 }
+
+vtssErpsConfigRowEditorRingId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The Ring ID is used - along with the control VLAN - to identify R-APS
+         PDUs as belonging to a particular ring."
+    ::= { vtssErpsConfigRowEditor 8 }
+
+vtssErpsConfigRowEditorNodeId OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The Node ID is used inside the R-APS specific PDU to uniquely identify
+         this node (switch) on the ring."
+    ::= { vtssErpsConfigRowEditor 9 }
+
+vtssErpsConfigRowEditorLevel OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MD/MEG Level of R-APS PDUs we transmit."
+    ::= { vtssErpsConfigRowEditor 10 }
+
+vtssErpsConfigRowEditorControlVlan OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN on which R-APS PDUs are transmitted and received on the ring
+         ports."
+    ::= { vtssErpsConfigRowEditor 11 }
+
+vtssErpsConfigRowEditorPcp OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The PCP value used in the VLAN tag of the R-APS PDUs."
+    ::= { vtssErpsConfigRowEditor 12 }
+
+vtssErpsConfigRowEditorPort0SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSErpsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Selects whether Signal Fail (SF) comes from the link state of a given
+         interface, or from a Down-MEP."
+    ::= { vtssErpsConfigRowEditor 13 }
+
+vtssErpsConfigRowEditorPort0If OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of ring protection port 0."
+    ::= { vtssErpsConfigRowEditor 14 }
+
+vtssErpsConfigRowEditorPort0MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name name of Port0 MEP."
+    ::= { vtssErpsConfigRowEditor 15 }
+
+vtssErpsConfigRowEditorPort0MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of Port0 MEP."
+    ::= { vtssErpsConfigRowEditor 16 }
+
+vtssErpsConfigRowEditorPort0MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID of Port0 MEP."
+    ::= { vtssErpsConfigRowEditor 17 }
+
+vtssErpsConfigRowEditorPort0Smac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source MAC address (must be unicast) used in R-APS PDUs sent on this
+         ring-port."
+    ::= { vtssErpsConfigRowEditor 18 }
+
+vtssErpsConfigRowEditorPort1SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSErpsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Selects whether Signal Fail (SF) comes from the link state of a given
+         interface, or from a Down-MEP."
+    ::= { vtssErpsConfigRowEditor 19 }
+
+vtssErpsConfigRowEditorPort1If OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of ring protection port 1."
+    ::= { vtssErpsConfigRowEditor 20 }
+
+vtssErpsConfigRowEditorPort1MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name name of Port1 MEP."
+    ::= { vtssErpsConfigRowEditor 21 }
+
+vtssErpsConfigRowEditorPort1MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of Port1 MEP."
+    ::= { vtssErpsConfigRowEditor 22 }
+
+vtssErpsConfigRowEditorPort1MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID of Port1 MEP."
+    ::= { vtssErpsConfigRowEditor 23 }
+
+vtssErpsConfigRowEditorPort1Smac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source MAC address (must be unicast) used in R-APS PDUs sent on this
+         ring-port."
+    ::= { vtssErpsConfigRowEditor 24 }
+
+vtssErpsConfigRowEditorRevertive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Revertive (true) or Non-revertive (false) mode."
+    ::= { vtssErpsConfigRowEditor 25 }
+
+vtssErpsConfigRowEditorWaitToRestoreTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Wait-to-Restore time in seconds. Valid range is 1-720."
+    ::= { vtssErpsConfigRowEditor 26 }
+
+vtssErpsConfigRowEditorGuardTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Guard time in ms. Valid range is 10-2000 ms."
+    ::= { vtssErpsConfigRowEditor 27 }
+
+vtssErpsConfigRowEditorHoldOffTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Hold off time in ms. Value is rounded down to 100ms precision. Valid
+         range is 0-10000 ms"
+    ::= { vtssErpsConfigRowEditor 28 }
+
+vtssErpsConfigRowEditorRplMode OBJECT-TYPE
+    SYNTAX      VTSSErpsRplMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Ring Protection Link mode."
+    ::= { vtssErpsConfigRowEditor 29 }
+
+vtssErpsConfigRowEditorRplPort OBJECT-TYPE
+    SYNTAX      VTSSErpsRingPort
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether it is port0 or port1 that is the RPL."
+    ::= { vtssErpsConfigRowEditor 30 }
+
+vtssErpsConfigRowEditorProtectedVlans0Kto1K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "First quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigRowEditor 31 }
+
+vtssErpsConfigRowEditorProtectedVlans1Kto2K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Second quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigRowEditor 32 }
+
+vtssErpsConfigRowEditorProtectedVlans2Kto3K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Third quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigRowEditor 33 }
+
+vtssErpsConfigRowEditorProtectedVlans3Kto4K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Fourth quarter of bit-array indicating whether a VLAN is protected by
+         this ring instance ('1') or not ('0')."
+    ::= { vtssErpsConfigRowEditor 34 }
+
+vtssErpsConfigRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssErpsConfigRowEditor 100 }
+
+vtssErpsStatus OBJECT IDENTIFIER
+    ::= { vtssErpsMibObjects 3 }
+
+vtssErpsStatusTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSErpsStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This table contains status per EPRS group."
+    ::= { vtssErpsStatus 1 }
+
+vtssErpsStatusEntry OBJECT-TYPE
+    SYNTAX      VTSSErpsStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Status."
+    INDEX       { vtssErpsStatusGroupIndex }
+    ::= { vtssErpsStatusTable 1 }
+
+VTSSErpsStatusEntry ::= SEQUENCE {
+    vtssErpsStatusGroupIndex                 Integer32,
+    vtssErpsStatusOperState                  VTSSErpsOperState,
+    vtssErpsStatusOperWarning                VTSSErpsOperWarning,
+    vtssErpsStatusNodeState                  VTSSErpsNodeState,
+    vtssErpsStatusTxRapsActive               TruthValue,
+    vtssErpsStatusTxInfoUpdateTimeSecs       VTSSUnsigned64,
+    vtssErpsStatusTxInfoRequest              VTSSErpsRequestState,
+    vtssErpsStatusTxInfoVersion              VTSSUnsigned8,
+    vtssErpsStatusTxInfoRb                   TruthValue,
+    vtssErpsStatusTxInfoDnf                  TruthValue,
+    vtssErpsStatusTxInfoBpr                  VTSSErpsRingPort,
+    vtssErpsStatusTxInfoNodeId               MacAddress,
+    vtssErpsStatusTxInfoSmac                 MacAddress,
+    vtssErpsStatusCFOPTo                     TruthValue,
+    vtssErpsStatusPort0StatusBlocked         TruthValue,
+    vtssErpsStatusPort0StatusSf              TruthValue,
+    vtssErpsStatusPort0StatusFopPm           TruthValue,
+    vtssErpsStatusPort0StatusUpdateTimeSecs  VTSSUnsigned64,
+    vtssErpsStatusPort0StatusRequest         VTSSErpsRequestState,
+    vtssErpsStatusPort0StatusVersion         VTSSUnsigned8,
+    vtssErpsStatusPort0StatusRb              TruthValue,
+    vtssErpsStatusPort0StatusDnf             TruthValue,
+    vtssErpsStatusPort0StatusBpr             VTSSErpsRingPort,
+    vtssErpsStatusPort0StatusNodeId          MacAddress,
+    vtssErpsStatusPort0StatusSmac            MacAddress,
+    vtssErpsStatusPort0RxErrorCnt            Counter64,
+    vtssErpsStatusPort0RxOwnCnt              Counter64,
+    vtssErpsStatusPort0RxGuardCnt            Counter64,
+    vtssErpsStatusPort0RxFOPPmCnt            Counter64,
+    vtssErpsStatusPort0RxNrCnt               Counter64,
+    vtssErpsStatusPort0RxNrRbCnt             Counter64,
+    vtssErpsStatusPort0RxSfCnt               Counter64,
+    vtssErpsStatusPort0RxFxCnt               Counter64,
+    vtssErpsStatusPort0RxMsCnt               Counter64,
+    vtssErpsStatusPort0RxEventCnt            Counter64,
+    vtssErpsStatusPort0TxNrCnt               Counter64,
+    vtssErpsStatusPort0TxNrRbCnt             Counter64,
+    vtssErpsStatusPort0TxSfCnt               Counter64,
+    vtssErpsStatusPort0TxFsCnt               Counter64,
+    vtssErpsStatusPort0TxMsCnt               Counter64,
+    vtssErpsStatusPort0TxEventCnt            Counter64,
+    vtssErpsStatusPort0SfCn                  Counter64,
+    vtssErpsStatusPort0FlushCnt              Counter64,
+    vtssErpsStatusPort1StatusBlocked         TruthValue,
+    vtssErpsStatusPort1StatusSf              TruthValue,
+    vtssErpsStatusPort1StatusFopPm           TruthValue,
+    vtssErpsStatusPort1StatusUpdateTimeSecs  VTSSUnsigned64,
+    vtssErpsStatusPort1StatusRequest         VTSSErpsRequestState,
+    vtssErpsStatusPort1StatusVersion         VTSSUnsigned8,
+    vtssErpsStatusPort1StatusRb              TruthValue,
+    vtssErpsStatusPort1StatusDnf             TruthValue,
+    vtssErpsStatusPort1StatusBpr             VTSSErpsRingPort,
+    vtssErpsStatusPort1StatusNodeId          MacAddress,
+    vtssErpsStatusPort1StatusSmac            MacAddress,
+    vtssErpsStatusPort1RxErrorCnt            Counter64,
+    vtssErpsStatusPort1RxOwnCnt              Counter64,
+    vtssErpsStatusPort1RxGuardCnt            Counter64,
+    vtssErpsStatusPort1RxFOPPmCnt            Counter64,
+    vtssErpsStatusPort1RxNrCnt               Counter64,
+    vtssErpsStatusPort1RxNrRbCnt             Counter64,
+    vtssErpsStatusPort1RxSfCnt               Counter64,
+    vtssErpsStatusPort1RxFxCnt               Counter64,
+    vtssErpsStatusPort1RxMsCnt               Counter64,
+    vtssErpsStatusPort1RxEventCnt            Counter64,
+    vtssErpsStatusPort1TxNrCnt               Counter64,
+    vtssErpsStatusPort1TxNrRbCnt             Counter64,
+    vtssErpsStatusPort1TxSfCnt               Counter64,
+    vtssErpsStatusPort1TxFsCnt               Counter64,
+    vtssErpsStatusPort1TxMsCnt               Counter64,
+    vtssErpsStatusPort1TxEventCnt            Counter64,
+    vtssErpsStatusPort1SfCn                  Counter64,
+    vtssErpsStatusPort1FlushCnt              Counter64
+}
+
+vtssErpsStatusGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "ERPS group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the ERPS
+         capabilities."
+    ::= { vtssErpsStatusEntry 1 }
+
+vtssErpsStatusOperState OBJECT-TYPE
+    SYNTAX      VTSSErpsOperState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The operational state of ERPS instance."
+    ::= { vtssErpsStatusEntry 2 }
+
+vtssErpsStatusOperWarning OBJECT-TYPE
+    SYNTAX      VTSSErpsOperWarning
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Operational warnings of ERPS instance."
+    ::= { vtssErpsStatusEntry 3 }
+
+vtssErpsStatusNodeState OBJECT-TYPE
+    SYNTAX      VTSSErpsNodeState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Specifies protection/node state of ERPS."
+    ::= { vtssErpsStatusEntry 4 }
+
+vtssErpsStatusTxRapsActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Specifies whether we are currently supposed to be transmitting R-APS
+         PDUs on our ring ports."
+    ::= { vtssErpsStatusEntry 5 }
+
+vtssErpsStatusTxInfoUpdateTimeSecs OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Time in seconds since boot that this structure was last updated."
+    ::= { vtssErpsStatusEntry 6 }
+
+vtssErpsStatusTxInfoRequest OBJECT-TYPE
+    SYNTAX      VTSSErpsRequestState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Request/state according to G.8032, table 10-3."
+    ::= { vtssErpsStatusEntry 7 }
+
+vtssErpsStatusTxInfoVersion OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Version of received/used R-APS Protocol. 0 means v1, 1 means v2, etc."
+    ::= { vtssErpsStatusEntry 8 }
+
+vtssErpsStatusTxInfoRb OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "RB (RPL blocked) bit of R-APS info. See Figure 10-3 of G.8032."
+    ::= { vtssErpsStatusEntry 9 }
+
+vtssErpsStatusTxInfoDnf OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "DNF (Do Not Flush) bit of R-APS info. See Figure 10-3 of G.8032."
+    ::= { vtssErpsStatusEntry 10 }
+
+vtssErpsStatusTxInfoBpr OBJECT-TYPE
+    SYNTAX      VTSSErpsRingPort
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "BPR (Blocked Port Reference) of R-APS info. See Figure 10-3 of G.8032."
+    ::= { vtssErpsStatusEntry 11 }
+
+vtssErpsStatusTxInfoNodeId OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Node ID of this request."
+    ::= { vtssErpsStatusEntry 12 }
+
+vtssErpsStatusTxInfoSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Source MAC address used in the request/state."
+    ::= { vtssErpsStatusEntry 13 }
+
+vtssErpsStatusCFOPTo OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Failure of Protocol - R-APS Rx Time Out."
+    ::= { vtssErpsStatusEntry 14 }
+
+vtssErpsStatusPort0StatusBlocked OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Specifies whether ring port is blocked or not."
+    ::= { vtssErpsStatusEntry 15 }
+
+vtssErpsStatusPort0StatusSf OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Specifies the Signal Fail state of ring port after hold-off timer
+         has expired."
+    ::= { vtssErpsStatusEntry 16 }
+
+vtssErpsStatusPort0StatusFopPm OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:This boolean indicates whether there are two RPL owners on the
+         ring."
+    ::= { vtssErpsStatusEntry 17 }
+
+vtssErpsStatusPort0StatusUpdateTimeSecs OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Time in seconds since boot that this structure was last updated."
+    ::= { vtssErpsStatusEntry 18 }
+
+vtssErpsStatusPort0StatusRequest OBJECT-TYPE
+    SYNTAX      VTSSErpsRequestState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Request/state according to G.8032, table 10-3."
+    ::= { vtssErpsStatusEntry 19 }
+
+vtssErpsStatusPort0StatusVersion OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Version of received/used R-APS Protocol. 0 means v1, 1 means v2,
+         etc. "
+    ::= { vtssErpsStatusEntry 20 }
+
+vtssErpsStatusPort0StatusRb OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:RB (RPL blocked) bit of R-APS info."
+    ::= { vtssErpsStatusEntry 21 }
+
+vtssErpsStatusPort0StatusDnf OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:DNF (Do Not Flush) bit of R-APS info."
+    ::= { vtssErpsStatusEntry 22 }
+
+vtssErpsStatusPort0StatusBpr OBJECT-TYPE
+    SYNTAX      VTSSErpsRingPort
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:BPR (Blocked Port Reference) of R-APS info."
+    ::= { vtssErpsStatusEntry 23 }
+
+vtssErpsStatusPort0StatusNodeId OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Node ID of this request."
+    ::= { vtssErpsStatusEntry 24 }
+
+vtssErpsStatusPort0StatusSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:The Source MAC address used in the request/state."
+    ::= { vtssErpsStatusEntry 25 }
+
+vtssErpsStatusPort0RxErrorCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received erroneous R-APS PDUs."
+    ::= { vtssErpsStatusEntry 26 }
+
+vtssErpsStatusPort0RxOwnCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received R-APS PDUs with our own node ID."
+    ::= { vtssErpsStatusEntry 27 }
+
+vtssErpsStatusPort0RxGuardCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received R-APS PDUs during guard timer."
+    ::= { vtssErpsStatusEntry 28 }
+
+vtssErpsStatusPort0RxFOPPmCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received R-APS PDUs causing FOP-PM."
+    ::= { vtssErpsStatusEntry 29 }
+
+vtssErpsStatusPort0RxNrCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received NR R-APS PDUs."
+    ::= { vtssErpsStatusEntry 30 }
+
+vtssErpsStatusPort0RxNrRbCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received NR, RB R-APS PDUs."
+    ::= { vtssErpsStatusEntry 31 }
+
+vtssErpsStatusPort0RxSfCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received SF R-APS PDUs."
+    ::= { vtssErpsStatusEntry 32 }
+
+vtssErpsStatusPort0RxFxCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received FS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 33 }
+
+vtssErpsStatusPort0RxMsCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received MS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 34 }
+
+vtssErpsStatusPort0RxEventCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of received Event R-APS PDUs."
+    ::= { vtssErpsStatusEntry 35 }
+
+vtssErpsStatusPort0TxNrCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of transmitted NR R-APS PDUs."
+    ::= { vtssErpsStatusEntry 36 }
+
+vtssErpsStatusPort0TxNrRbCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of transmitted NR, RB R-APS PDUs."
+    ::= { vtssErpsStatusEntry 37 }
+
+vtssErpsStatusPort0TxSfCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of transmitted SF R-APS PDUs."
+    ::= { vtssErpsStatusEntry 38 }
+
+vtssErpsStatusPort0TxFsCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of transmitted FS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 39 }
+
+vtssErpsStatusPort0TxMsCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of transmitted MS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 40 }
+
+vtssErpsStatusPort0TxEventCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of transmitted Event R-APS PDUs."
+    ::= { vtssErpsStatusEntry 41 }
+
+vtssErpsStatusPort0SfCn OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of local signal fails."
+    ::= { vtssErpsStatusEntry 42 }
+
+vtssErpsStatusPort0FlushCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port0:Number of FDB flushes (same for both rings)."
+    ::= { vtssErpsStatusEntry 43 }
+
+vtssErpsStatusPort1StatusBlocked OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Specifies whether ring port is blocked or not."
+    ::= { vtssErpsStatusEntry 44 }
+
+vtssErpsStatusPort1StatusSf OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Specifies the Signal Fail state of ring port after hold-off timer
+         has expired."
+    ::= { vtssErpsStatusEntry 45 }
+
+vtssErpsStatusPort1StatusFopPm OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:This boolean indicates whether there are two RPL owners on the
+         ring."
+    ::= { vtssErpsStatusEntry 46 }
+
+vtssErpsStatusPort1StatusUpdateTimeSecs OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Time in seconds since boot that this structure was last updated."
+    ::= { vtssErpsStatusEntry 47 }
+
+vtssErpsStatusPort1StatusRequest OBJECT-TYPE
+    SYNTAX      VTSSErpsRequestState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Request/state according to G.8032, table 10-3."
+    ::= { vtssErpsStatusEntry 48 }
+
+vtssErpsStatusPort1StatusVersion OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Version of received/used R-APS Protocol. 0 means v1, 1 means v2,
+         etc. "
+    ::= { vtssErpsStatusEntry 49 }
+
+vtssErpsStatusPort1StatusRb OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:RB (RPL blocked) bit of R-APS info."
+    ::= { vtssErpsStatusEntry 50 }
+
+vtssErpsStatusPort1StatusDnf OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:DNF (Do Not Flush) bit of R-APS info."
+    ::= { vtssErpsStatusEntry 51 }
+
+vtssErpsStatusPort1StatusBpr OBJECT-TYPE
+    SYNTAX      VTSSErpsRingPort
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:BPR (Blocked Port Reference) of R-APS info."
+    ::= { vtssErpsStatusEntry 52 }
+
+vtssErpsStatusPort1StatusNodeId OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Node ID of this request."
+    ::= { vtssErpsStatusEntry 53 }
+
+vtssErpsStatusPort1StatusSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:The Source MAC address used in the request/state."
+    ::= { vtssErpsStatusEntry 54 }
+
+vtssErpsStatusPort1RxErrorCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received erroneous R-APS PDUs."
+    ::= { vtssErpsStatusEntry 55 }
+
+vtssErpsStatusPort1RxOwnCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received R-APS PDUs with our own node ID."
+    ::= { vtssErpsStatusEntry 56 }
+
+vtssErpsStatusPort1RxGuardCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received R-APS PDUs during guard timer."
+    ::= { vtssErpsStatusEntry 57 }
+
+vtssErpsStatusPort1RxFOPPmCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received R-APS PDUs causing FOP-PM."
+    ::= { vtssErpsStatusEntry 58 }
+
+vtssErpsStatusPort1RxNrCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received NR R-APS PDUs."
+    ::= { vtssErpsStatusEntry 59 }
+
+vtssErpsStatusPort1RxNrRbCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received NR, RB R-APS PDUs."
+    ::= { vtssErpsStatusEntry 60 }
+
+vtssErpsStatusPort1RxSfCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received SF R-APS PDUs."
+    ::= { vtssErpsStatusEntry 61 }
+
+vtssErpsStatusPort1RxFxCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received FS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 62 }
+
+vtssErpsStatusPort1RxMsCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received MS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 63 }
+
+vtssErpsStatusPort1RxEventCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of received Event R-APS PDUs."
+    ::= { vtssErpsStatusEntry 64 }
+
+vtssErpsStatusPort1TxNrCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of transmitted NR R-APS PDUs."
+    ::= { vtssErpsStatusEntry 65 }
+
+vtssErpsStatusPort1TxNrRbCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of transmitted NR, RB R-APS PDUs."
+    ::= { vtssErpsStatusEntry 66 }
+
+vtssErpsStatusPort1TxSfCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of transmitted SF R-APS PDUs."
+    ::= { vtssErpsStatusEntry 67 }
+
+vtssErpsStatusPort1TxFsCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of transmitted FS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 68 }
+
+vtssErpsStatusPort1TxMsCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of transmitted MS R-APS PDUs."
+    ::= { vtssErpsStatusEntry 69 }
+
+vtssErpsStatusPort1TxEventCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of transmitted Event R-APS PDUs."
+    ::= { vtssErpsStatusEntry 70 }
+
+vtssErpsStatusPort1SfCn OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of local signal fails."
+    ::= { vtssErpsStatusEntry 71 }
+
+vtssErpsStatusPort1FlushCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1:Number of FDB flushes (same for both rings)."
+    ::= { vtssErpsStatusEntry 72 }
+
+vtssErpsControl OBJECT IDENTIFIER
+    ::= { vtssErpsMibObjects 4 }
+
+vtssErpsControlCommandTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSErpsControlCommandEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is the ERPS group control table."
+    ::= { vtssErpsControl 1 }
+
+vtssErpsControlCommandEntry OBJECT-TYPE
+    SYNTAX      VTSSErpsControlCommandEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents dynamic control elements an ERPS
+         group."
+    INDEX       { vtssErpsControlCommandGroupIndex }
+    ::= { vtssErpsControlCommandTable 1 }
+
+VTSSErpsControlCommandEntry ::= SEQUENCE {
+    vtssErpsControlCommandGroupIndex  Integer32,
+    vtssErpsControlCommandCommand     VTSSErpsCommand
+}
+
+vtssErpsControlCommandGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "ERPS group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the ERPS
+         capabilities."
+    ::= { vtssErpsControlCommandEntry 1 }
+
+vtssErpsControlCommandCommand OBJECT-TYPE
+    SYNTAX      VTSSErpsCommand
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Control command to execute. Always returns none when read."
+    ::= { vtssErpsControlCommandEntry 2 }
+
+vtssErpsControlStatisticsClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSErpsControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created ERPS clear commands."
+    ::= { vtssErpsControl 2 }
+
+vtssErpsControlStatisticsClearEntry OBJECT-TYPE
+    SYNTAX      VTSSErpsControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created ERPS clear command."
+    INDEX       { vtssErpsControlStatisticsClearGroupIndex }
+    ::= { vtssErpsControlStatisticsClearTable 1 }
+
+VTSSErpsControlStatisticsClearEntry ::= SEQUENCE {
+    vtssErpsControlStatisticsClearGroupIndex  Integer32,
+    vtssErpsControlStatisticsClearClear       TruthValue
+}
+
+vtssErpsControlStatisticsClearGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "ERPS group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the ERPS
+         capabilities."
+    ::= { vtssErpsControlStatisticsClearEntry 1 }
+
+vtssErpsControlStatisticsClearClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to clear the counters of an ERPS instance."
+    ::= { vtssErpsControlStatisticsClearEntry 4 }
+
+vtssErpsMibConformance OBJECT IDENTIFIER
+    ::= { vtssErpsMib 2 }
+
+vtssErpsMibCompliances OBJECT IDENTIFIER
+    ::= { vtssErpsMibConformance 1 }
+
+vtssErpsMibGroups OBJECT IDENTIFIER
+    ::= { vtssErpsMibConformance 2 }
+
+vtssErpsCapabilitiesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssErpsCapabilitiesInstanceMax,
+                  vtssErpsCapabilitiesWtrSecsMax,
+                  vtssErpsCapabilitiesGuardTimeMsecsMax,
+                  vtssErpsCapabilitiesHoldOffMsecsMax }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssErpsMibGroups 1 }
+
+vtssErpsConfigTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssErpsConfigGroupIndex, vtssErpsConfigAdminActive,
+                  vtssErpsConfigVersion, vtssErpsConfigRingType,
+                  vtssErpsConfigVirtualChannel,
+                  vtssErpsConfigConnectedRingId,
+                  vtssErpsConfigConnectedRingPropagate,
+                  vtssErpsConfigRingId, vtssErpsConfigNodeId,
+                  vtssErpsConfigLevel, vtssErpsConfigControlVlan,
+                  vtssErpsConfigPcp, vtssErpsConfigPort0SfTrigger,
+                  vtssErpsConfigPort0If, vtssErpsConfigPort0MEPDomain,
+                  vtssErpsConfigPort0MEPService,
+                  vtssErpsConfigPort0MEPId, vtssErpsConfigPort0Smac,
+                  vtssErpsConfigPort1SfTrigger, vtssErpsConfigPort1If,
+                  vtssErpsConfigPort1MEPDomain,
+                  vtssErpsConfigPort1MEPService,
+                  vtssErpsConfigPort1MEPId, vtssErpsConfigPort1Smac,
+                  vtssErpsConfigRevertive,
+                  vtssErpsConfigWaitToRestoreTime,
+                  vtssErpsConfigGuardTime, vtssErpsConfigHoldOffTime,
+                  vtssErpsConfigRplMode, vtssErpsConfigRplPort,
+                  vtssErpsConfigProtectedVlans0Kto1K,
+                  vtssErpsConfigProtectedVlans1Kto2K,
+                  vtssErpsConfigProtectedVlans2Kto3K,
+                  vtssErpsConfigProtectedVlans3Kto4K,
+                  vtssErpsConfigAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssErpsMibGroups 2 }
+
+vtssErpsConfigRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssErpsConfigRowEditorGroupIndex,
+                  vtssErpsConfigRowEditorAdminActive,
+                  vtssErpsConfigRowEditorVersion,
+                  vtssErpsConfigRowEditorRingType,
+                  vtssErpsConfigRowEditorVirtualChannel,
+                  vtssErpsConfigRowEditorConnectedRingId,
+                  vtssErpsConfigRowEditorConnectedRingPropagate,
+                  vtssErpsConfigRowEditorRingId,
+                  vtssErpsConfigRowEditorNodeId,
+                  vtssErpsConfigRowEditorLevel,
+                  vtssErpsConfigRowEditorControlVlan,
+                  vtssErpsConfigRowEditorPcp,
+                  vtssErpsConfigRowEditorPort0SfTrigger,
+                  vtssErpsConfigRowEditorPort0If,
+                  vtssErpsConfigRowEditorPort0MEPDomain,
+                  vtssErpsConfigRowEditorPort0MEPService,
+                  vtssErpsConfigRowEditorPort0MEPId,
+                  vtssErpsConfigRowEditorPort0Smac,
+                  vtssErpsConfigRowEditorPort1SfTrigger,
+                  vtssErpsConfigRowEditorPort1If,
+                  vtssErpsConfigRowEditorPort1MEPDomain,
+                  vtssErpsConfigRowEditorPort1MEPService,
+                  vtssErpsConfigRowEditorPort1MEPId,
+                  vtssErpsConfigRowEditorPort1Smac,
+                  vtssErpsConfigRowEditorRevertive,
+                  vtssErpsConfigRowEditorWaitToRestoreTime,
+                  vtssErpsConfigRowEditorGuardTime,
+                  vtssErpsConfigRowEditorHoldOffTime,
+                  vtssErpsConfigRowEditorRplMode,
+                  vtssErpsConfigRowEditorRplPort,
+                  vtssErpsConfigRowEditorProtectedVlans0Kto1K,
+                  vtssErpsConfigRowEditorProtectedVlans1Kto2K,
+                  vtssErpsConfigRowEditorProtectedVlans2Kto3K,
+                  vtssErpsConfigRowEditorProtectedVlans3Kto4K,
+                  vtssErpsConfigRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssErpsMibGroups 3 }
+
+vtssErpsStatusTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssErpsStatusGroupIndex, vtssErpsStatusOperState,
+                  vtssErpsStatusOperWarning, vtssErpsStatusNodeState,
+                  vtssErpsStatusTxRapsActive,
+                  vtssErpsStatusTxInfoUpdateTimeSecs,
+                  vtssErpsStatusTxInfoRequest,
+                  vtssErpsStatusTxInfoVersion, vtssErpsStatusTxInfoRb,
+                  vtssErpsStatusTxInfoDnf, vtssErpsStatusTxInfoBpr,
+                  vtssErpsStatusTxInfoNodeId,
+                  vtssErpsStatusTxInfoSmac, vtssErpsStatusCFOPTo,
+                  vtssErpsStatusPort0StatusBlocked,
+                  vtssErpsStatusPort0StatusSf,
+                  vtssErpsStatusPort0StatusFopPm,
+                  vtssErpsStatusPort0StatusUpdateTimeSecs,
+                  vtssErpsStatusPort0StatusRequest,
+                  vtssErpsStatusPort0StatusVersion,
+                  vtssErpsStatusPort0StatusRb,
+                  vtssErpsStatusPort0StatusDnf,
+                  vtssErpsStatusPort0StatusBpr,
+                  vtssErpsStatusPort0StatusNodeId,
+                  vtssErpsStatusPort0StatusSmac,
+                  vtssErpsStatusPort0RxErrorCnt,
+                  vtssErpsStatusPort0RxOwnCnt,
+                  vtssErpsStatusPort0RxGuardCnt,
+                  vtssErpsStatusPort0RxFOPPmCnt,
+                  vtssErpsStatusPort0RxNrCnt,
+                  vtssErpsStatusPort0RxNrRbCnt,
+                  vtssErpsStatusPort0RxSfCnt,
+                  vtssErpsStatusPort0RxFxCnt,
+                  vtssErpsStatusPort0RxMsCnt,
+                  vtssErpsStatusPort0RxEventCnt,
+                  vtssErpsStatusPort0TxNrCnt,
+                  vtssErpsStatusPort0TxNrRbCnt,
+                  vtssErpsStatusPort0TxSfCnt,
+                  vtssErpsStatusPort0TxFsCnt,
+                  vtssErpsStatusPort0TxMsCnt,
+                  vtssErpsStatusPort0TxEventCnt,
+                  vtssErpsStatusPort0SfCn,
+                  vtssErpsStatusPort0FlushCnt,
+                  vtssErpsStatusPort1StatusBlocked,
+                  vtssErpsStatusPort1StatusSf,
+                  vtssErpsStatusPort1StatusFopPm,
+                  vtssErpsStatusPort1StatusUpdateTimeSecs,
+                  vtssErpsStatusPort1StatusRequest,
+                  vtssErpsStatusPort1StatusVersion,
+                  vtssErpsStatusPort1StatusRb,
+                  vtssErpsStatusPort1StatusDnf,
+                  vtssErpsStatusPort1StatusBpr,
+                  vtssErpsStatusPort1StatusNodeId,
+                  vtssErpsStatusPort1StatusSmac,
+                  vtssErpsStatusPort1RxErrorCnt,
+                  vtssErpsStatusPort1RxOwnCnt,
+                  vtssErpsStatusPort1RxGuardCnt,
+                  vtssErpsStatusPort1RxFOPPmCnt,
+                  vtssErpsStatusPort1RxNrCnt,
+                  vtssErpsStatusPort1RxNrRbCnt,
+                  vtssErpsStatusPort1RxSfCnt,
+                  vtssErpsStatusPort1RxFxCnt,
+                  vtssErpsStatusPort1RxMsCnt,
+                  vtssErpsStatusPort1RxEventCnt,
+                  vtssErpsStatusPort1TxNrCnt,
+                  vtssErpsStatusPort1TxNrRbCnt,
+                  vtssErpsStatusPort1TxSfCnt,
+                  vtssErpsStatusPort1TxFsCnt,
+                  vtssErpsStatusPort1TxMsCnt,
+                  vtssErpsStatusPort1TxEventCnt,
+                  vtssErpsStatusPort1SfCn,
+                  vtssErpsStatusPort1FlushCnt }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssErpsMibGroups 4 }
+
+vtssErpsControlCommandTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssErpsControlCommandGroupIndex,
+                  vtssErpsControlCommandCommand }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssErpsMibGroups 5 }
+
+vtssErpsControlStatisticsClearTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssErpsControlStatisticsClearGroupIndex,
+                  vtssErpsControlStatisticsClearClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssErpsMibGroups 6 }
+
+vtssErpsMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssErpsCapabilitiesInfoGroup,
+                       vtssErpsConfigTableInfoGroup,
+                       vtssErpsConfigRowEditorInfoGroup,
+                       vtssErpsStatusTableInfoGroup,
+                       vtssErpsControlCommandTableInfoGroup,
+                       vtssErpsControlStatisticsClearTableInfoGroup }
+
+    ::= { vtssErpsMibCompliances 1 }
+
+END

@@ -1,0 +1,3087 @@
+//
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+//
+//
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_DHCP_SERVER)
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include "dhcp_server_api.h"
+#include "ip_utils.hxx"
+#include "icli_porting_util.h"
+#include "misc_api.h"
+#include "vtss/appl/dhcp_server.h"
+
+// for VTSS_MALLOC
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_DHCP_SERVER
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+
+#define ERRMSG_LEADIN "%% DHCP server: "
+
+static void _error_msg(
+    IN u32                  session_id,
+    IN mesa_rc     rc,
+    IN const char           *msg
+)
+{
+    // Some error codes don't error_txt() well, so we fix them up here.
+    const char *err_txt;
+    switch (rc) {
+    case VTSS_RC_ERROR:
+        err_txt = "Operation failed";
+        break;
+    default:
+        err_txt = error_txt(rc);
+        break;
+    }
+
+    if (msg) {
+        ICLI_PRINTF(ERRMSG_LEADIN "%s. (%s.)\n", msg, err_txt);
+    } else {
+        ICLI_PRINTF(ERRMSG_LEADIN "%s.\n", err_txt);
+    }
+}
+
+static void _error_msg(
+    IN u32                  session_id,
+    IN mesa_rc     rc
+)
+{
+    _error_msg(session_id, rc, NULL);
+}
+
+// Some convenience macros for error handling.
+
+#define TRY_MSG(cmd, msg) \
+    { \
+        mesa_rc rc = (cmd); \
+        if (rc != VTSS_RC_OK) { \
+            _error_msg(session_id, rc, msg); \
+            return ICLI_RC_ERROR; \
+        } \
+    }
+
+#define TRY_IGNORE(cmd, ignore_rc) \
+    { \
+        mesa_rc rc = (cmd); \
+        if (rc != VTSS_RC_OK && rc != (ignore_rc)) { \
+            _error_msg(session_id, rc); \
+            return ICLI_RC_ERROR; \
+        } \
+    }
+
+#define TRY(cmd) TRY_MSG((cmd), NULL)
+
+// Macros for getting/setting a pool. We usually read-modify-write with our
+// ICLI cmds, and this makes it a bit easier.
+
+#define DECL_POOL_VARS \
+    vtss_appl_dhcp_server_pool_name_t         pname; \
+    vtss_appl_dhcp_server_config_pool_entry_t pool
+
+// Get a pool, given a name in var 'pool_name'
+#define TRY_GETPOOL() \
+    (void)icli_str_cpy(pname.pool_name, pool_name); \
+    TRY(vtss_appl_dhcp_server_config_pool_entry_get(pname, &pool))
+
+// Set the pool. Assumes TRY_GETPOOL was called earlier.
+#define TRY_SETPOOL() \
+    TRY(vtss_appl_dhcp_server_config_pool_entry_set(pname, &pool))
+
+#define __SERVER_SHOW(_field_, _title_, _MAX_CNT_) \
+    n = 0; \
+    for ( i = 0; i < _MAX_CNT_; i++ ) { \
+        if ( pool->_field_[i] ) { \
+            ++n; \
+        } \
+    } \
+    if ( n ) { \
+        if ( n > 1 ) { \
+            ICLI_PRINTF("  " _title_ "s are"); \
+        } else { \
+            ICLI_PRINTF("  " _title_ " is"); \
+        } \
+        for ( i = 0; i < _MAX_CNT_; i++ ) { \
+            if ( pool->_field_[i] ) { \
+                ICLI_PRINTF(" %s", icli_ipv4_to_str(pool->_field_[i], str)); \
+            } \
+        } \
+    } else { \
+        ICLI_PRINTF("  " _title_ " is -"); \
+    } \
+    ICLI_PRINTF("\n");
+
+static char *_lease_str_get(
+    IN  vtss_appl_dhcp_server_config_pool_entry_t *pool,
+    OUT char                                      *str
+)
+{
+    if ( pool->lease_day ) {
+        sprintf(str, "%u days %u hours %u minutes", pool->lease_day, pool->lease_hour, pool->lease_minute);
+    } else if ( pool->lease_hour ) {
+        sprintf(str, "%u hours %u minutes", pool->lease_hour, pool->lease_minute);
+    } else {
+        sprintf(str, "%u minutes", pool->lease_minute);
+    }
+    return str;
+}
+
+static void _pool_show(
+    IN u32                                       session_id,
+    IN vtss_appl_dhcp_server_pool_name_t         *pool_name,
+    IN vtss_appl_dhcp_server_config_pool_entry_t *pool
+)
+{
+    char    str[64];
+    int     i;
+    char    empty_mac[6] = {0, 0, 0, 0, 0, 0};
+    BOOL    b;
+    u32     n;
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Pool Name: %s\n", pool_name->pool_name);
+    ICLI_PRINTF("----------------------------------------------\n");
+
+    // Type, IP and Netmask
+    if ( pool->type != VTSS_APPL_DHCP_SERVER_POOL_TYPE_NONE ) {
+        ICLI_PRINTF("  Type is %s\n", (pool->type == VTSS_APPL_DHCP_SERVER_POOL_TYPE_NETWORK) ? "network" : "host");
+        ICLI_PRINTF("  IP is %s\n", icli_ipv4_to_str(pool->ip, str));
+        ICLI_PRINTF("  Subnet mask is %s\n", icli_ipv4_to_str(pool->subnet_mask, str));
+    } else {
+        ICLI_PRINTF("  Type is -\n");
+        ICLI_PRINTF("  IP is -\n");
+        ICLI_PRINTF("  Subnet mask is -\n");
+    }
+
+    // Broadcast
+    if ( pool->subnet_broadcast ) {
+        ICLI_PRINTF("  Subnet broadcast address is %s\n", icli_ipv4_to_str(pool->subnet_broadcast, str));
+    } else {
+        ICLI_PRINTF("  Subnet broadcast address is -\n");
+    }
+
+    // Lease time
+    if ( pool->lease_day + pool->lease_hour + pool->lease_minute ) {
+        ICLI_PRINTF("  Lease time is %s\n", _lease_str_get(pool, str));
+    } else {
+        ICLI_PRINTF("  Lease time is infinite\n");
+    }
+
+    // Default router
+    __SERVER_SHOW(default_router, "Default router", VTSS_APPL_DHCP_SERVER_SERVER_MAX_CNT);
+
+    // Domain name
+    if ( icli_str_len(pool->domain_name) ) {
+        ICLI_PRINTF("  Domain name is %s\n", pool->domain_name);
+    } else {
+        ICLI_PRINTF("  Domain name is -\n");
+    }
+
+    // DNS server
+    __SERVER_SHOW(dns_server, "DNS server", VTSS_APPL_DHCP_SERVER_SERVER_MAX_CNT);
+
+    // NTP server
+    __SERVER_SHOW(ntp_server, "NTP server", VTSS_APPL_DHCP_SERVER_SERVER_MAX_CNT);
+
+    // Netbios name server
+    __SERVER_SHOW(netbios_name_server, "Netbios name server", VTSS_APPL_DHCP_SERVER_SERVER_MAX_CNT);
+
+    // Netbios node type
+    switch ( pool->netbios_node_type ) {
+        case VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_B:
+            ICLI_PRINTF("  Netbios node type is B node\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_P:
+            ICLI_PRINTF("  Netbios node type is P node\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_M:
+            ICLI_PRINTF("  Netbios node type is M node\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_H:
+            ICLI_PRINTF("  Netbios node type is H node\n");
+            break;
+        default:
+            ICLI_PRINTF("  Netbios node type is -\n");
+            break;
+    }
+
+    // Netbios scope
+    if ( icli_str_len(pool->netbios_scope) ) {
+        ICLI_PRINTF("  Netbios scope identifier is %s\n", pool->netbios_scope);
+    } else {
+        ICLI_PRINTF("  Netbios scope identifier is -\n");
+    }
+
+    // NIS domain name
+    if ( icli_str_len(pool->nis_domain_name) ) {
+        ICLI_PRINTF("  NIS domain name is %s\n", pool->nis_domain_name);
+    } else {
+        ICLI_PRINTF("  NIS domain name is -\n");
+    }
+
+    // NIS server
+    __SERVER_SHOW(nis_server, "NIS server", VTSS_APPL_DHCP_SERVER_SERVER_MAX_CNT);
+
+    // Verdor class information
+    b = FALSE;
+    for ( i = 0; i < VTSS_APPL_DHCP_SERVER_VENDOR_CLASS_INFO_CNT; i++ ) {
+        if ( icli_str_len(pool->vendor_class_info[i].class_id) ) {
+            b = TRUE;
+            ICLI_PRINTF("  Vendor class identifier is \"%s\" with\n", pool->vendor_class_info[i].class_id);
+            ICLI_PRINTF("         specific information is %s\n", pool->vendor_class_info[i].specific_info);
+        }
+    }
+
+    if ( b == FALSE ) {
+        ICLI_PRINTF("  Vendor class information is -\n");
+    }
+
+    // client identifier
+    switch ( pool->client_identifier_type ) {
+        case VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_NONE:
+        default:
+            ICLI_PRINTF("  Client identifer is -\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_NAME:
+            ICLI_PRINTF("  Client identifer is other than hardware type that is %s\n", pool->client_identifier_name);
+            break;
+        case VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_MAC:
+            ICLI_PRINTF("  Client identifer is type of MAC address that is %s\n", icli_mac_to_str(pool->client_identifier_mac.addr, str));
+            break;
+    }
+
+    // chaddr
+    if ( memcmp(pool->client_haddr.addr, empty_mac, sizeof(empty_mac)) ) {
+        ICLI_PRINTF("  Hardware address is %s\n", icli_mac_to_str(pool->client_haddr.addr, str));
+    } else {
+        ICLI_PRINTF("  Hardware address is -\n");
+    }
+
+    // client_name
+    if ( icli_str_len(pool->client_name) ) {
+        ICLI_PRINTF("  Client name is %s\n", pool->client_name);
+    } else {
+        ICLI_PRINTF("  Client name is -\n");
+    }
+
+#ifdef VTSS_SW_OPTION_DHCP_SERVER_RESERVED_ADDRESSES
+    if ( pool->type == VTSS_APPL_DHCP_SERVER_POOL_TYPE_NETWORK ) {
+        ICLI_PRINTF("  Is%s restricted to reserved addresses:\n", pool->reserved_only ? "" : " not");
+
+        bool has_reserved = false;
+        for (i = 0; i < VTSS_APPL_DHCP_SERVER_RESERVED_CNT; i++) {
+            if (pool->reserved[i].ifindex != VTSS_IFINDEX_NONE) {
+                vtss_ifindex_elm_t elm;
+                char               if_name[64];
+
+                (void)icli_ipv4_to_str(pool->reserved[i].address, str);
+                (void)vtss_ifindex_decompose(pool->reserved[i].ifindex, &elm);
+                (void)icli_port_info_txt(elm.usid, iport2uport(elm.ordinal), if_name);
+                ICLI_PRINTF("    %s on interface %s\n", str, if_name);
+
+                has_reserved = true;
+            }
+        }
+        if (! has_reserved) {
+            ICLI_PRINTF("    No reserved addresses are configured\n");
+        }
+    }
+#endif
+}
+
+static void _pool_counter_show(
+    IN u32                  session_id,
+    IN dhcp_server_pool_t   *pool
+)
+{
+    ICLI_PRINTF("Pool Name: %s\n", pool->pool_name);
+    ICLI_PRINTF("----------------------------------------------\n");
+    ICLI_PRINTF("     total      = %u\n", pool->total_cnt);
+    ICLI_PRINTF("     alloc      = %u\n", pool->alloc_cnt);
+}
+
+static BOOL _binding_show
+(
+    IN u32                                             session_id,
+    IN mesa_ipv4_t                                     ip,
+    IN vtss_appl_dhcp_server_status_binding_entry_t    *binding
+)
+{
+    char    str[64];
+
+    // Title
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("IP: %s\n", icli_ipv4_to_str(ip, str));
+    ICLI_PRINTF("----------------------------------------------\n");
+
+    // State
+    ICLI_PRINTF("  State is ");
+    switch ( binding->state ) {
+        case VTSS_APPL_DHCP_SERVER_BINDING_STATE_NONE:
+            ICLI_PRINTF("none\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_BINDING_STATE_COMMITTED:
+            ICLI_PRINTF("committed\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_BINDING_STATE_ALLOCATED:
+            ICLI_PRINTF("allocated\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_BINDING_STATE_EXPIRED:
+            ICLI_PRINTF("expired\n");
+            break;
+        default:
+            ICLI_PRINTF("unknown(%u)\n", binding->state);
+            break;
+    }
+
+    // Binding type
+    ICLI_PRINTF("  Binding type is ");
+    switch ( binding->type ) {
+        case VTSS_APPL_DHCP_SERVER_BINDING_TYPE_AUTOMATIC:
+            ICLI_PRINTF("automatic\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_BINDING_TYPE_MANUAL:
+            ICLI_PRINTF("manual\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_BINDING_TYPE_EXPIRED:
+            ICLI_PRINTF("expired\n");
+            break;
+        default:
+            ICLI_PRINTF("-\n");
+            break;
+    }
+
+    // Pool name
+    ICLI_PRINTF("  Pool name is %s\n", binding->pool_name);
+
+    // Server ID
+    ICLI_PRINTF("  Server/Relay IP is %s\n", icli_ipv4_to_str(binding->server_id, str));
+
+    // VID
+    ICLI_PRINTF("  VLAN ID is %u\n", binding->vid);
+
+    // Subnet mask
+    ICLI_PRINTF("  Subnet mask is %s\n", icli_ipv4_to_str(binding->subnet_mask, str));
+
+    // Client identifier
+    switch ( binding->client_identifier_type ) {
+        case VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_NONE:
+        default:
+            ICLI_PRINTF("  Client identifier is -\n");
+            break;
+        case VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_NAME:
+            ICLI_PRINTF("  Client identifier is other than hardware type that is %s\n", binding->client_identifier_name);
+            break;
+        case VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_MAC:
+            ICLI_PRINTF("  Client identifier is type of MAC address that is %s\n", icli_mac_to_str(binding->client_identifier_mac.addr, str));
+            break;
+    }
+
+    // Hardware address
+    ICLI_PRINTF("  Hardware address is %s\n", icli_mac_to_str(binding->chaddr.addr, str));
+
+    // Lease and Expire time
+    switch ( binding->state ) {
+        case VTSS_APPL_DHCP_SERVER_BINDING_STATE_COMMITTED:
+        case VTSS_APPL_DHCP_SERVER_BINDING_STATE_ALLOCATED:
+            ICLI_PRINTF("  Lease time is %s\n", binding->lease_str);
+            ICLI_PRINTF("  Expiration is %s\n", binding->time_to_expire_str);
+            break;
+
+        default:
+            ICLI_PRINTF("  Lease time is -\n");
+            ICLI_PRINTF("  Expiration is -\n");
+            break;
+    }
+    return TRUE;
+}
+
+static u32 _day_hour_get(
+    IN    u32   session_id
+)
+{
+    u32                     min;
+    icli_variable_value_t   *value;
+
+    min = 1;
+
+    value = (icli_variable_value_t *)VTSS_MALLOC( sizeof(icli_variable_value_t) );
+    if ( value == 0 ) {
+        return min;
+    }
+
+    // get day
+    if ( icli_session_cmd_value_get(session_id, 1, value) != ICLI_RC_OK ) {
+        VTSS_FREE( value );
+        return min;
+    }
+
+    if ( value->u.u_uint ) {
+        VTSS_FREE( value );
+        return min;
+    }
+
+    // get hour
+    if ( icli_session_cmd_value_get(session_id, 2, value) != ICLI_RC_OK ) {
+        VTSS_FREE( value );
+        return min;
+    }
+
+    min = value->u.u_uint;
+    VTSS_FREE( value );
+    return min;
+}
+
+static BOOL _min_runtime(
+    IN    u32                   session_id,
+    IN    icli_runtime_ask_t    ask,
+    OUT   icli_runtime_t        *runtime
+)
+{
+    switch ( ask ) {
+    case ICLI_ASK_BYWORD:
+        if ( _day_hour_get(session_id) ) {
+            icli_sprintf(runtime->byword, "<0-59>");
+        } else {
+            icli_sprintf(runtime->byword, "<1-59>");
+        }
+        return TRUE;
+
+    case ICLI_ASK_RANGE:
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].max = 59;
+        if ( _day_hour_get(session_id) ) {
+            runtime->range.u.ur.range[0].min = 0;
+        } else {
+            runtime->range.u.ur.range[0].min = 1;
+        }
+        return TRUE;
+
+    case ICLI_ASK_PRESENT:
+    case ICLI_ASK_HELP:
+    case ICLI_ASK_CWORD:
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL _enable_vlan(
+    IN  u32                     session_id,
+    IN  icli_unsigned_range_t   *vlist,
+    IN  BOOL                    b_enable
+)
+{
+    u32                                       i;
+    mesa_vid_t                                vid;
+    BOOL                                      r;
+    vtss_appl_dhcp_server_config_vlan_entry_t vlan_entry;
+    vtss_ifindex_t                            ifindex;
+
+    r = FALSE;
+
+    vlan_entry.mode = b_enable;
+
+    for ( i = 0; i < vlist->cnt; i++ ) {
+        for ( vid = (mesa_vid_t)(vlist->range[i].min); vid <= (mesa_vid_t)(vlist->range[i].max); vid++ ) {
+            vtss_ifindex_from_vlan(vid, &ifindex);
+            if ( vtss_appl_dhcp_server_config_vlan_entry_set(ifindex, &vlan_entry) == VTSS_RC_OK ) {
+                r = TRUE;
+            } else {
+                ICLI_PRINTF(ERRMSG_LEADIN " Failed to %s on VLAN %u\n",
+                            b_enable ? "enable" : "disable", vid);
+            }
+        }
+    }
+
+    return r;
+}
+FUNCTION_END
+
+HELP_DHCP        = Configure DHCP server parameters
+HELP_POOL        = Configure DHCP address pools
+HELP_SHOW_POOL   = DHCP pools information
+HELP_SHOW_SERVER = DHCP server information
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp pool [<word32>]
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = pool_name
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = WORD
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_POOL
+HELP      = ##ICLI_HELP_DHCP_POOL_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( pool_name ) {
+        TRY_GETPOOL();
+        _pool_show(session_id, &pname, &pool);
+    } else {
+        memset(&pname, 0, sizeof(pname));
+        while ( vtss_appl_dhcp_server_config_pool_entry_itr(&pname, &pname) == VTSS_RC_OK ) {
+            TRY(vtss_appl_dhcp_server_config_pool_entry_get(pname, &pool));
+            _pool_show(session_id, &pname, &pool);
+        }
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug show ip dhcp pool counter [<word32>]
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = pool_name
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = WORD
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_POOL
+HELP      = Counters
+HELP      = ##ICLI_HELP_DHCP_POOL_NAME
+
+VARIABLE_BEGIN
+    dhcp_server_pool_t  pool;
+    BOOL                b_show = FALSE;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( pool_name ) {
+        (void)icli_str_cpy(pool.pool_name, pool_name);
+        if ( dhcp_server_pool_get(&pool) == VTSS_RC_OK ) {
+            _pool_counter_show(session_id, &pool);
+            b_show = TRUE;
+        } else {
+            _error_msg(session_id, VTSS_APPL_DHCP_SERVER_RC_ERR_POOL_NOT_EXIST);
+        }
+    } else {
+        memset(&pool, 0, sizeof(pool));
+        while ( dhcp_server_pool_get_next(&pool) == VTSS_RC_OK ) {
+            if ( b_show ) {
+                ICLI_PRINTF("\n");
+            }
+            _pool_counter_show(session_id, &pool);
+            b_show = TRUE;
+        }
+    }
+
+    if ( b_show ) {
+        ICLI_PRINTF("\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp excluded-address
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = Excluded IP database
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    mesa_ipv4_t                 lo, hi;
+    int                         i = 0;
+    char                        str[64];
+VARIABLE_END
+
+CODE_BEGIN
+    lo = hi = 0;
+    while ( vtss_appl_dhcp_server_config_excluded_ip_entry_itr(&lo, &lo, &hi, &hi) == VTSS_RC_OK ) {
+        if ( i++ == 0 ) {
+            ICLI_PRINTF("\n");
+            ICLI_PRINTF("     Low Address      High Address   \n");
+            ICLI_PRINTF("     ---------------  ---------------\n");
+        }
+        ICLI_PRINTF("%02d   ", i);
+        ICLI_PRINTF("%-15s  ", icli_ipv4_to_str(lo, str));
+        ICLI_PRINTF("%-15s  ", icli_ipv4_to_str(hi, str));
+        ICLI_PRINTF("\n");
+    }
+    if ( i ) {
+        ICLI_PRINTF("\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp server binding [ state {allocated | committed | expired} ] [ type {automatic | manual | expired} ]
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_state
+CMD_VAR   = b_allocated
+CMD_VAR   = b_committed
+CMD_VAR   =
+CMD_VAR   = b_type
+CMD_VAR   = b_automatic
+CMD_VAR   = b_manual
+CMD_VAR   =
+
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_SERVER
+HELP      = ##ICLI_HELP_DHCP_BINDING
+HELP      = State of binding
+HELP      = Allocated state
+HELP      = Committed state
+HELP      = Expired state
+HELP      = Type of binding
+HELP      = Automatic binding
+HELP      = Manual binding for a specific host
+HELP      = Expired binding that is aged out
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp_server_status_binding_entry_t binding;
+    vtss_appl_dhcp_server_binding_state_t        state;
+    vtss_appl_dhcp_server_binding_type_t         type;
+    BOOL                                         b_show = FALSE;
+    mesa_ipv4_t                                  ip;
+VARIABLE_END
+
+CODE_BEGIN
+    state = VTSS_APPL_DHCP_SERVER_BINDING_STATE_NONE;
+    if ( b_state ) {
+        if ( b_allocated ) {
+            state = VTSS_APPL_DHCP_SERVER_BINDING_STATE_ALLOCATED;
+        } else if ( b_committed ) {
+            state = VTSS_APPL_DHCP_SERVER_BINDING_STATE_COMMITTED;
+        } else {
+            state = VTSS_APPL_DHCP_SERVER_BINDING_STATE_EXPIRED;
+        }
+    }
+
+    type = VTSS_APPL_DHCP_SERVER_BINDING_TYPE_NONE;
+    if ( b_type ) {
+        if ( b_automatic ) {
+            type = VTSS_APPL_DHCP_SERVER_BINDING_TYPE_AUTOMATIC;
+        } else if ( b_manual ) {
+            type = VTSS_APPL_DHCP_SERVER_BINDING_TYPE_MANUAL;
+        } else {
+            type = VTSS_APPL_DHCP_SERVER_BINDING_TYPE_EXPIRED;
+        }
+    }
+
+    ip = 0;
+    while (vtss_appl_dhcp_server_status_binding_entry_itr(&ip, &ip) == VTSS_RC_OK ) {
+        TRY(vtss_appl_dhcp_server_status_binding_entry_get(ip, &binding));
+        if ( b_state && (binding.state != state) ) {
+            continue;
+        }
+        if ( b_type && (binding.type != type) ) {
+            continue;
+        }
+        if ( _binding_show(session_id, ip, &binding) ) {
+            b_show = TRUE;
+        }
+    }
+
+    if ( b_show ) {
+        ICLI_PRINTF("\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp server binding <ipv4_ucast>
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = ip
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = A.B.C.D
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_SERVER
+HELP      = ##ICLI_HELP_DHCP_BINDING
+HELP      = IP address in dotted-decimal notation
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp_server_status_binding_entry_t binding;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_dhcp_server_status_binding_entry_get(ip, &binding) == VTSS_RC_OK) {
+        (void)_binding_show( session_id, ip, &binding );
+        ICLI_PRINTF("\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp server
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_SERVER
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    BOOL                        b_enable;
+    mesa_vid_t                  vid;
+    BOOL                        b_title;
+    mesa_vid_t                  first;
+    mesa_vid_t                  last;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( dhcp_server_enable_get(&b_enable) == VTSS_RC_OK ) {
+        ICLI_PRINTF("\n");
+        ICLI_PRINTF("DHCP server is globally %s.\n", b_enable ? "enabled" : "disabled");
+    } else {
+        ICLI_PRINTF(ERRMSG_LEADIN "Failed to get DHCP server enabled or disabled.\n");
+    }
+
+    b_title = TRUE;
+    first   = 0;
+    last    = 0;
+    for ( vid = 1; vid < VTSS_VIDS; vid++ ) {
+        if ( dhcp_server_vlan_enable_get(vid, &b_enable) == VTSS_RC_OK ) {
+            if ( b_enable ) {
+                if ( b_title ) {
+                    ICLI_PRINTF("  Enabled VLANs are %u", vid);
+                    b_title = FALSE;
+                    first   = vid;
+                    last    = vid;
+                } else {
+                    if ( vid == last + 1 ) {
+                        last = vid;
+                    } else {
+                        if ( first != last ) {
+                            ICLI_PRINTF("-%u", last);
+                        }
+                        ICLI_PRINTF(", %u", vid);
+                        first   = vid;
+                        last    = vid;
+                    }
+                }
+            }
+        }
+    }
+
+    if ( b_title ) {
+        ICLI_PRINTF("  All VLANs are disabled.\n");
+    } else {
+        if ( first != last ) {
+            ICLI_PRINTF("-%u", last);
+        }
+        ICLI_PRINTF(".\n");
+    }
+
+    ICLI_PRINTF("\n");
+CODE_END
+
+CMD_END
+
+HELP_STATISTICS = DHCP server statistics
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp server statistics
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_SERVER
+HELP      = ##HELP_STATISTICS
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    dhcp_server_statistics_t    statistics;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( dhcp_server_statistics_get(&statistics) != VTSS_RC_OK ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Failed to get statistics of DHCP server\n");
+        return ICLI_RC_ERROR;
+    }
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Database Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "POOL",        statistics.pool_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Excluded IP", statistics.excluded_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Declined IP", statistics.declined_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Binding Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "Automatic", statistics.automatic_binding_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Manual",    statistics.manual_binding_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Expired",   statistics.expired_binding_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Message Received Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "DISCOVER", statistics.discover_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "REQUEST",  statistics.request_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "DECLINE",  statistics.decline_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "RELEASE",  statistics.release_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "INFORM",   statistics.inform_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Message Sent Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "OFFER",    statistics.offer_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "ACK",      statistics.ack_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "NAK",      statistics.nak_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp server declined-ip
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_SERVER
+HELP      = Declined IP address
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    mesa_ipv4_t     declined_ip;
+    int             i = 0;
+    char            str[64];
+VARIABLE_END
+
+CODE_BEGIN
+    declined_ip = 0;
+    while ( dhcp_server_declined_get_next(&declined_ip) == VTSS_RC_OK ) {
+        if ( i++ == 0 ) {
+            ICLI_PRINTF("\n");
+            ICLI_PRINTF("      Declined IP Address\n");
+            ICLI_PRINTF("      -------------------\n");
+        }
+        ICLI_PRINTF("%04d  ", i);
+        ICLI_PRINTF("%-19s", icli_ipv4_to_str(declined_ip, str));
+        ICLI_PRINTF("\n");
+    }
+    if ( i ) {
+        ICLI_PRINTF("\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ip dhcp server declined-ip <ipv4_addr>
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = declined_ip
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = A.B.C.D
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_SHOW_IP
+HELP      = ##ICLI_HELP_SHOW_IP_DHCP
+HELP      = ##HELP_SHOW_SERVER
+HELP      = Declined IP address
+HELP      = IP address
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    char    str[64];
+VARIABLE_END
+
+CODE_BEGIN
+    if ( dhcp_server_declined_get(&declined_ip) == VTSS_RC_OK ) {
+        ICLI_PRINTF("\n");
+        ICLI_PRINTF("Declined IP Address\n");
+        ICLI_PRINTF("-------------------\n");
+        ICLI_PRINTF("  %-19s\n", icli_ipv4_to_str(declined_ip, str));
+        ICLI_PRINTF("\n");
+    }
+CODE_END
+
+CMD_END
+
+HELP_CLEAR_IP_DHCP_SERVER = Miscellaneous DHCP server information
+HELP_CLEAR_IP_DHCP_BINDING = Clear DHCP binding
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = clear ip dhcp server binding <ipv4_ucast>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = ip
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = A.B.C.D
+
+HELP      = ##ICLI_HELP_CLEAR
+HELP      = ##ICLI_HELP_CLEAR_IP
+HELP      = ##ICLI_HELP_CLEAR_IP_DHCP
+HELP      = ##HELP_CLEAR_IP_DHCP_SERVER
+HELP      = ##HELP_CLEAR_IP_DHCP_BINDING
+HELP      = IP address of the binding
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    dhcp_server_binding_t   binding;
+VARIABLE_END
+
+CODE_BEGIN
+    binding.ip = ip;
+    (void)dhcp_server_binding_delete( &binding );
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = clear ip dhcp server binding type { automatic | manual | expired }
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_automatic
+CMD_VAR   = b_manual
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_CLEAR
+HELP      = ##ICLI_HELP_CLEAR_IP
+HELP      = ##ICLI_HELP_CLEAR_IP_DHCP
+HELP      = ##HELP_CLEAR_IP_DHCP_SERVER
+HELP      = ##HELP_CLEAR_IP_DHCP_BINDING
+HELP      = Type of bindings to clear
+HELP      = Clear (expire) automatic bindings
+HELP      = Clear (expire) manual bindings
+HELP      = Clear (remove) expired bindings
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp_server_binding_type_t     type;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( b_automatic ) {
+        type = VTSS_APPL_DHCP_SERVER_BINDING_TYPE_AUTOMATIC;
+    } else if ( b_manual ) {
+        type = VTSS_APPL_DHCP_SERVER_BINDING_TYPE_MANUAL;
+    } else {
+        type = VTSS_APPL_DHCP_SERVER_BINDING_TYPE_EXPIRED;
+    }
+    dhcp_server_binding_clear_by_type( type );
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = clear ip dhcp server statistics
+PRIVILEGE = ICLI_PRIVILEGE_10
+
+HELP      = ##ICLI_HELP_CLEAR
+HELP      = ##ICLI_HELP_CLEAR_IP
+HELP      = ##ICLI_HELP_CLEAR_IP_DHCP
+HELP      = ##HELP_CLEAR_IP_DHCP_SERVER
+HELP      = ##HELP_STATISTICS
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    dhcp_server_statistics_clear();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = ip dhcp server
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##ICLI_HELP_IP
+HELP      = ##ICLI_HELP_IP_DHCP
+HELP      = Enable DHCP server
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp_server_config_globals_t globals;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_dhcp_server_config_globals_t globals;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    globals.mode = TRUE;
+    TRY_MSG(vtss_appl_dhcp_server_config_globals_set(&globals), "Failed to enable DHCP server");
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    globals.mode = FALSE;
+    TRY_MSG(vtss_appl_dhcp_server_config_globals_set(&globals), "Failed to disable DHCP server");
+NO_FORM_CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = ip dhcp excluded-address <ipv4_addr> [<ipv4_addr>]
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = low_ip
+CMD_VAR   = high_ip
+
+HELP      = ##ICLI_HELP_IP
+HELP      = ##ICLI_HELP_IP_DHCP
+HELP      = Prevent DHCP from assigning certain addresses
+HELP      = Low IP address
+HELP      = High IP address
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CODE_BEGIN
+    if ( high_ip == 0 ) {
+        if ( low_ip == 0 ) {
+            ICLI_PRINTF(ERRMSG_LEADIN "Low and high IP addresses can not be 0.0.0.0 at the same time.\n");
+            return ICLI_RC_ERROR;
+        }
+        high_ip = low_ip;
+    }
+
+    if ( low_ip > high_ip ) {
+        ICLI_PRINTF(ERRMSG_LEADIN " Low IP address can not be larger than high IP address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    TRY_IGNORE(vtss_appl_dhcp_server_config_excluded_ip_entry_set(low_ip, high_ip), VTSS_APPL_DHCP_SERVER_RC_ERR_DUPLICATE);
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if ( high_ip == 0 ) {
+        high_ip = low_ip;
+    }
+
+    (void)vtss_appl_dhcp_server_config_excluded_ip_entry_del(low_ip, high_ip);
+NO_FORM_CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no ip dhcp pool <word32>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##ICLI_HELP_IP
+HELP      = ##HELP_DHCP
+HELP      = ##HELP_POOL
+HELP      = ##ICLI_HELP_DHCP_POOL_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+DESTROY_MODE = ICLI_CMD_MODE_DHCP_POOL
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = pool_name
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = WORD
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp_server_pool_name_t pname;
+VARIABLE_END
+
+CODE_BEGIN
+    (void)icli_str_cpy(pname.pool_name, pool_name);
+    TRY_IGNORE(vtss_appl_dhcp_server_config_pool_entry_del(pname), VTSS_APPL_DHCP_SERVER_RC_ERR_POOL_NOT_EXIST);
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = ip dhcp server
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##ICLI_HELP_IP
+HELP      = ##ICLI_HELP_IP_DHCP
+HELP      = Enable DHCP server per VLAN
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlist
+
+CODE_BEGIN
+    if (_enable_vlan(session_id, vlist, TRUE) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (_enable_vlan(session_id, vlist, FALSE) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+HELP_NETWORK = Network number and mask
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = network <ipv4_ucast> <ipv4_netmask>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR   =
+CMD_VAR   = ip
+CMD_VAR   = subnet_mask
+
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+HELP      = ##HELP_NETWORK
+HELP      = Network number
+HELP      = Network mask in dotted-decimal notation, excluding 255.255.255.255
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+    mesa_rc        rc;
+VARIABLE_END
+
+CODE_BEGIN
+    /* get user input */
+    if ( ip == 0 || subnet_mask == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "0.0.0.0 is not allowed\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if ( subnet_mask == 0xFFffFFff ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "255.255.255.255 is not allowed\n");
+        return ICLI_RC_ERROR;
+    }
+
+    (void)icli_str_cpy(pname.pool_name, pool_name);
+
+    TRY_GETPOOL();
+
+    // set user input
+    pool.type        = VTSS_APPL_DHCP_SERVER_POOL_TYPE_NETWORK;
+    pool.ip          = ip;
+    pool.subnet_mask = subnet_mask;
+
+    // set pool
+    rc = vtss_appl_dhcp_server_config_pool_entry_set(pname, &pool);
+    switch (rc) {
+    case VTSS_RC_OK:
+        break;
+    case VTSS_APPL_DHCP_SERVER_RC_ERR_NOT_IN_SUBNET:
+        ICLI_PRINTF(ERRMSG_LEADIN "New network conflicts with reserved addresses.\n");
+        return ICLI_RC_ERROR;
+    default:
+        _error_msg(session_id, rc);
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no network
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_NETWORK
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    if ( pool.type == VTSS_APPL_DHCP_SERVER_POOL_TYPE_NETWORK ) {
+        pool.type = VTSS_APPL_DHCP_SERVER_POOL_TYPE_NONE;
+        TRY_SETPOOL();
+    }
+CODE_END
+
+CMD_END
+
+HELP_BROADCAST = Broadcast address in use on the client's subnet
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = broadcast <ipv4_addr>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR   =
+CMD_VAR   = ip
+
+BYWORD    =
+BYWORD    = A.B.C.D
+
+HELP      = ##HELP_BROADCAST
+HELP      = Broadcast IP address
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.subnet_broadcast = ip;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no broadcast
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_BROADCAST
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.subnet_broadcast = 0;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_DEFAULT_ROUTER = Default routers
+HELP_ROUTER_ADDRESS = Router's IP address
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = default-router <ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast>]]]
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_DEFAULT_ROUTER
+HELP      = ##HELP_ROUTER_ADDRESS
+HELP      = ##HELP_ROUTER_ADDRESS
+HELP      = ##HELP_ROUTER_ADDRESS
+HELP      = ##HELP_ROUTER_ADDRESS
+
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+CMD_VAR   =
+CMD_VAR   = ip
+CMD_VAR   = ip1
+CMD_VAR   = ip2
+CMD_VAR   = ip3
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    // get user input
+    if ( ip == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Please specify at least one non-zero address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    TRY_GETPOOL();
+    pool.default_router[0] = ip;
+    pool.default_router[1] = ip1;
+    pool.default_router[2] = ip2;
+    pool.default_router[3] = ip3;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no default-router
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_DEFAULT_ROUTER
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.default_router[0] = 0;
+    pool.default_router[1] = 0;
+    pool.default_router[2] = 0;
+    pool.default_router[3] = 0;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_LEASE = Address lease time
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = lease { <0-365> [ <0-23> [ <uint> ] ] | infinite }
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_LEASE
+HELP      = Days
+HELP      = Hours
+HELP      = Minutes
+HELP      = Infinite lease
+
+CMD_VAR   =
+CMD_VAR   = day
+CMD_VAR   = hour
+CMD_VAR   = min
+CMD_VAR   = b_infinite
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = _min_runtime
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( b_infinite ) {
+        day = hour = min = 0;
+    }
+
+    TRY_GETPOOL();
+    pool.lease_day    = day;
+    pool.lease_hour   = hour;
+    pool.lease_minute = min;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no lease
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_LEASE
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.lease_day    = DHCP_SERVER_LEASE_DEFAULT_DAYS;
+    pool.lease_hour   = DHCP_SERVER_LEASE_DEFAULT_HOURS;
+    pool.lease_minute = DHCP_SERVER_LEASE_DEFAULT_MINUTES;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_DOMAIN_NAME = Domain name
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = domain-name <word128>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_DOMAIN_NAME
+HELP      = ##HELP_DOMAIN_NAME
+
+CMD_VAR   =
+CMD_VAR   = domain_name
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    (void)icli_str_cpy(pool.domain_name, domain_name);
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no domain-name
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_DOMAIN_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    memset(pool.domain_name, 0, sizeof(pool.domain_name));
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_DNS_SERVER = DNS servers
+HELP_SERVER_ADDRESS = Server's IP address
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = dns-server <ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast>]]]
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_DNS_SERVER
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+CMD_VAR   =
+CMD_VAR   = ip
+CMD_VAR   = ip1
+CMD_VAR   = ip2
+CMD_VAR   = ip3
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    // get user input
+    if ( ip == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Please specify at least one non-zero address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    TRY_GETPOOL();
+    pool.dns_server[0] = ip;
+    pool.dns_server[1] = ip1;
+    pool.dns_server[2] = ip2;
+    pool.dns_server[3] = ip3;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no dns-server
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_DNS_SERVER
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.dns_server[0] = 0;
+    pool.dns_server[1] = 0;
+    pool.dns_server[2] = 0;
+    pool.dns_server[3] = 0;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_NTP_SERVER = NTP servers
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = ntp-server <ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast>]]]
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_NTP_SERVER
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+CMD_VAR   =
+CMD_VAR   = ip
+CMD_VAR   = ip1
+CMD_VAR   = ip2
+CMD_VAR   = ip3
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    // get user input
+    if ( ip == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Please specify at least one non-zero address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    TRY_GETPOOL();
+    pool.ntp_server[0] = ip;
+    pool.ntp_server[1] = ip1;
+    pool.ntp_server[2] = ip2;
+    pool.ntp_server[3] = ip3;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no ntp-server
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_NTP_SERVER
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.ntp_server[0] = 0;
+    pool.ntp_server[1] = 0;
+    pool.ntp_server[2] = 0;
+    pool.ntp_server[3] = 0;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_NETBIOS_NAME_SERVER = NetBIOS (WINS) name servers
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = netbios-name-server <ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast>]]]
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_NETBIOS_NAME_SERVER
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+CMD_VAR   =
+CMD_VAR   = ip
+CMD_VAR   = ip1
+CMD_VAR   = ip2
+CMD_VAR   = ip3
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    // get user input
+    if ( ip == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Please specify at least one non-zero address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    TRY_GETPOOL();
+    pool.netbios_name_server[0] = ip;
+    pool.netbios_name_server[1] = ip1;
+    pool.netbios_name_server[2] = ip2;
+    pool.netbios_name_server[3] = ip3;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no netbios-name-server
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_NETBIOS_NAME_SERVER
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.netbios_name_server[0] = 0;
+    pool.netbios_name_server[1] = 0;
+    pool.netbios_name_server[2] = 0;
+    pool.netbios_name_server[3] = 0;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_NETBIOS_NODE_TYPE = NetBIOS node type
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = netbios-node-type { b-node | h-node | m-node | p-node }
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_NETBIOS_NODE_TYPE
+HELP      = Broadcast node
+HELP      = Hybrid node
+HELP      = Mixed node
+HELP      = Peer-to-peer node
+
+CMD_VAR   =
+CMD_VAR   = b_b
+CMD_VAR   = b_h
+CMD_VAR   = b_m
+CMD_VAR   =
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+    vtss_appl_dhcp_server_netbios_node_type_t   node_type;
+VARIABLE_END
+
+CODE_BEGIN
+    // get user input
+    if ( b_b ) {
+        node_type = VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_B;
+    } else if ( b_h ) {
+        node_type = VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_H;
+    } else if ( b_m ) {
+        node_type = VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_M;
+    } else {
+        node_type = VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_P;
+    }
+
+    TRY_GETPOOL();
+    pool.netbios_node_type = node_type;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no netbios-node-type
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_NETBIOS_NODE_TYPE
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.netbios_node_type = VTSS_APPL_DHCP_SERVER_NETBIOS_NODE_TYPE_NONE;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_NETBIOS_SCOPE = NetBIOS scope
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = netbios-scope <line128>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_NETBIOS_SCOPE
+HELP      = NetBIOS scope identifier, in 128 characters
+
+BYWORD    =
+BYWORD    = LINE
+
+CMD_VAR   =
+CMD_VAR   = netbios_scope
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    (void)icli_str_cpy(pool.netbios_scope, netbios_scope);
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no netbios-scope
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_NETBIOS_SCOPE
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    memset(pool.netbios_scope, 0, sizeof(pool.netbios_scope));
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_NIS_DOMAIN_NAME = NIS domain name
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = nis-domain-name <word128>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_NIS_DOMAIN_NAME
+HELP      = ##HELP_NIS_DOMAIN_NAME
+
+CMD_VAR   =
+CMD_VAR   = domain_name
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    (void)icli_str_cpy(pool.nis_domain_name, domain_name);
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no nis-domain-name
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_NIS_DOMAIN_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    memset(pool.nis_domain_name, 0, sizeof(pool.domain_name));
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_NIS_SERVER = Network information servers
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = nis-server <ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast> [<ipv4_ucast>]]]
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_NIS_SERVER
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+HELP      = ##HELP_SERVER_ADDRESS
+
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+CMD_VAR   =
+CMD_VAR   = ip
+CMD_VAR   = ip1
+CMD_VAR   = ip2
+CMD_VAR   = ip3
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( ip == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Please specify at least one non-zero address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    TRY_GETPOOL();
+    pool.nis_server[0] = ip;
+    pool.nis_server[1] = ip1;
+    pool.nis_server[2] = ip2;
+    pool.nis_server[3] = ip3;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no nis-server
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_NIS_SERVER
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.nis_server[0] = 0;
+    pool.nis_server[1] = 0;
+    pool.nis_server[2] = 0;
+    pool.nis_server[3] = 0;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_HOST    = Client IP address and mask
+HELP_HOST_IP = IP address in dotted-decimal notation
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = host <ipv4_ucast> <ipv4_netmask>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR   =
+CMD_VAR   = ip
+CMD_VAR   = subnet_mask
+
+BYWORD    =
+BYWORD    = A.B.C.D
+BYWORD    = A.B.C.D
+
+HELP      = ##HELP_HOST
+HELP      = Network number
+HELP      = Network mask in dotted-decimal notation, excluding 255.255.255.255
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    /* get user input */
+    if ( ip == 0 || subnet_mask == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "0.0.0.0 is not allowed\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if ( subnet_mask == 0xFFffFFff ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "255.255.255.255 is not allowed\n");
+        return ICLI_RC_ERROR;
+    }
+
+    // avoid the first 0 address
+    if ( (ip & (~subnet_mask)) == 0 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "The combination of IP address and subnet mask is invalid. All of the bits in the host address portion of the IP address are set to 0. Please enter a valid combination of IP address and subnet mask\n");
+        return ICLI_RC_ERROR;
+    }
+
+    /* broadcast IP address is not allowed */
+    if ( (ip | subnet_mask) == 0xFFffFFff ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "The combination of IP address and subnet mask is invalid. All of the bits in the host address portion of the IP address are set to 1. Please enter a valid combination of IP address and subnet mask\n");
+        return ICLI_RC_ERROR;
+    }
+
+    TRY_GETPOOL();
+    pool.type        = VTSS_APPL_DHCP_SERVER_POOL_TYPE_HOST;
+    pool.ip          = ip;
+    pool.subnet_mask = subnet_mask;
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no host
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_HOST
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    if ( pool.type == VTSS_APPL_DHCP_SERVER_POOL_TYPE_HOST ) {
+        pool.type = VTSS_APPL_DHCP_SERVER_POOL_TYPE_NONE;
+        TRY_SETPOOL();
+    }
+CODE_END
+
+CMD_END
+
+HELP_CLIENT_IDENTIFIER = Client identifier
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = client-identifier { {fqdn | name} <line128> | mac-address <mac_addr> }
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_CLIENT_IDENTIFIER
+HELP      = this is obsolete and use 'name' instead
+HELP      = client identifier other than hardware type
+HELP      = 128 characters
+HELP      = MAC address type of client identifier
+HELP      = MAC address of client
+
+CMD_VAR   =
+CMD_VAR   = b_fqdn
+CMD_VAR   = b_name
+CMD_VAR   = identifier
+CMD_VAR   =
+CMD_VAR   = mac
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = LINE
+BYWORD    =
+BYWORD    = MAC
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    if ( b_fqdn || b_name ) {
+        pool.client_identifier_type = VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_NAME;
+        (void)icli_str_cpy(pool.client_identifier_name, identifier);
+    } else {
+        pool.client_identifier_type = VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_MAC;
+        memcpy(&(pool.client_identifier_mac), &mac, sizeof(pool.client_identifier_mac));
+    }
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no client-identifier
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_CLIENT_IDENTIFIER
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.client_identifier_type = VTSS_APPL_DHCP_SERVER_CLIENT_IDENTIFIER_TYPE_NONE;
+    memset( &(pool.client_identifier_name), 0, sizeof(pool.client_identifier_name) );
+    memset( &(pool.client_identifier_mac),  0, sizeof(pool.client_identifier_mac) );
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_HARDWARE_ADDRESS = Client hardware address
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = hardware-address <mac_ucast>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_HARDWARE_ADDRESS
+HELP      = Client MAC address
+
+CMD_VAR   =
+CMD_VAR   = mac
+
+BYWORD    =
+BYWORD    = MAC
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    memcpy( &(pool.client_haddr), &mac, sizeof(pool.client_haddr) );
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no hardware-address
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_HARDWARE_ADDRESS
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    memset( &(pool.client_haddr), 0, sizeof(pool.client_haddr) );
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+HELP_ADDRESS = Offer fixed IP address to client on specific interface, overruling client ID
+
+CMD_BEGIN
+
+IF_FLAG = VTSS_SW_OPTION_DHCP_SERVER_RESERVED_ADDRESSES
+
+COMMAND = address <ipv4_ucast> interface <port_type_id>
+
+DOC_CMD_DESC    = ##HELP_ADDRESS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+! address
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ADDRESS
+BYWORD  =
+
+! <ipv4_addr>
+CMD_VAR = v_ipv4_addr
+RUNTIME =
+HELP    = Address to offer on interface
+BYWORD  =
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! <port_type_id>
+CMD_VAR = ifc
+RUNTIME =
+HELP    = Interface to offer address on
+BYWORD  = <Ifc : port_type_id>
+
+VARIABLE_BEGIN
+    vtss_ifindex_t                    ifindex;
+    vtss_appl_dhcp_server_pool_name_t pname;
+
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_ifindex_from_port(ifc.isid, ifc.begin_iport, &ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Unable to convert %u to an ifindex\n", ifc.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+    (void)icli_str_cpy(pname.pool_name, pool_name);
+    TRY(vtss_appl_dhcp_server_config_reserved_entry_set(&pname, &v_ipv4_addr, &ifindex));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+HELP_NO_ADDRESS = Remove fixed address entry from pool
+
+CMD_BEGIN
+
+IF_FLAG = VTSS_SW_OPTION_DHCP_SERVER_RESERVED_ADDRESSES
+
+COMMAND = no address <ipv4_addr>
+
+DOC_CMD_DESC    = ##HELP_NO_ADDRESS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! address
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_NO_ADDRESS
+BYWORD  =
+
+! <ipv4_addr>
+CMD_VAR = v_ipv4_addr
+RUNTIME =
+HELP    = Address entry to remove from pool.
+BYWORD  =
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp_server_pool_name_t pname;
+VARIABLE_END
+
+CODE_BEGIN
+    (void)icli_str_cpy(pname.pool_name, pool_name);
+
+    // Silently ignore errors
+    (void)vtss_appl_dhcp_server_config_reserved_entry_del(&pname, &v_ipv4_addr);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+HELP_RESERVED_ONLY = Restrict addresses offered to clients to those specified by 'address' commands
+
+CMD_BEGIN
+
+IF_FLAG = VTSS_SW_OPTION_DHCP_SERVER_RESERVED_ADDRESSES
+
+COMMAND = reserved-only
+
+DOC_CMD_DESC    = ##HELP_RESERVED_ONLY
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    = Offer all available addresses to clients, but offer fixed addresses first
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+! reserved-only
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RESERVED_ONLY
+BYWORD  =
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    DECL_POOL_VARS;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    pool.reserved_only = TRUE;
+    TRY_SETPOOL();
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    TRY_GETPOOL();
+    pool.reserved_only = FALSE;
+    TRY_SETPOOL();
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+HELP_CLIENT_NAME = Client host name
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = client-name <word32>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_CLIENT_NAME
+HELP      = Client host name in 32 characters
+
+CMD_VAR   =
+CMD_VAR   = host_name
+
+BYWORD    =
+BYWORD    = WORD
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    (void)icli_str_cpy(pool.client_name, host_name);
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no client-name
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_CLIENT_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+    memset(pool.client_name, 0, sizeof(pool.client_name));
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+HELP_VENDOR           = Vendor configuration
+HELP_CLASS_IDENTIFIER = Vendor class identifier
+HELP_SPECIFIC_INFO    = Vendor specific information
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = vendor class-identifier <string64> specific-info <word66>
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+HELP      = ##HELP_VENDOR
+HELP      = ##HELP_CLASS_IDENTIFIER
+HELP      = Class identifier in 64 characters
+HELP      = ##HELP_SPECIFIC_INFO
+HELP      = Hex values in 64 octets (0x...)
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = class_id
+CMD_VAR   =
+CMD_VAR   = hexval
+
+BYWORD    =
+BYWORD    =
+BYWORD    = STRING
+BYWORD    =
+BYWORD    = HEX-VALUE
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+    u32                     i;
+    i32                     j;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+
+    // set user input
+    j = -1;
+    for ( i = 0; i < VTSS_APPL_DHCP_SERVER_VENDOR_CLASS_INFO_CNT; i++ ) {
+        if ( icli_str_len(pool.vendor_class_info[i].class_id) ) {
+            if ( icli_str_cmp(pool.vendor_class_info[i].class_id, class_id) == 0 ) {
+                j = i;
+                break;
+            }
+        } else if ( j == -1 ) {
+            j = i;
+        }
+    }
+    if ( j == -1 ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Vendor class information is full.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    memset( &(pool.vendor_class_info[j]), 0, sizeof(vtss_appl_dhcp_server_vendor_class_info_t) );
+    (void)icli_str_cpy( pool.vendor_class_info[j].class_id, class_id );
+    (void)icli_str_cpy( pool.vendor_class_info[j].specific_info, hexval );
+
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no vendor class-identifier <string64>
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_VENDOR
+HELP      = ##HELP_CLASS_IDENTIFIER
+HELP      = Class identifier in 64 characters
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = class_id
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = STRING
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+    DECL_POOL_VARS;
+    u32                     i;
+VARIABLE_END
+
+CODE_BEGIN
+    TRY_GETPOOL();
+
+    for ( i = 0; i < VTSS_APPL_DHCP_SERVER_VENDOR_CLASS_INFO_CNT; i++ ) {
+        if ( icli_str_cmp(pool.vendor_class_info[i].class_id, class_id) == 0 ) {
+            break;
+        }
+    }
+    if ( i == VTSS_APPL_DHCP_SERVER_VENDOR_CLASS_INFO_CNT ) {
+        return ICLI_RC_OK;
+    }
+
+    memset( &(pool.vendor_class_info[i]), 0, sizeof(vtss_appl_dhcp_server_vendor_class_info_t) );
+
+    TRY_SETPOOL();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug dhcp server declined add <ipv4_addr>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = declined_ip
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = A.B.C.D
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+HELP      =
+HELP      = Declined IP configuration
+HELP      = Add declined IP
+HELP      = Declined IP address
+
+CODE_BEGIN
+    if ( dhcp_server_declined_add(declined_ip) != VTSS_RC_OK ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Failed to add declined IP.\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug dhcp server declined delete <ipv4_addr>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = declined_ip
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = A.B.C.D
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+HELP      =
+HELP      = Declined IP configuration
+HELP      = Delete declined IP
+HELP      = Declined IP address
+
+CODE_BEGIN
+    (void)dhcp_server_declined_delete( declined_ip );
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug dhcp server binding { ip | id | chaddr | name | lease | expired }
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+IF_FLAG   = 0
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_ip
+CMD_VAR   = b_id
+CMD_VAR   = b_chaddr
+CMD_VAR   = b_name
+CMD_VAR   = b_lease
+CMD_VAR   =
+
+VARIABLE_BEGIN
+    u32                     i;
+    dhcp_server_binding_t   binding;
+    BOOL                    b_show = FALSE;
+VARIABLE_END
+
+CODE_BEGIN
+    if (b_ip) {
+        i = 0;
+    } else if (b_id) {
+        i = 1;
+    } else if (b_chaddr) {
+        i = 2;
+    } else if (b_name) {
+        i = 3;
+    } else if (b_lease) {
+        i = 4;
+    } else {
+        i = 5;
+    }
+
+    memset(&binding, 0, sizeof(dhcp_server_binding_t));
+    while ( dhcp_server_binding_x_get_next(i, &binding) ) {
+        if ( _binding_show(session_id, binding.ip, &binding) ) {
+            b_show = TRUE;
+        }
+    }
+
+    if ( b_show ) {
+        ICLI_PRINTF("\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug dhcp server statistics
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+    dhcp_server_statistics_t    statistics;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( dhcp_server_statistics_get(&statistics) != VTSS_RC_OK ) {
+        ICLI_PRINTF(ERRMSG_LEADIN "Fail to get statistics of DHCP server\n");
+        return ICLI_RC_ERROR;
+    }
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Database Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "POOL",        statistics.pool_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Excluded IP", statistics.excluded_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Declined IP", statistics.declined_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Binding Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "Automatic", statistics.automatic_binding_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Manual",    statistics.manual_binding_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Expired",   statistics.expired_binding_cnt);
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "Allocated", statistics.allocated_state_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Committed", statistics.committed_state_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "Expired",   statistics.expired_state_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Message Received Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "DISCOVER", statistics.discover_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "REQUEST",  statistics.request_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "DECLINE",  statistics.decline_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "RELEASE",  statistics.release_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "INFORM",   statistics.inform_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Message Sent Counters\n");
+    ICLI_PRINTF("=========================\n");
+    ICLI_PRINTF("  %-11s  %10u\n", "OFFER",    statistics.offer_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "ACK",      statistics.ack_cnt);
+    ICLI_PRINTF("  %-11s  %10u\n", "NAK",      statistics.nak_cnt);
+    ICLI_PRINTF("=========================\n");
+
+    ICLI_PRINTF("\n");
+CODE_END
+
+CMD_END

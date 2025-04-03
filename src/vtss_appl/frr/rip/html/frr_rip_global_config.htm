@@ -1,0 +1,496 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>RIP Global Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_rip_global_config.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities;
+
+var oTVer = Array("Version 1", "Version 2", "Default");
+var oVVer = Array("v1", "v2", "default");
+
+var oTAdminMode = Array("Enable", "Disable");
+var oVAdminMode = Array("true", "false");
+
+/* Send the HTML request */
+function sendRequest() {
+    requestJsonDoc("rip.config.router.get", null, requestUpdate, "config");
+}
+
+/* Clear RIP process */
+function clearRipProcess() {
+    if (confirm("RIP process will be reset.\nDo you want to proceed anyway?")) {
+        requestJsonDoc("rip.control.globals.set", [{ "ReloadProcess": true }]);
+        milliSleep(500); // Made a little bit delay here to wait the RIP re-processing
+        sendRequest();
+    }
+}
+
+/**
+ * restoreFiledValue(): Restore HTML filed value with the original setting
+ *
+ * @param  [Mandatory] html_field_id : The HTML filed ID.
+ * @param  [Mandatory] ref_db_name   : The reference database name.
+ * @param  [Mandatory] param_name    : The parameter name in the entry data.
+ */
+function restoreFiledValue(html_field_id, ref_db_name, param_name) {
+    var orignalConfig = myDynamicTable.getRecvJson(ref_db_name);
+    if (orignalConfig.hasOwnProperty(html_field_id)) {
+        // Found the orignal row
+        $(html_field_id).value = orignalConfig[html_field_id];
+    }
+}
+
+/* Change "Redistribute Static Metric" radio button */
+function onChangeRadioStaticMetric() {
+    $("StaticRedistMetricVal").disabled = (this.id == "AutoStaticMetric") ? true : false;
+    if (this.id == "AutoStaticMetric") {
+        $("StaticRedistMetricVal").value = myCapabilities.MinRedistSpecificMetric;
+    } else {
+        restoreFiledValue("StaticRedistMetricVal", "config", "StaticRedistMetricVal");
+    }
+}
+
+/* Change "Redistribute Connected Metric" radio button */
+function onChangeRadioConnectedMetric() {
+    $("ConnectedRedistMetricVal").disabled = (this.id == "AutoConnectedMetric") ? true : false;
+    if (this.id == "AutoConnectedMetric") {
+        $("ConnectedRedistMetricVal").value = myCapabilities.MinRedistSpecificMetric;
+    } else {
+        restoreFiledValue("ConnectedRedistMetricVal", "config", "ConnectedRedistMetricVal");
+    }
+}
+
+/* Change "Redistribute OSPF Metric" radio button */
+function onChangeRadioOspfMetric() {
+    $("OspfRedistMetricVal").disabled = (this.id == "AutoOspfMetric") ? true : false;
+    if (this.id == "AutoOspfMetric") {
+        $("OspfRedistMetricVal").value = myCapabilities.MinRedistSpecificMetric;
+    } else {
+        restoreFiledValue("OspfRedistMetricVal", "config", "OspfRedistMetricVal");
+    }
+}
+
+/* Change "Redistribute Metric Type" select menu */
+function onChangeRedistMode(redist_type) {
+    var is_metricModeEnable;
+    if (redist_type == "static") {
+        is_metricModeEnable = getSelectedOptElement("StaticRedistEnabled").value == "false";
+        $("AutoStaticMetric").disabled = is_metricModeEnable;
+        $("SpecificStaticMetric").disabled = is_metricModeEnable;
+        if (is_metricModeEnable) {
+            $("StaticRedistMetricVal").disabled = true;
+        } else if ($("SpecificStaticMetric").checked) {
+            $("StaticRedistMetricVal").disabled = false;
+        }
+    } else if (redist_type == "connected") {
+        is_metricModeEnable = getSelectedOptElement("ConnectedRedistEnabled").value == "false";
+        $("AutoConnectedMetric").disabled = is_metricModeEnable;
+        $("SpecificConnectedMetric").disabled = is_metricModeEnable;
+        if (is_metricModeEnable) {
+            $("ConnectedRedistMetricVal").disabled = true;
+        } else if ($("SpecificConnectedMetric").checked) {
+            $("ConnectedRedistMetricVal").disabled = false;
+        }
+    } else if (redist_type == "ospf") {
+        is_metricModeEnable = getSelectedOptElement("OspfRedistEnabled").value == "false";
+        $("AutoOspfMetric").disabled = is_metricModeEnable;
+        $("SpecificOspfMetric").disabled = is_metricModeEnable;
+        if (is_metricModeEnable) {
+            $("OspfRedistMetricVal").disabled = true;
+        } else if ($("SpecificOspfMetric").checked) {
+            $("OspfRedistMetricVal").disabled = false;
+        }
+    }
+}
+
+/* Change "Router Mode" radio button */
+function onChangeRouterMode() {
+    var mode_enabled = getSelectedOptElement("RouterMode").text == "Enable";
+
+    var elems = ["Version",
+                 "UpdateTimer", "InvalidTimer", "GarbageCollectionTimer",
+                 "StaticRedistEnabled", "AutoStaticMetric", "SpecificStaticMetric", "StaticRedistMetricVal",
+                 "ConnectedRedistEnabled", "AutoConnectedMetric", "SpecificConnectedMetric", "ConnectedRedistMetricVal",
+                 "OspfRedistEnabled", "AutoOspfMetric", "SpecificOspfMetric", "OspfRedistMetricVal",
+                 "RedistDefaultMetric",
+                 "DefaultRouteRedist",
+                 "DefPassiveIntf",
+                 "AdminDistance"];
+
+    if (!myCapabilities.IsOspfRedistributedSupported) {
+        removeItem('OspfRedistEnabled', elems);
+        removeItem('AutoOspfMetric', elems);
+        removeItem('SpecificOspfMetric', elems);
+        removeItem('OspfRedistMetricVal', elems);
+    }
+
+    // Set 'disabled' attriable on all fields excluding 'Mode'
+    Object.each(elems, function (elem) {
+        $(elem).disabled = !mode_enabled;
+    });
+
+    if (mode_enabled) {
+        onChangeRedistMode('static');
+        onChangeRedistMode('connected');
+        if (myCapabilities.IsOspfRedistributedSupported) {
+            onChangeRedistMode('ospf');
+        }
+    }
+}
+
+/* Check function before send out the HTML request */
+function checkForm() {
+    // Apply new setting to filed "StaticRedistIsSpecificMetric"
+    $("StaticRedistIsSpecificMetric").checked = $("SpecificStaticMetric").checked;
+
+    // Apply new setting to filed "ConnectedRedistIsSpecificMetric"
+    $("ConnectedRedistIsSpecificMetric").checked = $("SpecificConnectedMetric").checked;
+
+    if (myCapabilities.IsOspfRedistributedSupported) {
+        // Apply new setting to filed "OspfRedistIsSpecificMetric"
+        $("OspfRedistIsSpecificMetric").checked = $("SpecificOspfMetric").checked;
+    }
+
+    return true;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var table_rows = new Array();
+    var router_rip_disabled = (recv_json.RouterMode === false);
+    table_rows = [{
+            fields: [
+                { type: "conf_hdr", params: ["RIP Router Mode"], "colspan": "3" },
+                {
+                    type: "select",
+                    params: [oTAdminMode, oVAdminMode, recv_json.RouterMode ? "true" : "false", "cr", "RouterMode", "100%", 4],
+                    "onchange": onChangeRouterMode
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Version"], "colspan": "3" },
+                {
+                    type: "select",
+                    params: [oTVer, oVVer, recv_json.Version, "cr", "Version", "100%", 4],
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Timers"], "rowspan": "3" },
+                { type: "conf_hdr", params: ["Update"], "colspan": "2" },
+                {
+                    type: "input",
+                    params: [recv_json.UpdateTimer, "cr", "UpdateTimer", 7, 7, "100%", 4],
+                    validate: { func: isWithinRange, params: ["UpdateTimer", myCapabilities.MinTimer, myCapabilities.MaxTimer, "RIP update timer"] },
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Invalid"], "colspan": "2" },
+                {
+                    type: "input",
+                    params: [recv_json.InvalidTimer, "cr", "InvalidTimer", 7, 7, "100%", 4],
+                    validate: { func: isWithinRange, params: ["InvalidTimer", myCapabilities.MinTimer, myCapabilities.MaxTimer, "RIP invalid timer"] },
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Garbage-Collection"], "colspan": "2" },
+                {
+                    type: "input",
+                    params: [recv_json.GarbageCollectionTimer, "cr", "GarbageCollectionTimer", 7, 7, "100%", 4],
+                    validate: { func: isWithinRange, params: ["GarbageCollectionTimer", myCapabilities.MinTimer, myCapabilities.MaxTimer, "RIP garbage-collection timer"] },
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Redistribute"], "rowspan": myCapabilities.IsOspfRedistributedSupported ? "8" : "6" },
+                { type: "conf_hdr", params: ["Static"], "rowspan": "2" },
+                { type: "conf_hdr", params: ["Mode"] },
+                {
+                    type: "select",
+                    params: [oTAdminMode, oVAdminMode, recv_json.StaticRedistEnabled ? "true" : "false", "cr", "StaticRedistEnabled", "100%", 4],
+                    "onchange": function () { onChangeRedistMode('static'); },
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Metric Value"] },
+                {
+                    type: "chkbox",
+                    params: [recv_json.StaticRedistIsSpecificMetric, "c", "StaticRedistIsSpecificMetric"],
+                    "hidden": true
+                },
+                {
+                    type: "radio",
+                    params: [recv_json.StaticRedistIsSpecificMetric ? 0 : 1, "c", "RadioStaticMetric", "AutoStaticMetric", "Auto"],
+                    "onchange": onChangeRadioStaticMetric,
+                    disabled: (router_rip_disabled || !recv_json.StaticRedistEnabled)
+                },
+                { type: "text", params: [""] },
+                {
+                    type: "radio",
+                    params: [recv_json.StaticRedistIsSpecificMetric ? 1 : 0, "c", "RadioStaticMetric", "SpecificStaticMetric", "Specific"],
+                    "onchange": onChangeRadioStaticMetric,
+                    disabled: (router_rip_disabled || !recv_json.StaticRedistEnabled)
+                },
+                {
+                    type: "input",
+                    params: [recv_json.StaticRedistMetricVal, "cr", "StaticRedistMetricVal", 2, 2],
+                    validate: { func: isWithinRange, params: ["StaticRedistMetricVal", myCapabilities.MinRedistSpecificMetric, myCapabilities.MaxRedistSpecificMetric, "Static Redistribute Metric Value"] },
+                    disabled: (router_rip_disabled || !recv_json.StaticRedistEnabled || !recv_json.StaticRedistIsSpecificMetric)
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Connected"], "rowspan": "2" },
+                { type: "conf_hdr", params: ["Mode"] },
+                {
+                    type: "select",
+                    params: [oTAdminMode, oVAdminMode, recv_json.ConnectedRedistEnabled ? "true" : "false", "cr", "ConnectedRedistEnabled", "100%", 4],
+                    "onchange": function () { onChangeRedistMode('connected'); },
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Metric Value"] },
+                {
+                    type: "chkbox",
+                    params: [recv_json.ConnectedRedistIsSpecificMetric, "c", "ConnectedRedistIsSpecificMetric"],
+                    "hidden": true
+                },
+                {
+                    type: "radio",
+                    params: [recv_json.ConnectedRedistIsSpecificMetric ? 0 : 1, "c", "RadioConnectedMetric", "AutoConnectedMetric", "Auto"],
+                    "onchange": onChangeRadioConnectedMetric,
+                    disabled: (router_rip_disabled || !recv_json.ConnectedRedistEnabled)
+                },
+                { type: "text", params: [""] },
+                {
+                    type: "radio",
+                    params: [recv_json.ConnectedRedistIsSpecificMetric ? 1 : 0, "c", "RadioConnectedMetric", "SpecificConnectedMetric", "Specific"],
+                    "onchange": onChangeRadioConnectedMetric,
+                    disabled: (router_rip_disabled || !recv_json.ConnectedRedistEnabled)
+                },
+                {
+                    type: "input",
+                    params: [recv_json.ConnectedRedistMetricVal, "cr", "ConnectedRedistMetricVal", 2, 2],
+                    validate: { func: isWithinRange, params: ["ConnectedRedistMetricVal", myCapabilities.MinRedistSpecificMetric, myCapabilities.MaxRedistSpecificMetric, "Connected Redistribute Metric Value"] },
+                    disabled: (router_rip_disabled || !recv_json.ConnectedRedistEnabled || !recv_json.ConnectedRedistIsSpecificMetric)
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["OSPF"], "rowspan": "2" },
+                { type: "conf_hdr", params: ["Mode"] },
+                {
+                    type: "select",
+                    params: [oTAdminMode, oVAdminMode, recv_json.OspfRedistEnabled ? "true" : "false", "cr", "OspfRedistEnabled", "100%", 4],
+                    "onchange": function () { onChangeRedistMode('ospf'); },
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Metric Value"] },
+                {
+                    type: "chkbox",
+                    params: [recv_json.OspfRedistIsSpecificMetric, "c", "OspfRedistIsSpecificMetric"],
+                    "hidden": true
+                },
+                {
+                    type: "radio",
+                    params: [recv_json.OspfRedistIsSpecificMetric ? 0 : 1, "c", "RadioOspfMetric", "AutoOspfMetric", "Auto"],
+                    "onchange": onChangeRadioOspfMetric,
+                    disabled: (router_rip_disabled || !recv_json.OspfRedistEnabled)
+                },
+                { type: "text", params: [""] },
+                {
+                    type: "radio",
+                    params: [recv_json.OspfRedistIsSpecificMetric ? 1 : 0, "c", "RadioOspfMetric", "SpecificOspfMetric", "Specific"],
+                    "onchange": onChangeRadioOspfMetric,
+                    disabled: (router_rip_disabled || !recv_json.OspfRedistEnabled)
+                },
+                {
+                    type: "input",
+                    params: [recv_json.OspfRedistMetricVal, "cr", "OspfRedistMetricVal", 2, 2],
+                    validate: { func: isWithinRange, params: ["OspfRedistMetricVal", myCapabilities.MinRedistMetric, myCapabilities.MaxRedistMetric, "OSPF Redistribute Metric Value"] },
+                    disabled: (router_rip_disabled || !recv_json.OspfRedistEnabled || !recv_json.OspfRedistIsSpecificMetric)
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Default Metric Value"], "colspan": "2" },
+                {
+                    type: "input",
+                    params: [recv_json.RedistDefaultMetric, "cr", "RedistDefaultMetric", 2, 2, "100%", 4],
+                    validate: { func: isWithinRange, params: ["RedistDefaultMetric", myCapabilities.MinRedistDefMetric, myCapabilities.MaxRedistDefMetric, "Redistribute Default Metric Value"] },
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Default Route"], "colspan": "2" },
+                {
+                    type: "select",
+                    params: [oTAdminMode, oVAdminMode, recv_json.DefaultRouteRedist ? "true" : "false", "cr", "DefaultRouteRedist", "100%", 4],
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Default Passive Mode"], "colspan": "3" },
+                {
+                    type: "select",
+                    params: [oTAdminMode, oVAdminMode, recv_json.DefPassiveIntf ? "true" : "false", "cr", "DefPassiveIntf", "100%", 4],
+                    disabled: router_rip_disabled
+                }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Administrative Distance"], "colspan": "3" },
+                {
+                    type: "input",
+                    params: [recv_json.AdminDistance, "cr", "AdminDistance", 3, 3, "100%", 4],
+                    validate: { func: isWithinRange, params: ["AdminDistance", myCapabilities.MinAdminDistance, myCapabilities.MaxAdminDistance, "Administrative Distance"] },
+                    disabled: router_rip_disabled
+                }
+            ]
+        }
+    ];
+
+    // Removed unsupported feature
+    if (!myCapabilities.IsOspfRedistributedSupported) {
+        param_names.splice(9, 2);
+    }
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addSubmitButton(name, "rip.config.router", sendRequest);
+    myDynamicTable.addResetButton();
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(capabilities) failed.");
+            return;
+        }
+    }
+
+    if (myCapabilities) {
+        requestJsonDoc("rip.config.router.get", null, processUpdate, "config");
+    }
+}
+
+/* Initialize resources when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "columnOrder", { func: checkForm, params: [] });
+
+    // This table requires two JSON data(capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requested only one time.
+    requestJsonDoc("rip.capabilities.get", null, requestUpdate, "capabilities");
+});
+
+    </script>
+</head>
+
+<body class="content">
+    <h1>RIP Global Configuration</h1>
+    <div class="refreshbar">
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        <input type="button" value="Clear RIP Process" onClick='clearRipProcess(); this.blur();'>
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+</body>
+
+</html>

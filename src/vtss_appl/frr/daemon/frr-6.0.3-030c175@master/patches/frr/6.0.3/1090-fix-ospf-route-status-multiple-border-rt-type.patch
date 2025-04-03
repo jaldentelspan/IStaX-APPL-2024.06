@@ -1,0 +1,38 @@
+commit 6d692a3d58e98cfaeeb87d41e722311c1883bcdf
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Tue Nov 3 13:56:51 2020 +0100
+
+    1090-fix-ospf-route-status-multiple-border-rt-type.patch
+
+diff --git a/ospfd/ospf_vty.c b/ospfd/ospf_vty.c
+index dc299c1..3cb417e 100644
+--- a/ospfd/ospf_vty.c
++++ b/ospfd/ospf_vty.c
+@@ -9469,14 +9469,19 @@ static void show_ip_ospf_route_router(struct vty *vty, struct ospf *ospf,
+ 				if (or->path_type == OSPF_PATH_INTER_AREA)
+ 					json_object_boolean_true_add(json_route,
+ 								     "IA");
+-				if (or->u.std.flags & ROUTER_LSA_BORDER)
+-					json_object_string_add(json_route,
+-							       "routerType",
+-							       "abr");
+-				else if (or->u.std.flags & ROUTER_LSA_EXTERNAL)
+-					json_object_string_add(json_route,
+-							       "routerType",
+-							       "asbr");
++				if ((or->u.std.flags & (ROUTER_LSA_EXTERNAL | ROUTER_LSA_BORDER))
++					== (ROUTER_LSA_EXTERNAL | ROUTER_LSA_BORDER)) {
++					snprintf(buf1, sizeof(buf1), "abr asbr");
++				} else if (or->u.std.flags & ROUTER_LSA_BORDER) {
++					snprintf(buf1, sizeof(buf1), "abr");
++				} else if (or->u.std.flags & ROUTER_LSA_EXTERNAL) {
++					snprintf(buf1, sizeof(buf1), "asbr");
++				} else {
++					buf1[0] = '\0';
++				}
++				json_object_string_add(json_route,
++						       "routerType",
++						       buf1);
+ 			} else {
+ 				vty_out(vty, "%s [%d] area: %s",
+ 					(or->path_type == OSPF_PATH_INTER_AREA

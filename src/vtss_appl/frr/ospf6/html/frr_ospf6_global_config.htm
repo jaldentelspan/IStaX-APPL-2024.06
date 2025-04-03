@@ -1,0 +1,375 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>OSPF6 Global Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="frr_ospf6_lib.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_ospf6_global_config.htm";
+
+// Global variables
+var defSelectedInstanceId = 1,
+    cur_router_id = "None";
+var pageArgs = searchArgs(window.location.search);
+var selectedInstanceId = pageArgs.InstanceId ? parseInt(pageArgs.InstanceId, 10) : defSelectedInstanceId;
+
+var myDynamicTable, myCapabilities, ospf6InstanceIdInfo;
+
+var oTOspf6InstanceId = Array(0),
+    oVOspf6InstanceId = Array(0);
+
+var oTRouterMode = Array("Enable", "Disable");
+var oVRouterMode = Array("true", "false");
+
+var oTAdminMode = Array("Enable", "Disable");
+var oVAdminMode = Array("true", "false");
+
+var oTPassiveMode = Array("False", "True");
+var oVPassiveMode = Array("false", "true");
+
+var oTRedistribute = Array("Enable","Disable");
+var oVRedistribute = Array(1,0);
+var oTConnectedRedistribute = Array("False","True");
+
+var oTDefaultRouteAlways = Array("Enable", "Disable");
+var oVDefaultRouteAlways = Array("true", "false");
+
+var oTRedistMetricType = Array("None", "External Link Type 1", "External Link Type 2");
+var oVRedistMetricType = Array("metricTypeNone", "metricType1", "metricType2");
+
+/* Send the HTML request */
+function sendRequest() {
+    ospf6InstanceIdInfo = null;
+    requestJsonDoc("ospf6.status.router.get", null, requestUpdate, "ospf6InstanceIdInfo");
+}
+
+/* Clear OSPF6 process */
+function clearOspf6Process() {
+    if (confirm("OSPF6 process will be reset.\nDo you want to proceed anyway?")) {
+        requestJsonDoc("ospf6.control.globals.set", [{ "ReloadProcess": true }]);
+        milliSleep(500); // Made a little bit delay here to wait the OSPF6 re-processing
+        sendRequest();
+    }
+}
+
+/* Change Instance select menu */
+function onChangeSelectMenu(sel) {
+    selectedInstanceId = parseInt(sel.options[sel.selectedIndex].value, 10);
+    sendRequest();
+}
+
+/* Change router mode select menu */
+function onClickRouterModeSave() {
+    if (getSelectedOptElement("RouterMode").text == "Enable") {
+        requestJsonDoc("ospf6.config.process.add", [selectedInstanceId]);
+        milliSleep(500); // Made a little bit delay here to wait the OSPF6 re-processing
+        sendRequest();
+    }
+    return true;
+}
+
+/* Change "Router ID" radio button */
+function onChangeRadioRouterId() {
+    $("RouterId").disabled = (this.id == "AutoRouterId") ? true : false;
+    restoreFiledValue("RouterId", "config", selectedInstanceId, "RouterId");
+}
+
+
+/* Check function before send out the HTML request */
+function checkForm() {
+    if (getSelectedOptElement("NewRouterMode").text == "Disable") {
+        var recv_json = myDynamicTable.getRecvJson("config");
+        for (var idx = 0; idx < recv_json.length; idx++) {
+              if (recv_json[idx].key != selectedInstanceId) {
+                  continue;
+              }
+              if (recv_json[idx].val.IsOnShutdown === true) {
+                if (confirm("OSPF6 process will be terminated when stub router advertisment is complete.\nDo you want to proceed anyway?")) {
+                    requestJsonDoc("ospf6.config.process.del", [selectedInstanceId], sendRequest);
+                }
+              } else {
+                if (confirm("OSPF6 process will be terminated.\nDo you want to proceed anyway?")) {
+                    requestJsonDoc("ospf6.config.process.del", [selectedInstanceId], sendRequest);
+                }
+              }
+              return false;
+        }
+    }
+
+    // Router ID 0.0.0.0 can not be specific configured value
+    if ($("SpecificRouterId").checked) {
+        if (Ipv4Str2Val($("RouterId").value) < myCapabilities.MinRouterId ||
+            Ipv4Str2Val($("RouterId").value) > myCapabilities.MaxRouterId) {
+            return GiveAlert("Invalid OSPF6 router ID. The allowed range is from " +  Val2Ipv4Str(myCapabilities.MinRouterId) + " to " + Val2Ipv4Str(myCapabilities.MaxRouterId) + ".", $("RouterId"));
+        }
+    }
+
+    // Apply new setting to filed "IsSpecificRouterId"
+    $("IsSpecificRouterId").checked = $("SpecificRouterId").checked;
+
+    // Trim the unnecessary fields from the HTTP POST JSON data
+    var trim_ids = Array();
+    $('myTableContent').getElements('input[name^=RouterMode]').each(function (elm) {
+        trim_ids.push(elm.id);
+    });
+    $('myTableContent').getElements('input[name^=CurRouterId]').each(function (elm) {
+        trim_ids.push(elm.id);
+    });
+    $('myTableContent').getElements('input[name^=RadioRouterId]').each(function (elm) {
+        trim_ids.push(elm.id);
+    });
+    $('myTableContent').getElements('input[name^=RadioDefMetric]').each(function (elm) {
+        trim_ids.push(elm.id);
+    });
+    myDynamicTable.setTrimIds(trim_ids);
+
+    return true;
+}
+
+/* Add column row in the dynamic table. */
+function addRow(key, val) {
+    var row = [
+        {
+            fields: [
+                { type: "conf_hdr", params: ["OSPF6 Router Mode"], "colspan": "2" },
+                {
+                    type: "select",
+                    params: [oTRouterMode, oVRouterMode, "true", "cr", "NewRouterMode", "100%", 4]
+                  }
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Router ID"], "colspan": "2" },
+                {
+                    type: "chkbox",
+                    params: [val.IsSpecificRouterId, "c", "IsSpecificRouterId"],
+                    "hidden": true
+                },
+                {
+                    type: "radio",
+                    params: [val.IsSpecificRouterId ? 0 : 1, "c", "RadioRouterId", "AutoRouterId", "Auto"],
+                    "onchange": onChangeRadioRouterId
+                },
+                { type: "input", params: [cur_router_id, "cr", "CurRouterId", 15, 15], "disabled": true },
+                {
+                    type: "radio",
+                    params: [val.IsSpecificRouterId ? 1 : 0, "c", "RadioRouterId", "SpecificRouterId", "Specific"],
+                    "onchange": onChangeRadioRouterId
+                },
+                {
+                    type: "input",
+                    params: [val.RouterId, "cr", "RouterId", 15, 15, null, null, !val.IsSpecificRouterId],
+                    validate: { func: isIpStr, params: ["RouterId", false, "Router ID", 2] }
+                }
+          ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Redistribute"], "rowspan": "2" },
+                { type: "conf_hdr", params: ["Static"], "rowspan" : "1", "colspan": "1"},
+                { type: "select", params: [oTRedistribute, oVRedistribute, val.StaticRedistEnable, "cr", "StaticRedistEnable", "100%", 4]}
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Connected"], "rowspan" : "1", "colspan": "1" },
+                { type: "select", params: [oTRedistribute, oVRedistribute, val.ConnectedRedistEnable, "cr", "ConnectedRedistEnable", "100%", 4]}
+            ]
+        },
+        {
+            fields: [
+                { type: "conf_hdr", params: ["Administrative Distance"], "colspan": "2" },
+                {
+                    type: "input",
+                    params: [val.AdminDistance, "cr", "AdminDistance", 15, 3, null, 4],
+                    validate: { func: isWithinRange, params: ["AdminDistance", myCapabilities.MinAdminDistance, myCapabilities.MaxAdminDistance, "Administrative Distance"] }
+                }
+            ]
+        }
+    ];
+
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var table_rows = new Array();
+
+    // Add single row
+    Object.each(recv_json, function (record) {
+        table_rows = table_rows.concat(addRow(record.key, record.val));
+    });
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected OSPF6 instance ID
+    // or equals the default configuration.
+    var myConf = Array();
+    Object.each(recv_json, function (record) {
+        if (selectedInstanceId == record.key) {
+            myConf.push(record);
+        }
+    });
+
+    // Save the received JSON data (both of the original and filted)
+    myDynamicTable.saveRecvJson(name, myConf);
+
+    // Update visble tables
+    SetVisible("myTableContent", myConf.length);
+    SetVisible("RouterModeTable", !myConf.length);
+    SetVisible("RouterModeButtons", !myConf.length);
+    if (!myConf.length) {
+        return;
+    }
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addSubmitButton(name, "ospf6.config.router", sendRequest);
+    myDynamicTable.addResetButton();
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(capabilities) failed.");
+            return;
+        }
+    } else if (name == "ospf6InstanceIdInfo") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            ospf6InstanceIdInfo = myDynamicTable.cloneRecvJson(recv_json);
+
+            // Update the OPSF instance ID selected menu.
+            oTOspf6InstanceId.length = oVOspf6InstanceId.length = 0; // Restore to default
+            cur_router_id = "None";
+            Object.each(recv_json, function (record) {
+                oTOspf6InstanceId.push(record.key);
+                oVOspf6InstanceId.push(record.key);
+                if (selectedInstanceId == record.key) {
+                    cur_router_id = record.val.RouterId;
+                }
+            });
+            if (!recv_json.length) { // Given default instance ID 1
+                oTOspf6InstanceId.push(1);
+                oVOspf6InstanceId.push(1);
+                selectedInstanceId = 1;
+            }
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(ospf6InstanceIdInfo) failed.");
+            return;
+        }
+    }
+
+    if (myCapabilities && ospf6InstanceIdInfo) {
+        UpdateIdSelect("ospf6InstanceIdSelectMenu", oTOspf6InstanceId, oVOspf6InstanceId, selectedInstanceId);
+        requestJsonDoc("ospf6.config.router.get", null, processUpdate, "config");
+    }
+}
+
+function jsonReqSendCb(json_params) {
+    json_params.unshift(selectedInstanceId);
+    return true;
+}
+
+/* Initialize resources when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "columnOrder", { func: checkForm, params: [] });
+    myDynamicTable.jsonReqSendCb(jsonReqSendCb);
+
+    // This table requires three JSON data(capabilities/config/ospf6InstanceIdInfo).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requested only one time.
+    requestJsonDoc("ospf6.capabilities.get", null, requestUpdate, "capabilities");
+    sendRequest();
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>OSPF6 Global Configuration</h1>
+    <table summary="Router Mode Table" id="RouterModeTable" class="config">
+        <tr>
+            <td class="param_label">OSPF6 Router Mode</td>
+            <td>
+                <select id="RouterMode">
+                    <option value="false" selected>Disable</option>
+                    <option value="true">Enable</option>
+                </select>
+            </td>
+        </tr>
+    </table>
+    <p id="RouterModeButtons">
+        <input type="button" value="Save" onClick="onClickRouterModeSave();">
+        <input type="button" value="Reset" onclick="UpdateIdSetSelect('RouterMode', 'disable');">
+    </p>
+    <div class="refreshbar">
+        <!-- Instance ID&nbsp; -->
+        <!-- select id="ospf6InstanceIdSelectMenu" onchange="onChangeSelectMenu(this);">
+            <option value="0">All</option>
+        </select -->
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        <input type="button" value="Clear OSPF6 Process" onClick='clearOspf6Process(); this.blur();'>
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+</body>
+
+</html>

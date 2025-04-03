@@ -1,0 +1,1321 @@
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+//
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include "mgmt_api.h"
+#include "misc_api.h"
+#include "vtss/appl/mirror.h"
+#include "vtss/appl/interface.h"
+#include "mirror_api.h"
+
+#include "vlan_api.h"
+#include "icli_api.h"
+#include "icli_porting_util.h"
+
+#include "standalone_api.h"
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+
+#define RMIRROR_CLI_DEFAULT_VID     200
+#define RMIRROR_BUF_SIZE            80
+
+/* Use RMirror's trace group */
+#ifdef VTSS_TRACE_MODULE_ID
+#undef VTSS_TRACE_MODULE_ID
+#endif
+#ifdef VTSS_ALLOC_MODULE_ID
+#undef VTSS_ALLOC_MODULE_ID
+#endif
+#include "mirror.h" // For TRACE_GRP_ICLI
+#define ICLI_PRINTF_DEBUG(...)           T_DG(TRACE_GRP_ICLI, ##__VA_ARGS__)
+
+#define RMIRROR_ICLI_INNER_TAGGED_ALL       0
+#define RMIRROR_ICLI_INNER_UNTAGGED_ALL     1
+
+BOOL msg_switch_configurable(vtss_isid_t isid);
+
+static char *rmirror_list2txt(BOOL *list, int min, int max, char *buf)
+{
+    int  i, first = 1, count = 0;
+    BOOL member;
+    char *p;
+
+    p = buf;
+    *p = '\0';
+    for (i = min; i <= max; i++) {
+        member = list[i];
+        if ((member && (count == 0 || i == max)) || (!member && count > 1)) {
+            p += sprintf(p, "%s%d",
+                         first ? "" : count > (member ? 1 : 2) ? "-" : ",",
+                         member ? (i) : i - 1);
+            first = 0;
+        }
+        if (member)
+            count++;
+        else
+            count=0;
+    }
+    return buf;
+}
+
+static mesa_rc rmirror_show_detail(u32 session_id, u32 session_number) 
+{
+
+    mesa_rc rc = ICLI_RC_OK;
+    vtss_appl_mirror_session_entry_t    conf;
+    char buf[RMIRROR_BUF_SIZE];
+    char str_buf[2048];
+    vtss_ifindex_elm_t ife;
+    switch_iter_t               sit;
+    port_iter_t                 pit;
+    BOOL                        source_vid[VTSS_APPL_VLAN_ID_MAX + 1];
+
+    mesa_port_list_t rx_enable;
+    mesa_port_list_t tx_enable;
+    mesa_port_list_t both_enable;
+    mesa_port_list_t destination_enable;
+
+    BOOL rx_found = FALSE;
+    BOOL tx_found = FALSE;
+    BOOL both_found = FALSE;
+    BOOL default_found = FALSE;
+
+    memset(&conf, 0x0, sizeof(vtss_appl_mirror_session_entry_t));
+    if ((rc = vtss_appl_mirror_session_entry_get(session_number, &conf))) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Session %d\n", session_number);
+    ICLI_PRINTF("---------\n");
+
+    ICLI_PRINTF("Mode                      : %s\n", conf.enable ? "Enabled" : "Disabled");
+
+
+    (void)mgmt_types_vlan_list_2_array(&conf.source_vids, source_vid, VTSS_APPL_VLAN_ID_MAX);
+    if (VTSS_RC_OK != vtss_ifindex_decompose(conf.reflector_port, &ife)) {
+        ICLI_PRINTF("%% vtss_ifindex_decompose(%du) error:\n", conf.reflector_port.private_ifindex_data_do_not_use_directly);
+        return ICLI_RC_ERROR;
+    }
+
+    switch (conf.type) {
+    case VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_SOURCE:
+        ICLI_PRINTF("Type                      : RMirror Source Session\n");
+        ICLI_PRINTF("Dest RMIRROR VLAN         : %d\n", conf.rmirror_vid);
+#if !defined(VTSS_SW_OPTION_MIRROR_LOOP_PORT)
+        ICLI_PRINTF("Reflector Port            : %s\n", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), str_buf));
+#endif
+        ICLI_PRINTF("Source VLAN(s)            : %s\n", rmirror_list2txt(source_vid, VTSS_APPL_VLAN_ID_MIN, VTSS_APPL_VLAN_ID_MAX, str_buf));
+        ICLI_PRINTF("Source Ports              :\n");
+        break;
+    case VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_DESTINATION:
+        ICLI_PRINTF("Type                      : RMirror Destination Session\n");
+        ICLI_PRINTF("Source RMIRROR VLAN       : %d\n", conf.rmirror_vid );
+        break;
+    case VTSS_APPL_MIRROR_SESSION_TYPE_MIRROR:
+        ICLI_PRINTF("Type                      : Mirror\n");
+        ICLI_PRINTF("Source VLAN(s)            : %s\n", rmirror_list2txt(source_vid, VTSS_APPL_VLAN_ID_MIN, VTSS_APPL_VLAN_ID_MAX, str_buf));
+        break;
+    default:
+        ICLI_PRINTF("Type                      : None\n");
+        break;
+    }
+
+    switch ( conf.type ) {
+    case VTSS_APPL_MIRROR_SESSION_TYPE_MIRROR:
+    case VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_SOURCE:
+    {
+        vtss_port_list_stackable_t   *source_pls_rx =   &conf.source_port_list_rx,
+                                     *source_pls_tx =   &conf.source_port_list_tx,
+                                     *destination_pls = &conf.destination_port_list;
+
+        (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_ISID_ALL);
+        while (switch_iter_getnext(&sit)) {
+            memset(both_enable, 0x0, sizeof(both_enable));
+            memset(rx_enable, 0x0, sizeof(rx_enable));
+            memset(tx_enable, 0x0, sizeof(tx_enable));
+            memset(destination_enable, 0x0, sizeof(destination_enable));
+
+            (void)port_iter_init(&pit, NULL, sit.isid, PORT_ITER_SORT_ORDER_IPORT, PORT_ITER_FLAGS_NORMAL);
+            while (port_iter_getnext(&pit)) {
+                if (mgmt_types_port_list_bit_value_get(source_pls_rx, sit.isid, pit.iport) 
+                    && mgmt_types_port_list_bit_value_get(source_pls_tx, sit.isid, pit.iport)) {
+                    both_enable[pit.iport] = TRUE;
+                } else if (mgmt_types_port_list_bit_value_get(source_pls_rx, sit.isid, pit.iport)) {
+                    rx_enable[pit.iport] = TRUE;
+                } else if (mgmt_types_port_list_bit_value_get(source_pls_tx, sit.isid, pit.iport)) {
+                    tx_enable[pit.iport] = TRUE;
+                }
+                if (conf.type == VTSS_APPL_MIRROR_SESSION_TYPE_MIRROR && mgmt_types_port_list_bit_value_get(destination_pls, sit.isid, pit.iport)) {
+                    destination_enable[pit.iport] = TRUE;
+                }
+
+            }
+
+            if ( strlen(mgmt_iport_list2txt(rx_enable, buf)) ) {
+                //ICLI_PRINTF("    RX Only               : %d/%s\n", topo_isid2usid(isid_idx), mgmt_iport_list2txt(rx_enable, buf));
+                (void)icli_port_list_info_txt(sit.isid, rx_enable, str_buf, TRUE);
+                ICLI_PRINTF("    RX Only               : %s\n", str_buf);
+            }
+            if ( strlen(mgmt_iport_list2txt(tx_enable, buf)) ) {
+                //ICLI_PRINTF("    TX Only               : %d/%s\n", topo_isid2usid(isid_idx), mgmt_iport_list2txt(tx_enable, buf));
+                (void)icli_port_list_info_txt(sit.isid, tx_enable, str_buf, TRUE);
+                ICLI_PRINTF("    TX Only               : %s\n", str_buf);
+            }
+            if ( strlen(mgmt_iport_list2txt(both_enable, buf)) ) {
+                //ICLI_PRINTF("    Both                  : %d/%s\n", topo_isid2usid(isid_idx), mgmt_iport_list2txt(both_enable, buf));
+                (void)icli_port_list_info_txt(sit.isid, both_enable, str_buf, TRUE);
+                ICLI_PRINTF("    Both                  : %s\n", str_buf);
+            }
+            if (conf.type == VTSS_APPL_MIRROR_SESSION_TYPE_MIRROR) {
+                if ( strlen(mgmt_iport_list2txt(destination_enable, str_buf)) ) {
+                    //ICLI_PRINTF("Destination Ports         : %d/%s\n", topo_isid2usid(isid_idx), mgmt_iport_list2txt(onf.destination_port, buf));
+                    (void)icli_port_list_info_txt(sit.isid, destination_enable, str_buf, TRUE);
+                    ICLI_PRINTF("Destination Ports         : %s\n", str_buf);
+                }
+            }
+        }
+    }
+        break;
+    case VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_DESTINATION:
+    {
+        vtss_port_list_stackable_t         *destination_pls = &conf.destination_port_list;
+
+        (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_ISID_ALL);
+        while (switch_iter_getnext(&sit)) {
+            memset(destination_enable, 0x0, sizeof(destination_enable));
+
+            if (FALSE == mgmt_types_port_list_2_array(destination_pls, sit.isid, destination_enable)) {
+                ICLI_PRINTF("mgmt_types_port_list_2_array() fail\n");
+                break;
+            }
+
+            if ( strlen(mgmt_iport_list2txt(destination_enable, buf)) ) {
+                (void)icli_port_list_info_txt(sit.isid, destination_enable, str_buf, TRUE);
+                ICLI_PRINTF("Destination Ports         : %s\n", str_buf);
+            }
+        }
+    }
+        break;
+    default:
+        break;
+    }
+
+    if (conf.cpu_rx && conf.cpu_tx) {
+        both_found = TRUE;
+    } else if (conf.cpu_rx) {
+        rx_found = TRUE;
+    } else if (conf.cpu_tx) {
+        tx_found = TRUE;
+    } else {
+        default_found = TRUE;
+    }
+
+    if (default_found) {
+        ICLI_PRINTF("CPU Port                  :\n");
+    }
+    if (both_found) {
+        ICLI_PRINTF("CPU Port                  : both\n");
+    }
+    if (rx_found) {
+        ICLI_PRINTF("CPU Port                  : rx\n");
+    }
+    if (tx_found) {
+        ICLI_PRINTF("CPU Port                  : tx\n");
+    }
+    return ICLI_RC_OK;
+}
+
+static BOOL rmirror_parse_session_id(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_mirror_capabilities_t capability;
+    u16                             min_session;
+
+    (void)vtss_appl_mirror_capabilities_get(&capability);
+
+    (void)vtss_appl_mirror_session_entry_itr(NULL, &min_session);
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        return FALSE;
+
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%d-%d>", min_session, capability.session_cnt_max);
+        return TRUE;
+
+    case ICLI_ASK_HELP:
+        icli_sprintf(runtime->help, "MIRROR session number");
+        return TRUE;
+
+    case ICLI_ASK_RANGE:
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = min_session;
+        runtime->range.u.sr.range[0].max   = capability.session_cnt_max;
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL rmirror_parse_reflector_port(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_mirror_capabilities_t capability;
+
+    (void)vtss_appl_mirror_capabilities_get(&capability);
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = capability.internal_reflector_port_support ? FALSE :
+        capability.rmirror_support ? TRUE : FALSE;
+        return TRUE;
+
+    case ICLI_ASK_HELP:
+        icli_sprintf(runtime->help, "Remote MIRROR reflector interface");
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL rmirror_parse_internal_reflector_port(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_mirror_capabilities_t capability;
+
+    (void)vtss_appl_mirror_capabilities_get(&capability);
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = capability.internal_reflector_port_support ? TRUE : FALSE;
+        return TRUE;
+
+    case ICLI_ASK_HELP:
+        icli_sprintf(runtime->help, "Remote MIRROR reflector interface");
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL mirror_runtime_rmirror_support(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_mirror_capabilities_t capability;
+
+    (void)vtss_appl_mirror_capabilities_get(&capability);
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = capability.rmirror_support ? TRUE : FALSE;
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL mirror_runtime_cpu_support(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    vtss_appl_mirror_capabilities_t capability;
+
+    (void)vtss_appl_mirror_capabilities_get(&capability);
+
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = capability.cpu_mirror_support ? TRUE : FALSE;
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+FUNCTION_END
+
+//
+// Command Segment 1
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = monitor session <uint> [ \
+destination { interface <port_type_list> | remote vlan <vlan_id> reflector-port <port_type_id> } | \
+source { interface <port_type_list> [ both | rx | tx ] | remote vlan <vlan_id> | vlan <vlan_list> | cpu [ both | rx | tx ] } ]
+
+FUNC_NAME = monitor_session
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+//IF_FLAG   =
+
+//CMD_VAR   = monitor
+CMD_VAR   =
+//CMD_VAR   = session
+CMD_VAR   =
+CMD_VAR   = session_number
+
+CMD_VAR   = destination
+CMD_VAR   = dinterface
+CMD_VAR   = di_list
+CMD_VAR   = dremote
+//CMD_VAR   = dvlan
+CMD_VAR   =
+CMD_VAR   = drvid
+CMD_VAR   = rport
+CMD_VAR   = rportid
+
+CMD_VAR   = source
+CMD_VAR   = sinterface
+CMD_VAR   = si_list
+CMD_VAR   =
+CMD_VAR   = rx
+CMD_VAR   = tx
+CMD_VAR   = sremote
+//CMD_VAR   = svlan
+CMD_VAR   =
+CMD_VAR   = srvid
+CMD_VAR   = source_vlan
+CMD_VAR   = source_vlan_list
+
+CMD_VAR   = source_cpu
+CMD_VAR   = source_cpu_both
+CMD_VAR   = source_cpu_rx
+CMD_VAR   = source_cpu_tx
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = rmirror_parse_session_id
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = mirror_runtime_rmirror_support
+RUNTIME   = mirror_runtime_rmirror_support
+RUNTIME   = mirror_runtime_rmirror_support
+RUNTIME   = rmirror_parse_reflector_port
+RUNTIME   =
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = mirror_runtime_rmirror_support
+RUNTIME   = mirror_runtime_rmirror_support
+RUNTIME   = mirror_runtime_rmirror_support
+RUNTIME   =
+RUNTIME   = 
+
+RUNTIME   = mirror_runtime_cpu_support
+RUNTIME   = mirror_runtime_cpu_support
+RUNTIME   = mirror_runtime_cpu_support
+RUNTIME   = mirror_runtime_cpu_support
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+HELP   = Monitoring different system events
+HELP   = Configure a MIRROR session
+HELP   = MIRROR session number
+
+HELP   = MIRROR destination interface or VLAN
+HELP   = MIRROR destination interface
+HELP   = MIRROR destination interface number
+HELP   = MIRROR destination Remote
+HELP   = MIRROR destination Remote number
+HELP   = Remote MIRROR destination RMIRROR VLAN number
+HELP   = Remote MIRROR reflector interface
+HELP   = Remote MIRROR reflector interface number
+
+HELP   = MIRROR source interface, VLAN
+HELP   = MIRROR source interface
+HELP   = MIRROR source interface number
+HELP   = MIRROR source receive both
+HELP   = MIRROR source receive Rx
+HELP   = MIRROR source receive Tx
+HELP   = MIRROR source Remote
+HELP   = Remote MIRROR source RMIRROR VLAN
+HELP   = Remote MIRROR source RMIRROR VLAN number
+HELP   = MIRROR source VLAN
+HELP   = MIRROR source VLAN
+
+HELP   = MIRROR source CPU
+HELP   = MIRROR source CPU receive both
+HELP   = MIRROR source CPU receive Rx
+HELP   = MIRROR source CPU receive Tx
+
+VARIABLE_BEGIN
+    vtss_appl_mirror_session_entry_t    conf;
+    mesa_rc                             rc = ICLI_RC_OK;
+    switch_iter_t                       sit;
+    u32                                 i, idx;
+    icli_unsigned_range_t               *vlan_list_p;
+    vtss_ifindex_t                      ife;
+    vtss_port_list_stackable_t      *source_pls_rx =   &conf.source_port_list_rx,
+                                    *source_pls_tx =   &conf.source_port_list_tx,
+                                    *destination_pls = &conf.destination_port_list;
+    vtss_vlan_list_t                *vls = &conf.source_vids;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&conf, 0x0, sizeof(conf));
+
+    // ****************** RMIRROR Global Configuration ******************
+    // session number, mode
+    if ( session_number ) {
+
+        ICLI_PRINTF_DEBUG("session ID = %u", session_number);
+
+        // load old configuration
+        if ((rc = vtss_appl_mirror_session_entry_get(session_number, &conf)) !=  VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        if (!destination && !source) {
+            conf.enable = TRUE;
+
+            // check conf.session_num
+            ICLI_PRINTF_DEBUG("========= set chip =======");
+            if ((rc = vtss_appl_mirror_session_entry_set(session_number, &conf)) !=  VTSS_RC_OK) {
+                ICLI_PRINTF("%% %s\n", error_txt(rc));
+                return ICLI_RC_ERROR;
+            }
+
+            //ICLI_PRINTF("RMIRROR is enabled.\n");
+            return ICLI_RC_OK;
+        }
+    }
+
+    // vlan
+    if ( drvid ) {
+        conf.rmirror_vid = drvid;
+        ICLI_PRINTF_DEBUG("destination remote vlan id = %u", drvid);
+    }
+    if ( srvid ) {
+        conf.rmirror_vid = srvid;
+        ICLI_PRINTF_DEBUG("source remote vlan id = %u", srvid);
+    }
+
+    // switch type
+    if ( dremote ) {
+        conf.type = VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_SOURCE;
+        ICLI_PRINTF_DEBUG("source session");
+    }
+
+    if ( sremote ) {
+        conf.type = VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_DESTINATION;
+        ICLI_PRINTF_DEBUG("destination session");
+    }
+
+    // reflector port && source switch
+    if ( rport && dremote ) {
+
+        if ((rc = rmirror_mgmt_is_valid_reflector_port(rportid.isid, rportid.begin_iport)) ==  FALSE) {
+            ICLI_PRINTF("%% The port doesn't set as reflector port.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        (void) vtss_ifindex_from_port(rportid.isid, rportid.begin_iport, &ife);
+        conf.reflector_port = ife;
+
+        // check source port(s)
+        if (mgmt_types_port_list_bit_value_get(source_pls_rx, rportid.isid, rportid.begin_iport) ||
+            mgmt_types_port_list_bit_value_get(source_pls_tx, rportid.isid, rportid.begin_iport)) {
+            ICLI_PRINTF("%% Interface ");
+            icli_print_port_info_txt(session_id, rportid.usid, rportid.begin_uport);
+            ICLI_PRINTF("already configured as source port.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        // check destination port
+        if (mgmt_types_port_list_bit_value_get(destination_pls, rportid.isid, rportid.begin_iport)) {
+            ICLI_PRINTF("%% Interface ");
+            icli_print_port_info_txt(session_id, rportid.usid, rportid.begin_uport);
+            ICLI_PRINTF("already configured as destination port.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        ICLI_PRINTF_DEBUG("Switch ID  Port ID");
+        ICLI_PRINTF_DEBUG("=========  =======");
+        ICLI_PRINTF_DEBUG("%9u  %7u", rportid.isid, rportid.begin_iport);
+
+        ICLI_PRINTF("%% Any device connected to a port set as a reflector port loses connectivity until the Remote Mirroring is disabled.\n");
+    }
+
+    // source VLAN
+    if (source_vlan) {
+        if (mgmt_types_port_list_is_empty(source_pls_rx) == FALSE || mgmt_types_port_list_is_empty(source_pls_tx) == FALSE ) {
+            ICLI_PRINTF("%% Cannot add VLANs as sources for MIRROR session %d\n", session_number);
+            return ICLI_RC_ERROR;
+
+        }
+
+        vlan_list_p = source_vlan_list;
+        memset(vls, 0, sizeof(*vls));
+        for ( i = 0; i < vlan_list_p->cnt; i++ ) {
+            for ( idx = vlan_list_p->range[i].min; idx <= vlan_list_p->range[i].max; idx++ ) {
+                mgmt_types_vlan_list_bit_value_set(vls, idx);
+                ICLI_PRINTF_DEBUG("set VLAN %d(%02x)", idx, vls->data[0]);
+            }
+        }
+    }
+
+    // ****************** RMIRROR Port Configuration for switch # ******************
+
+    // source port(s)
+    if ( sinterface ) {
+        // check VLAN-based MIRROR enabled or not?
+        for (idx = VTSS_APPL_VLAN_ID_MIN; idx <= VTSS_APPL_VLAN_ID_MAX; idx++) {
+            if (mgmt_types_vlan_list_bit_value_get(vls, idx)) {
+                ICLI_PRINTF("%% Cannot add interfaces as sources for MIRROR session %d\n", session_number);
+                return ICLI_RC_ERROR;
+            }
+        }
+
+        VTSS_RC(icli_switch_iter_init(&sit));
+        while (icli_switch_iter_getnext(&sit, si_list)) {
+            port_iter_t pit;
+
+            // Loop through all ports
+            VTSS_RC(icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+            while (icli_port_iter_getnext(&pit, si_list)) {
+
+                // check destination port with rx
+                if (rx) {
+                } else {
+                    if (mgmt_types_port_list_bit_value_get(destination_pls, sit.isid, pit.iport)) {
+                        ICLI_PRINTF("%% Interface ");
+                        icli_print_port_info_txt(session_id, sit.usid, pit.uport);
+                        ICLI_PRINTF("already configured as destination port.\n");
+                        return ICLI_RC_ERROR;
+                    }
+                }
+
+#if !defined(VTSS_SW_OPTION_MIRROR_LOOP_PORT)
+                // check reflector port
+                if (conf.type == VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_SOURCE) {
+                    (void)vtss_ifindex_from_port(sit.isid, pit.iport, &ife);
+                    if (VTSS_IFINDEX_PRINTF_ARG(conf.reflector_port) == VTSS_IFINDEX_PRINTF_ARG(ife)) {
+                        ICLI_PRINTF("%% Interface ");
+                        icli_print_port_info_txt(session_id, sit.usid, pit.uport);
+                        ICLI_PRINTF("already configured as reflector port.\n");
+                        return ICLI_RC_ERROR;
+                    }
+                }
+#endif
+
+                if (tx) {
+                    mgmt_types_port_list_bit_value_clear(source_pls_rx, sit.isid, pit.iport);
+                    mgmt_types_port_list_bit_value_set(source_pls_tx, sit.isid, pit.iport);
+                    ICLI_PRINTF_DEBUG("tx");
+                } else if (rx) {
+                    mgmt_types_port_list_bit_value_set(source_pls_rx, sit.isid, pit.iport);
+                    mgmt_types_port_list_bit_value_clear(source_pls_tx, sit.isid, pit.iport);
+                    ICLI_PRINTF_DEBUG("rx");
+                } else {
+                    mgmt_types_port_list_bit_value_set(source_pls_rx, sit.isid, pit.iport);
+                    mgmt_types_port_list_bit_value_set(source_pls_tx, sit.isid, pit.iport);
+                    ICLI_PRINTF_DEBUG("both");
+                }
+            }
+
+        }
+    }
+
+    // source cpu
+    if ( source_cpu ) {
+        if ( source_cpu_both || (!source_cpu_tx && !source_cpu_rx)) {
+            conf.cpu_rx = TRUE;
+            conf.cpu_tx = TRUE;
+        } else if( source_cpu_tx ) {
+            conf.cpu_rx = FALSE;
+            conf.cpu_tx = TRUE;
+        } else{
+            conf.cpu_rx = TRUE;
+            conf.cpu_tx = FALSE;
+        }
+    }
+
+    // destination port(s)
+    if ( dinterface ) {
+        // if the configuration mode is mirror mode, we only support one destination port.
+        if (conf.type == VTSS_APPL_MIRROR_SESSION_TYPE_MIRROR) {
+            memset(destination_pls, 0, sizeof(*destination_pls));
+        }
+
+        VTSS_RC(icli_switch_iter_init(&sit));
+        while (icli_switch_iter_getnext(&sit, di_list)) {
+            port_iter_t pit;
+
+            // Loop through all ports
+            VTSS_RC(icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+            while (icli_port_iter_getnext(&pit, di_list)) {
+
+                // check source port(s) tx
+                if (mgmt_types_port_list_bit_value_get(source_pls_tx, sit.isid, pit.iport)) {
+                    ICLI_PRINTF("%% Interface ");
+                    icli_print_port_info_txt(session_id, sit.usid, pit.uport);
+                    ICLI_PRINTF("already configured as source port.\n");
+                    return ICLI_RC_ERROR;
+                }
+
+#if !defined(VTSS_SW_OPTION_MIRROR_LOOP_PORT)
+                // check reflector port
+                if (conf.type == VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_SOURCE) {
+                    (void)vtss_ifindex_from_port(sit.isid, pit.iport, &ife);
+                    if (VTSS_IFINDEX_PRINTF_ARG(conf.reflector_port) == VTSS_IFINDEX_PRINTF_ARG(ife)) {
+                        ICLI_PRINTF("%% Interface ");
+                        icli_print_port_info_txt(session_id, sit.usid, pit.uport);
+                        ICLI_PRINTF("already configured as reflector port.\n");
+                        return ICLI_RC_ERROR;
+                    }
+                }
+#endif
+                mgmt_types_port_list_bit_value_set(destination_pls, sit.isid, pit.iport);
+                ICLI_PRINTF_DEBUG("destination %u/%u", sit.isid, pit.iport);
+            }
+
+        }
+
+    }
+
+    if ((rc = vtss_appl_mirror_session_entry_set(session_number, &conf)) !=  VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    //return ICLI_RC_OK;
+CODE_END
+CMD_END
+
+//
+// Command Segment 2
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no monitor session <uint> [ \
+destination { interface <port_type_list> | remote } | \
+source { interface <port_type_list> [ both | rx | tx ] | remote | vlan <vlan_list> | cpu [ both | rx | tx ] } ]
+
+FUNC_NAME = no_monitor_session
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+//CMD_VAR   = no
+CMD_VAR   =
+//CMD_VAR   = monitor
+CMD_VAR   =
+//CMD_VAR   = session
+CMD_VAR   =
+CMD_VAR   = session_number
+
+CMD_VAR   = destination
+CMD_VAR   = dinterface
+//CMD_VAR   = diid
+CMD_VAR   = di_list
+CMD_VAR   = dremote
+
+CMD_VAR   = source
+CMD_VAR   = sinterface
+CMD_VAR   = si_list
+CMD_VAR   = both
+CMD_VAR   = rx
+CMD_VAR   = tx
+CMD_VAR   = sremote
+CMD_VAR   = source_vlan
+CMD_VAR   = source_vlan_list
+
+CMD_VAR   = source_cpu
+CMD_VAR   = source_cpu_both
+CMD_VAR   = source_cpu_rx
+CMD_VAR   = source_cpu_tx
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = rmirror_parse_session_id
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = mirror_runtime_rmirror_support
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = mirror_runtime_rmirror_support
+RUNTIME   =
+RUNTIME   =
+
+RUNTIME   = mirror_runtime_cpu_support
+RUNTIME   = mirror_runtime_cpu_support
+RUNTIME   = mirror_runtime_cpu_support
+RUNTIME   = mirror_runtime_cpu_support
+
+HELP   = Negate a command or set its defaults
+HELP   = Monitoring different system events
+HELP   = Configure a MIRROR session
+HELP   = MIRROR session number
+
+HELP   = MIRROR destination interface or VLAN
+HELP   = MIRROR destination interface
+HELP   = MIRROR destination interface number
+HELP   = MIRROR destination Remote
+
+HELP   = MIRROR source interface, VLAN
+HELP   = MIRROR source interface
+HELP   = MIRROR source interface number
+HELP   = MIRROR source receive both
+HELP   = MIRROR source receive Rx
+HELP   = MIRROR source receive Tx
+HELP   = MIRROR source Remote
+HELP   = MIRROR source VLAN
+HELP   = MIRROR source VLAN list
+
+HELP   = MIRROR source CPU
+HELP   = MIRROR source CPU receive both
+HELP   = MIRROR source CPU receive Rx
+HELP   = MIRROR source CPU receive Tx
+
+VARIABLE_BEGIN
+    vtss_appl_mirror_session_entry_t    conf;
+    mesa_rc                 rc = ICLI_RC_OK;
+    switch_iter_t           sit;
+    u32                     i, idx;
+    icli_unsigned_range_t   *vlan_list_p;
+    vtss_port_list_stackable_t      *source_pls_rx =   &conf.source_port_list_rx,
+                                    *source_pls_tx =   &conf.source_port_list_tx,
+                                    *destination_pls = &conf.destination_port_list;
+    vtss_vlan_list_t                *vls = &conf.source_vids;
+VARIABLE_END
+
+CODE_BEGIN
+
+    memset(&conf, 0x0, sizeof(conf));
+
+    // load old configuration
+    if ((rc = vtss_appl_mirror_session_entry_get(session_number, &conf)) !=  VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    // ****************** RMIRROR Global Configuration ******************
+    // session number, mode
+    ICLI_PRINTF_DEBUG("session ID = %u", session_number);
+
+
+    if (!destination && !source) {
+        conf.enable = FALSE;
+    }
+
+    if (destination && dremote && conf.type != VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_SOURCE) {
+        ICLI_PRINTF("%% Session %d isn't a RMirror Source Session.\n", session_number);
+        return ICLI_RC_ERROR;
+    }
+
+    if (source && sremote && conf.type != VTSS_APPL_MIRROR_SESSION_TYPE_RMIRROR_DESTINATION) {
+        ICLI_PRINTF("%% Session %d isn't a RMirror Destination Session.\n", session_number);
+        return ICLI_RC_ERROR;
+    }
+    // vlan
+    if ((destination && dremote) || (source && sremote)) {
+        conf.rmirror_vid = RMIRROR_CLI_DEFAULT_VID;
+        ICLI_PRINTF_DEBUG("RMIRROR vlan id = %d", conf.rmirror_vid);
+        conf.type = VTSS_APPL_MIRROR_SESSION_TYPE_MIRROR;
+
+        // reflector port && source switch
+        if (dremote) {
+            rmirror_switch_conf_t def_switch_conf;
+            rmirror_mgmt_default_set(&def_switch_conf);
+            // Set the reflector port to giga 1/1
+            // Use the function of rmirror_local_lowest_isid_find when stacking implementation
+            (void) vtss_ifindex_from_port(def_switch_conf.rmirror_switch_id, def_switch_conf.reflector_port, &conf.reflector_port);
+            ICLI_PRINTF_DEBUG("reflector_port = %d\n", VTSS_IFINDEX_PRINTF_ARG(conf.reflector_port));
+
+            ICLI_PRINTF_DEBUG("Switch ID  Port ID");
+            ICLI_PRINTF_DEBUG("=========  =======");
+
+        }
+    }
+
+    // source VLAN
+    if ( source_vlan ) {
+        vlan_list_p = source_vlan_list;
+        for ( i = 0; i < vlan_list_p->cnt; i++ ) {
+            for ( idx = vlan_list_p->range[i].min; idx <= vlan_list_p->range[i].max; idx++ ) {
+                mgmt_types_vlan_list_bit_value_clear(vls, idx);
+            }
+        }
+    }
+
+    // ****************** RMIRROR Port Configuration for switch # ******************
+
+    // source port(s)
+    if ( sinterface ) {
+
+        VTSS_RC(icli_switch_iter_init(&sit));
+        while (icli_switch_iter_getnext(&sit, si_list)) {
+            port_iter_t pit;
+            // Loop through all ports
+            VTSS_RC(icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+            while (icli_port_iter_getnext(&pit, si_list)) {
+                if ( both ) {
+                    mgmt_types_port_list_bit_value_clear(source_pls_rx, sit.isid, pit.iport);
+                    mgmt_types_port_list_bit_value_clear(source_pls_tx, sit.isid, pit.iport);
+                    ICLI_PRINTF_DEBUG("both");
+                } else if ( tx ) {
+                    mgmt_types_port_list_bit_value_clear(source_pls_tx, sit.isid, pit.iport);
+                    ICLI_PRINTF_DEBUG("tx");
+                } else if ( rx ) {
+                    mgmt_types_port_list_bit_value_clear(source_pls_rx, sit.isid, pit.iport);
+                    ICLI_PRINTF_DEBUG("rx");
+                } else {
+                    mgmt_types_port_list_bit_value_clear(source_pls_rx, sit.isid, pit.iport);
+                    mgmt_types_port_list_bit_value_clear(source_pls_tx, sit.isid, pit.iport);
+                }
+            }
+        }
+    }
+
+    // source cpu
+    if (source_cpu) {
+        if (source_cpu_both || source_cpu_tx) {
+            conf.cpu_tx = FALSE;
+        }
+        if (source_cpu_both || source_cpu_rx) {
+            conf.cpu_rx = FALSE;
+        }
+        if ((!source_cpu_both) && (!source_cpu_rx) && (!source_cpu_tx)) {
+            conf.cpu_rx = FALSE;
+            conf.cpu_tx = FALSE;
+        }
+    }
+
+    // destination port(s)
+    if ( dinterface ) {
+
+        VTSS_RC(icli_switch_iter_init(&sit));
+        while (icli_switch_iter_getnext(&sit, di_list)) {
+            port_iter_t pit;
+
+            // Loop through all ports
+            VTSS_RC(icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+            while (icli_port_iter_getnext(&pit, di_list)) {
+                mgmt_types_port_list_bit_value_clear(destination_pls, sit.isid, pit.iport);
+            }
+        }
+    }
+
+    // check conf.session_num
+    if ( session_number ) {
+        ICLI_PRINTF_DEBUG("========= set chip =======");
+        if ((rc = vtss_appl_mirror_session_entry_set(session_number, &conf)) !=  VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    //return ICLI_RC_OK;
+CODE_END
+CMD_END
+
+//
+// Command Segment 3
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show monitor [session {<uint> | all | remote}]
+
+FUNC_NAME = show_monitor
+PRIVILEGE = ICLI_PRIVILEGE_5
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+//CMD_VAR   = show
+CMD_VAR   =
+//CMD_VAR   = monitor
+CMD_VAR   =
+//CMD_VAR   = session
+CMD_VAR   =
+CMD_VAR   = session_number
+//CMD_VAR   = all
+CMD_VAR   =
+//CMD_VAR   = remote
+CMD_VAR   =
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = rmirror_parse_session_id
+RUNTIME   =
+RUNTIME   =
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+HELP   = Show running system information
+HELP   = Monitoring different system events
+HELP   = MIRROR session
+HELP   = MIRROR session number
+HELP   = Show all MIRROR sessions
+HELP   = Show only Remote MIRROR sessions
+
+
+VARIABLE_BEGIN
+    u16 *idx, next_idx;
+VARIABLE_END
+
+CODE_BEGIN
+
+    if ( session_number ) {
+        (void) rmirror_show_detail(session_id, session_number);
+    } else {
+        idx = NULL;
+        while (VTSS_RC_OK == vtss_appl_mirror_session_entry_itr(idx, &next_idx)) {
+            idx = &next_idx;
+            (void) rmirror_show_detail(session_id, *idx);
+        }
+    }
+
+CODE_END
+CMD_END
+
+
+//
+// Command Segment 4
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug monitor <uint>
+
+FUNC_NAME = show_monitor_debug
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+//CMD_VAR   = debug
+CMD_VAR   =
+CMD_VAR   = monitor
+CMD_VAR   = session_number
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = rmirror_parse_session_id
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+HELP   = ##ICLI_HELP_DEBUG
+HELP   = monitor
+HELP   = session number
+
+
+VARIABLE_BEGIN
+    mesa_rc rc = ICLI_RC_OK;
+    vtss_appl_mirror_session_entry_t    conf;
+    vtss_port_list_stackable_t      *source_pls_rx =   &conf.source_port_list_rx,
+                                    *source_pls_tx =   &conf.source_port_list_tx,
+                                    *destination_pls = &conf.destination_port_list;
+    switch_iter_t           sit;
+    port_iter_t             pit;
+    char buf[RMIRROR_BUF_SIZE];
+    mesa_port_list_t rx_enable;
+    mesa_port_list_t tx_enable;
+    mesa_port_list_t both_enable;
+    mesa_port_list_t destination_enable;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( monitor ) {
+        ICLI_PRINTF("session number = %d\n", session_number);
+
+        // load old configuration
+        if ((rc = vtss_appl_mirror_session_entry_get( session_number, &conf )) !=  VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        ICLI_PRINTF("vid = %d\n", conf.rmirror_vid );
+        ICLI_PRINTF("type = %d\n", conf.type );
+        ICLI_PRINTF("reflector_port = %d\n", VTSS_IFINDEX_PRINTF_ARG(conf.reflector_port));
+        ICLI_PRINTF("enabled = %d\n", conf.enable );
+
+//        ICLI_PRINTF("RMIRROR is enabled or not = %d\n", rmirror_mgmt_is_rmirror_enabled() );
+        (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_ISID_ALL);
+        while (switch_iter_getnext(&sit)) {
+            memset(both_enable, 0x0, sizeof(both_enable));
+            memset(rx_enable, 0x0, sizeof(rx_enable));
+            memset(tx_enable, 0x0, sizeof(tx_enable));
+            memset(destination_enable, 0x0, sizeof(destination_enable));
+
+            (void)port_iter_init(&pit, NULL, sit.isid, PORT_ITER_SORT_ORDER_IPORT, PORT_ITER_FLAGS_NORMAL);
+            while (port_iter_getnext(&pit)) {
+                if (mgmt_types_port_list_bit_value_get(source_pls_rx, sit.isid, pit.iport) && mgmt_types_port_list_bit_value_get(source_pls_tx, sit.isid, pit.iport)) {
+                    both_enable[pit.iport] = TRUE;
+                } else if (mgmt_types_port_list_bit_value_get(source_pls_rx, sit.isid, pit.iport)) {
+                    rx_enable[pit.iport] = TRUE;
+                } else if (mgmt_types_port_list_bit_value_get(source_pls_tx, sit.isid, pit.iport)) {
+                    tx_enable[pit.iport] = TRUE;
+                }
+                if (mgmt_types_port_list_bit_value_get(destination_pls, sit.isid, pit.iport)) {
+                    destination_enable[pit.iport] = TRUE;
+                }
+            }
+
+            if ( strlen(mgmt_iport_list2txt(rx_enable, buf)) ) {
+                ICLI_PRINTF("    RX Only             : (%d)%d/%s\n", sit.isid, topo_isid2usid(sit.isid), mgmt_iport_list2txt(rx_enable, buf));
+            }
+            if ( strlen(mgmt_iport_list2txt(tx_enable, buf)) ) {
+                ICLI_PRINTF("    TX Only             : (%d)%d/%s\n", sit.isid, topo_isid2usid(sit.isid), mgmt_iport_list2txt(tx_enable, buf));
+            }
+            if ( strlen(mgmt_iport_list2txt(both_enable, buf)) ) {
+                ICLI_PRINTF("    Both                : (%d)%d/%s\n", sit.isid, topo_isid2usid(sit.isid), mgmt_iport_list2txt(both_enable, buf));
+            }
+
+            if ( strlen(mgmt_iport_list2txt(destination_enable, buf)) ) {
+                ICLI_PRINTF("Destination Ports       : (%d)%d/%s\n", sit.isid, topo_isid2usid(sit.isid), mgmt_iport_list2txt(destination_enable, buf));
+            }
+        }
+        if ( strlen(mgmt_iport_list2txt(both_enable, buf)) ) {
+            ICLI_PRINTF("    Source VLAN             : %s\n", rmirror_list2txt(conf.source_vids.data, VTSS_APPL_VLAN_ID_MIN, VTSS_APPL_VLAN_ID_MAX, buf));
+        }
+
+    }
+    //return ICLI_RC_OK;
+
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND   = debug show monitor capabilities reflect-port
+
+FUNC_NAME = show_monitor_cap_reflect_port
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+IF_FLAG   = !defined(VTSS_SW_OPTION_MIRROR_LOOP_PORT)
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+BYWORD  =
+BYWORD  =
+BYWORD  =
+BYWORD  =
+BYWORD  =
+
+HELP    = ##ICLI_HELP_DEBUG
+HELP    = show
+HELP    = monitor
+HELP    = capability
+HELP    = reflect port
+
+
+VARIABLE_BEGIN
+    switch_iter_t   sit;
+    char            str_buf[128];
+VARIABLE_END
+
+CODE_BEGIN
+        VTSS_RC(icli_switch_iter_init(&sit));
+        while (icli_switch_iter_getnext(&sit, NULL)) {
+            port_iter_t pit;
+
+            // Loop through all ports
+            VTSS_RC(icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_FRONT | PORT_ITER_FLAGS_NPI));
+            while (icli_port_iter_getnext(&pit, NULL)) {
+                        ICLI_PRINTF("%-10s%s\n", icli_port_info_txt_short(sit.usid, pit.uport, str_buf),
+                                rmirror_mgmt_is_valid_reflector_port(sit.isid, pit.iport) == TRUE ? "true" : "false");
+            }
+        }
+
+CODE_END
+CMD_END
+
+
+//
+// Command Segment 5
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = monitor session <uint> inner egress-tag [ none | all ]
+
+FUNC_NAME = monitor_inner_tagged
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+//CMD_VAR   = monitor
+CMD_VAR   =
+//CMD_VAR   = session
+CMD_VAR   =
+CMD_VAR   = session_number
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = tagged_type_none
+CMD_VAR   = tagged_type_all
+
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = rmirror_parse_session_id
+
+RUNTIME   = rmirror_parse_internal_reflector_port
+RUNTIME   = rmirror_parse_internal_reflector_port
+RUNTIME   = rmirror_parse_internal_reflector_port
+RUNTIME   = rmirror_parse_internal_reflector_port
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+BYWORD   =
+BYWORD   =
+BYWORD   =
+BYWORD   =
+
+HELP   = Monitoring different system events
+HELP   = Configure a MIRROR session
+HELP   = MIRROR session number
+
+HELP   = Configure an option for inner tagged
+HELP   = Configure an option for inner tagged
+HELP   = Select an untagged mode
+HELP   = Select a tagged mode
+
+
+VARIABLE_BEGIN
+    mesa_rc rc = ICLI_RC_OK;
+    rmirror_switch_conf_t    conf;
+VARIABLE_END
+
+CODE_BEGIN
+
+    vtss_clear(conf);
+
+    // ****************** RMIRROR Global Configuration ******************
+    // session number, mode
+    if ( session_number ) {
+
+        conf.session_num = session_number;
+        ICLI_PRINTF_DEBUG("session number = %u", session_number);
+
+        // load old configuration
+        if ((rc = rmirror_mgmt_conf_get( &conf )) !=  VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        if (tagged_type_all) {
+            conf.reflector_port = RMIRROR_ICLI_INNER_TAGGED_ALL;
+        }
+
+        if (tagged_type_none) {
+            conf.reflector_port = RMIRROR_ICLI_INNER_UNTAGGED_ALL;
+        }
+
+        ICLI_PRINTF_DEBUG("========= set chip =======");
+        if ((rc = rmirror_mgmt_conf_set( &conf )) !=  VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    }
+
+CODE_END
+CMD_END
+

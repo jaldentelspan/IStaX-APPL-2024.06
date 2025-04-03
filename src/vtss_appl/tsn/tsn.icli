@@ -1,0 +1,715 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include <vtss/appl/tsn.h>          /* For vtss_appl_tsn_XXX()                   */
+#include "tsn_api.h"                /* For vtss_appl_tsn_XXX()                   */
+#include "icli_cmd_func.h"          /* For icli_config_XXX()                     */
+#include "icli_porting_util.h"      /* For icli_port_info_txt()                  */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include "topo_api.h"               /* for topo_usid2isid()                      */
+#include "mgmt_api.h"               /* For mgmt_enum_descriptor2txt()            */
+#include "tsn_serializer.hxx"       /* For mgmt_enum_descriptor2txt()            */
+#include "tsn_fp_serializer.hxx"    /* For mgmt_enum_descriptor2txt()            */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+INCLUDE_END
+
+#define CAPA vtss_appl_tsn_capabilities
+
+FUNCTION_BEGIN
+
+#undef IC_RC
+#define IC_RC(expr) do {                              \
+    mesa_rc _rc_ = (expr);                            \
+    if (_rc_ != VTSS_RC_OK) {                            \
+        ICLI_PRINTF("%% TSN: %s!\n", error_txt(_rc_));\
+        return _rc_;                                  \
+    }                                                 \
+} while (0)
+
+// Helper macros:
+#define SHOW_(p)  ((req->all_defaults) || (c.p != dc.p))
+#define PRT_(...) do { VTSS_RC(vtss_icfg_printf(result, __VA_ARGS__)); } while (0)
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// TSN_ICFG_global_conf()
+/******************************************************************************/
+static mesa_rc TSN_ICFG_global_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_tsn_global_conf_t c;
+    vtss_appl_tsn_global_conf_t dc;
+
+    VTSS_RC(vtss_appl_tsn_global_conf_default_get(&dc));
+    VTSS_RC(vtss_appl_tsn_global_conf_get(&c));
+
+    if (SHOW_(procedure)) {
+        switch (c.procedure) {
+        case VTSS_APPL_TSN_PROCEDURE_NONE:
+            PRT_("tsn ptp-check procedure none\n");
+            break;
+
+        case VTSS_APPL_TSN_PROCEDURE_TIME_ONLY:
+            PRT_("tsn ptp-check procedure wait\n");
+            break;
+
+        case VTSS_APPL_TSN_PROCEDURE_TIME_AND_PTP:
+            PRT_("tsn ptp-check procedure ptp\n");
+            break;
+        }
+    }
+
+    if (SHOW_(timeout)) {
+        PRT_("tsn ptp-check timeout %d\n", c.timeout);
+    }
+
+    if (SHOW_(ptp_port)) {
+        PRT_("tsn ptp-check ptp-port %d\n", c.ptp_port);
+    }
+    if (SHOW_(clock_domain)) {
+        PRT_("tsn ptp-check clock-domain %d\n", c.clock_domain);
+    }
+
+    return VTSS_RC_OK;
+}
+
+#define CAPA vtss_appl_tsn_capabilities
+
+/******************************************************************************/
+// tsn_icfg_init()
+/******************************************************************************/
+mesa_rc tsn_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_GLOBAL_CONF, "tsn", TSN_ICFG_global_conf));
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+static BOOL TSN_ICLI_runtime_require_delay(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = CAPA->has_tas || CAPA->has_psfp;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL TSN_ICLI_runtime_tsn_range(icli_runtime_ask_t ask, icli_runtime_t *runtime, const char *help, u32 min, u32 max)
+{
+    if (ask == ICLI_ASK_HELP) {
+        if (help) {
+            icli_sprintf(runtime->help, "%s", help);
+            return TRUE;
+        }
+    } else if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = min;
+        runtime->range.u.ur.range[0].max = max;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL TSN_ICLI_runtime_tsn_timeout(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return TSN_ICLI_runtime_tsn_range(ask, runtime, NULL, 10, 200);
+}
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+HELP_TSN                        = Time Sensitive Network (TSN)
+HELP_TSN_STATUS                 = Status
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn ptp-check procedure { none | wait | ptp }
+
+DOC_CMD_DESC    = Configure function for delayed start (config-change) of TAS and PSFP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =  tsn ptp-check procedure ptp
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    =
+BYWORD  =
+
+! 2: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    = Specify how to ensure that TSN functions start with a coordinated PTP time
+BYWORD  =
+
+! 3: procedure
+CMD_VAR =
+RUNTIME =
+HELP    = Choose procedure to start with a coordinated PTP time
+BYWORD  =
+
+! 4: none
+CMD_VAR = has_none
+RUNTIME =
+HELP    = Procedure: Start TSN functions immediately without any delay
+BYWORD  =
+
+! 5: wait
+CMD_VAR = has_wait
+RUNTIME =
+HELP    = Procedure: Wait timeout number of seconds before starting TSN functions
+BYWORD  =
+
+! 6: ptp
+CMD_VAR =
+RUNTIME =
+HELP    = Procedure: Monitor the status of PTP time. Start if it is Locking or Locked. If Locking or Locked is not achieved within wait time, then start anyway
+BYWORD  =
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t     conf;
+    appl_tsn_time_start_procedure_t old_procedure;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    old_procedure = conf.procedure;
+
+    if (has_none) {
+        conf.procedure = VTSS_APPL_TSN_PROCEDURE_NONE;
+    } else if (has_wait) {
+        conf.procedure = VTSS_APPL_TSN_PROCEDURE_TIME_ONLY;
+    } else {
+        conf.procedure = VTSS_APPL_TSN_PROCEDURE_TIME_AND_PTP;
+    }
+
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+
+    if (old_procedure != conf.procedure) {
+        ICLI_PRINTF("%% Change will take effect upon next boot, provided the running-config is saved to startup-config\n");
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn ptp-check procedure
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    =
+BYWORD  =
+
+! 2: tsn
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! 3: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! 4: procedure
+CMD_VAR =
+RUNTIME =
+HELP    = Set ptp-check procedure to default, which is wait
+BYWORD  =
+
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t conf;
+    vtss_appl_tsn_global_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_default_get(&def_conf));
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    conf.procedure = def_conf.procedure;
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn ptp-check ptp-port <0-3>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    =
+BYWORD  =
+
+! 2: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    = Specify how to ensure that TSN functions start with a coordinated PTP time
+BYWORD  =
+
+! 3:ptp-port
+CMD_VAR =
+RUNTIME =
+HELP    = The PTP port to use for sensing PTP status
+BYWORD  =
+
+! 4: ptp-port-val
+CMD_VAR = ptp_port_val
+RUNTIME =
+HELP    =
+BYWORD  =
+
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    conf.ptp_port = ptp_port_val;
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn ptp-check ptp-port
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    = Set ptp-check ptp-port to default
+BYWORD  =
+
+! 2: tsn
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! 3: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    = Specify how to ensure that TSN functions start with a coordinated PTP time
+BYWORD  =
+
+! 4:ptp-port
+CMD_VAR =
+RUNTIME =
+HELP    = Set the PTP port to use for sensing PTP status to default
+BYWORD  =
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t conf;
+    vtss_appl_tsn_global_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_default_get(&def_conf));
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    conf.ptp_port = def_conf.ptp_port;
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn ptp-check timeout <uint>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    =
+BYWORD  =
+
+! 2: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    = Specify how to ensure that TSN functions start with a coordinated PTP time
+BYWORD  =
+
+! 3: timeout
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tsn_timeout
+HELP    = Set ptp-check timeout in seconds
+BYWORD  =
+
+! 4: time_val
+CMD_VAR = time_val
+RUNTIME = TSN_ICLI_runtime_tsn_timeout
+HELP    =
+BYWORD  =
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    conf.timeout = time_val;
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn ptp-check timeout
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    = Set ptp-check timeout value to default
+BYWORD  =
+
+! 2: tsn
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! 3: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    = Specify how to ensure that TSN functions start with a coordinated PTP time
+BYWORD  =
+
+! 4: timeout
+CMD_VAR =
+RUNTIME =
+HELP    = Set ptp-check timeout to default
+BYWORD  =
+
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t conf;
+    vtss_appl_tsn_global_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_default_get(&def_conf));
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    conf.timeout = def_conf.timeout;
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn ptp-check clock-domain <0-2>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    =
+BYWORD  =
+
+! 2: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    = Specify how to ensure that TSN functions start with a coordinated PTP time
+BYWORD  =
+
+! 3:clock-domain
+CMD_VAR =
+RUNTIME =
+HELP    = The Clock domain used
+BYWORD  =
+
+! 4: ptp-port-val
+CMD_VAR = clock_domain_val
+RUNTIME =
+HELP    =
+BYWORD  =
+
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    conf.clock_domain = clock_domain_val;
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn ptp-check clock-domain
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! 1: no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    = Set ptp-check clock-domain to default
+BYWORD  =
+
+! 2: tsn
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! 3: ptp-check
+CMD_VAR =
+RUNTIME =
+HELP    = Specify how to ensure that TSN functions start with a coordinated PTP time
+BYWORD  =
+
+! 4:clock-domai
+CMD_VAR =
+RUNTIME =
+HELP    = Set the Clock domain to use for sensing PTP status to default
+BYWORD  =
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_conf_t conf;
+    vtss_appl_tsn_global_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_conf_default_get(&def_conf));
+    IC_RC(vtss_appl_tsn_global_conf_get(&conf));
+    conf.clock_domain = def_conf.clock_domain;
+    IC_RC(vtss_appl_tsn_global_conf_set(&conf));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_TSN_SHOW_CURRENT_TIME = Show current TSN time
+COMMAND         = show tsn current-time
+DOC_CMD_DESC    = ##HELP_TSN_SHOW_CURRENT_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_TSN_SHOW_CURRENT_TIME
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_SHOW
+HELP            =
+HELP            = ##HELP_TSN_SHOW_CURRENT_TIME
+
+VARIABLE_BEGIN
+    mesa_timestamp_t tod;
+    char             buf[50];
+VARIABLE_END
+
+CODE_BEGIN
+   IC_RC(tsn_util_current_time_get(tod));
+   ICLI_PRINTF("Current Time (seconds):  %s\n", tsn_util_timestamp_to_str(    buf, sizeof(buf), tod));
+   ICLI_PRINTF("Current Time (ISO 8601): %s\n", tsn_util_timestamp_to_iso8601(buf, sizeof(buf), tod));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug show tsn status
+
+DOC_CMD_DESC    = Displays the status of TSN global parameters
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show tsn status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! debug
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_require_delay
+HELP    =
+BYWORD  =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! status
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_global_state_t state;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_global_state_get(&state));
+    ICLI_PRINTF("TSN modules TAS and PSFP will have their start (apply of config-change) after a 'power on' or 'reload cold' delayed\n");
+    ICLI_PRINTF("according to the criteria configured by the 'tsn ptp-check' configuration.\n");
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("TSN starting state:\n");
+    ICLI_PRINTF("   immediately        :   Did not make a delayed start.\n");
+    ICLI_PRINTF("   waitingForTimeout  :   Do not check PTP locking state, just wait to reach the timeout.\n");
+    ICLI_PRINTF("   timedOut           :   Reached timeout (without PTP checking) and applied delayed config-change.\n");
+    ICLI_PRINTF("   waitingForLock     :   Waiting for PTP to be in Locking or Locked state.\n");
+    ICLI_PRINTF("   ptpLocking         :   Detected PTP Locking state and applied the delayed config-change.\n");
+    ICLI_PRINTF("   ptpLocked          :   Detected PTP Locked state and applied the delayed config-change.\n");
+    ICLI_PRINTF("   ptpTimedOut        :   Did not detect PTP Locked/Locking state withing the timeout, and applied the delayed config-change.\n");
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Time used to lock or start : Seconds passed until the PTP Locked/Locking was reached, or timeout reached.\n");
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("Initial ConfigChange       : show wether or not the initial config-change is applied.\n");
+    ICLI_PRINTF("\n");
+    ICLI_PRINTF("---------------------------------------------------------\n");
+    ICLI_PRINTF("TSN starting state         : %s\n", mgmt_enum_descriptor2txt(vtss_appl_tsn_start_state_txt, state.start_state));
+    ICLI_PRINTF("Time used to lock or start : %d seconds\n", state.time_passed);
+    ICLI_PRINTF("Initial ConfigChange       : %s \n", state.start ? "Yes" : "No" );
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_TSN_DEBUG_TIMERS = Show current TSN timers
+COMMAND         = debug show tsn timers
+DOC_CMD_DESC    = ##HELP_TSN_DEBUG_TIMERS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_TSN_DEBUG_TIMERS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            =
+HELP            = ##HELP_TSN_DEBUG_TIMERS
+
+CODE_BEGIN
+    void tsn_timer_debug_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    tsn_timer_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+

@@ -1,0 +1,86 @@
+# Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+# Microchip is aware that some terminology used in this technical document is
+# antiquated and inappropriate. As a result of the complex nature of software
+# where seemingly simple changes have unpredictable, and often far-reaching
+# negative results on the software's functionality (requiring extensive retesting
+# and revalidation) we are unable to make the desired changes in all legacy
+# systems without compromising our product or our clients' products.
+
+# TCM - Topology Change Machine - 13.36 - Fig. 13-21
+
+stm TopologyChange(MSTI)
+
+define CistCond(x)	(isCistPort(port) && x)
+
+BEGIN:
+        >> INACTIVE
+
+INACTIVE:
+        fdbFlush(port);
+        tcWhile = 0;
+        if(isCistPort(port)) { tcAck = FALSE; }
+        when learn >> LEARNING
+
+LEARNING:
+        if(isCistPort(port)) { rcvdTc = rcvdTcn = rcvdTcAck = FALSE; }
+        rcvdTc = tcProp = FALSE;
+        when ((role == RootPort) || (role == DesignatedPort) || (role == MasterPort)) && forward && !operEdge >> DETECTED
+        when (role != RootPort) && (role != DesignatedPort) && (role != MasterPort) && !(learn || learning) && !(rcvdTc || CistCond(rcvdTcn) || CistCond(rcvdTcAck) || tcProp) >> INACTIVE
+        when rcvdTc || CistCond(rcvdTcn) || CistCond(rcvdTcAck) || tcProp >> LEARNING
+
+DETECTED:
+        newTcWhile(port); setTcPropTree(port);
+        newInfoXst(port,TRUE);
+        >> ACTIVE
+
+ACTIVE:
+        loop_protect 10
+        when ((role != RootPort) && (role != DesignatedPort) && (role != MasterPort)) || operEdge >> LEARNING
+        when CistCond(rcvdTcAck) >> ACKNOWLEDGED
+        when tcProp && !operEdge >> PROPAGATING
+        when rcvdTc >> NOTIFIED_TC
+        when CistCond(rcvdTcn) >> NOTIFIED_TCN
+
+ACKNOWLEDGED:
+        tcWhile = 0; rcvdTcAck = FALSE;
+        >> ACTIVE
+
+PROPAGATING:
+        newTcWhile(port); fdbFlush(port);
+        tcProp = FALSE;
+        >> ACTIVE
+
+NOTIFIED_TC:
+        if(isCistPort(port)) { rcvdTcn = FALSE; }
+        rcvdTc = FALSE;
+        if (isCistPort(port) && role == DesignatedPort) tcAck = TRUE;
+        setTcPropTree(port);
+        >> ACTIVE
+
+NOTIFIED_TCN:
+        newTcWhile(port);
+        >> NOTIFIED_TC
+

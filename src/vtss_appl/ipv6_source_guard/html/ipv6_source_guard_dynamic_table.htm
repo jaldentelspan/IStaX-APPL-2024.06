@@ -1,0 +1,145 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>IPv6 Source Guard Dynamic Table</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json_minimum.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_dynamic_table.htm";
+
+var timerID = null;
+
+function setAutoRefresh()
+{
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+function addEntryRow(index, frag, entryKey, entryValues)
+{
+    var tr = CreateStyledElement("tr", index % 2 ? "display_odd" : "display_even");
+
+    // Add values to table.
+    addTextCell(tr, entryKey["Ifindex"], "cr");
+    addTextCell(tr, entryKey["VlanId"], "cr");
+    addTextCell(tr, entryKey["ipv6Address"], "cr");
+    addTextCell(tr, entryValues["MacAddress"], "cr");
+    
+    frag.appendChild(tr);
+}
+
+function processDynamicEntries(recv_json, name)
+{
+    if (!recv_json) {
+        alert("Could not get entries.");
+        return;
+    }
+
+    var tbody = document.getElementById('tableBodyData');
+    clearChildNodes(tbody);
+
+    // create holder for accumulated tbody elements and text nodes
+    var frag = document.createDocumentFragment();
+    var index = 0;
+
+    Object.each(recv_json, function (record) {
+        addEntryRow(index, frag, record.key, record.val);
+        index++;
+    });
+
+    if (!tbody.appendChild(frag)) { // Add Frag to table body
+        alert("This browser doesn't support dynamic tables.");
+    }
+}
+
+function requestUpdate()
+{
+    requestJsonDoc("ipv6_source_guard.status.dynamic.get", null, processDynamicEntries, "dynamic_entry_data");
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        setAutoRefresh();
+    }
+}
+
+/* Initialize resource when HTML document is ready */
+window.addEvent('domready', function () {
+    requestUpdate();
+});
+
+    </script>
+</head>
+
+<body class="content" style="height: calc(100vh - 30px);">
+    <h1>IPv6 Source Guard Dynamic Table</h1>
+
+    <div class="refreshbar">
+        <form action="#">
+           <label for="autorefresh">Auto-refresh</label>
+           <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+           <input type="button"   id="refresh" value="Refresh" onclick="requestUpdate(); this.blur();">
+           <img id="update" alt="" src="images/updating.gif">
+        </form>
+       </div>
+
+    <div id="myTableContainer" style="height:80vh; overflow-y:auto; display: inline-block;">
+        <table id="ipv6SGDynamicTable" summary="IPv6 Source Guard Dynamic Table" cellspacing="0" class="display"
+               style="height:auto; width:100%; margin-right:20px;">
+            <thead>
+                <tr class="display_header">
+                    <th>Port</th>
+                    <th>VLAN ID</th>
+                    <th>IPv6 Address</th>
+                    <th>MAC Address</th>
+                </tr>
+            </thead>
+          <tbody id="tableBodyData"></tbody>
+        </table>
+    </div>
+</body>
+</html>

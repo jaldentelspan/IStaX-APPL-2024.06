@@ -1,0 +1,385 @@
+-- *****************************************************************
+-- MIRROR-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-MIRROR-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Integer32 FROM SNMPv2-SMI
+    TruthValue FROM SNMPv2-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSPortList FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    VTSSVlanListQuarter FROM VTSS-TC
+    ;
+
+vtssMirrorMib MODULE-IDENTITY
+    LAST-UPDATED "201407010000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "This is a private version of Mirror"
+    REVISION    "201407010000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 15 }
+
+
+VTSSmirrorSessionType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the session type in Mirror function."
+    SYNTAX      INTEGER { mirror(0), rMirrorSource(1),
+                          rMirrorDestination(2) }
+
+vtssMirrorMibObjects OBJECT IDENTIFIER
+    ::= { vtssMirrorMib 1 }
+
+vtssMirrorCapabilities OBJECT IDENTIFIER
+    ::= { vtssMirrorMibObjects 1 }
+
+vtssMirrorCapabilitiesSessionCountMax OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum number of sessions."
+    ::= { vtssMirrorCapabilities 1 }
+
+vtssMirrorCapabilitiesSessionSourceCountMax OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum number of Mirror and RMirror source sessions."
+    ::= { vtssMirrorCapabilities 2 }
+
+vtssMirrorCapabilitiesRMirrorSuport OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate if RMirror feature is supported or not. true means supported.
+         false means not supported."
+    ::= { vtssMirrorCapabilities 3 }
+
+vtssMirrorCapabilitiesInternalReflectorPortSupport OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate if Internal reflector port is supported or not. true means
+         supported. false means not supported."
+    ::= { vtssMirrorCapabilities 4 }
+
+vtssMirrorCapabilitiesCpuMirrorSupport OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate if mirroring CPU traffic is supported or not. true means
+         supported. false means not supported."
+    ::= { vtssMirrorCapabilities 5 }
+
+vtssMirrorConfig OBJECT IDENTIFIER
+    ::= { vtssMirrorMibObjects 2 }
+
+vtssMirrorConfigSessionTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSMirrorConfigSessionEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of configuration per session"
+    ::= { vtssMirrorConfig 1 }
+
+vtssMirrorConfigSessionEntry OBJECT-TYPE
+    SYNTAX      VTSSMirrorConfigSessionEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each session has a set of parameters"
+    INDEX       { vtssMirrorConfigSessionSessionId }
+    ::= { vtssMirrorConfigSessionTable 1 }
+
+VTSSMirrorConfigSessionEntry ::= SEQUENCE {
+    vtssMirrorConfigSessionSessionId            Integer32,
+    vtssMirrorConfigSessionMode                 TruthValue,
+    vtssMirrorConfigSessionType                 VTSSmirrorSessionType,
+    vtssMirrorConfigSessionRMirrorVlan          VTSSUnsigned16,
+    vtssMirrorConfigSessionReflectorPort        VTSSInterfaceIndex,
+    vtssMirrorConfigSessionStripInnerTag        TruthValue,
+    vtssMirrorConfigSessionSourceVlans0KTo1K    VTSSVlanListQuarter,
+    vtssMirrorConfigSessionSourceVlans1KTo2K    VTSSVlanListQuarter,
+    vtssMirrorConfigSessionSourceVlans2KTo3K    VTSSVlanListQuarter,
+    vtssMirrorConfigSessionSourceVlans3KTo4K    VTSSVlanListQuarter,
+    vtssMirrorConfigSessionSourcePortListRx     VTSSPortList,
+    vtssMirrorConfigSessionSourcePortListTx     VTSSPortList,
+    vtssMirrorConfigSessionCpuRx                TruthValue,
+    vtssMirrorConfigSessionCpuTx                TruthValue,
+    vtssMirrorConfigSessionDestinationPortList  VTSSPortList
+}
+
+vtssMirrorConfigSessionSessionId OBJECT-TYPE
+    SYNTAX      Integer32 (1..65535)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Session ID. Valid range is (1..maximum). The maximum is
+         platform-specific and can be retrieved from the Mirror capabilities."
+    ::= { vtssMirrorConfigSessionEntry 1 }
+
+vtssMirrorConfigSessionMode OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether this session is enabled or disabled. true is to enable
+         the function. false is to disable it.
+         
+         Multiple criteria must be fulfilled in order to be able to enable a
+         session.The criteria depend on the 'SessionType'."
+    ::= { vtssMirrorConfigSessionEntry 2 }
+
+vtssMirrorConfigSessionType OBJECT-TYPE
+    SYNTAX      VTSSmirrorSessionType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Session type in Mirror. 'mirror' means to do the Mirror function on the
+         device.
+         
+         'rMirrorSource' means the device acts as source node for monitor flow.
+         
+         'rMirrorDestination' means the device acts as end node for monitor
+         flow.
+         
+         "
+    ::= { vtssMirrorConfigSessionEntry 3 }
+
+vtssMirrorConfigSessionRMirrorVlan OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID points out where the monitor packet will copy to. The
+         remote Mirror VLAN ID. Only used for RMirror types.
+         
+         RMirror source session:
+         
+         The mirrored traffic is copied onto this VLAN ID.
+         
+         Traffic will flood to all ports that are members of the remote Mirror
+         VLAN ID.
+         
+         RMirror destination session:
+         
+         The #destination_port_list contains the port(s) that the Mirror VLAN
+         will be copied to
+         
+         in addition to ports that are already configured (through the VLAN
+         module) to be members of this VLAN."
+    ::= { vtssMirrorConfigSessionEntry 4 }
+
+vtssMirrorConfigSessionReflectorPort OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "A reflector port is a port that the administrator may have to specify
+         in case the device does not have internal (unused) ports available.
+         Whether this is the case or not for this device can be derived from
+         Mirror capabilities. When 'ReflectorPort' is used, it must be specified
+         when an RMirror source session is enabled. In this case, the reflector
+         port will be shut down for normal front port usage, because the switch
+         needs a port where it can loop frames in order to get mirrored traffic
+         copied onto a particular VLAN ID (the 'RMirrorVlan')."
+    ::= { vtssMirrorConfigSessionEntry 5 }
+
+vtssMirrorConfigSessionStripInnerTag OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "This configuration is used to strip the original VLAN ID of the
+         mirrored traffic or not. When it is set to TRUE, the the original VLAN
+         ID of the mirrored traffic will be stripped, otherwise the original
+         VLAN ID will be carried to destination interface. It may have to
+         specify in case the device does not have internal (unused) ports
+         available. Whether this is the case or not for this device can be
+         derived from Mirror capabilities."
+    ::= { vtssMirrorConfigSessionEntry 6 }
+
+vtssMirrorConfigSessionSourceVlans0KTo1K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "First quarter of bit-array indicating source VLAN list. All traffic in
+         the VLANs specified in this list will get mirrored onto either the
+         destination port (Mirror session) or the destination VLAN (RMirror
+         source session). It's a bit-mask that indicates the VLANs. A '1'
+         indicates the VLAN ID is selected, a '0' indicates that the VLAN ID
+         isn't selected. "
+    ::= { vtssMirrorConfigSessionEntry 7 }
+
+vtssMirrorConfigSessionSourceVlans1KTo2K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Second quarter of bit-array indicating source VLAN list. All traffic in
+         the VLANs specified in this list will get mirrored onto either the
+         destination port (Mirror session) or the destination VLAN (RMirror
+         source session). It's a bit-mask that indicates the VLANs. A '1'
+         indicates the VLAN ID is selected, a '0' indicates that the VLAN ID
+         isn't selected. "
+    ::= { vtssMirrorConfigSessionEntry 8 }
+
+vtssMirrorConfigSessionSourceVlans2KTo3K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Third quarter of bit-array indicating source VLAN list. All traffic in
+         the VLANs specified in this list will get mirrored onto either the
+         destination port (Mirror session) or the destination VLAN (RMirror
+         source session). It's a bit-mask that indicates the VLANs. A '1'
+         indicates the VLAN ID is selected, a '0' indicates that the VLAN ID
+         isn't selected. "
+    ::= { vtssMirrorConfigSessionEntry 9 }
+
+vtssMirrorConfigSessionSourceVlans3KTo4K OBJECT-TYPE
+    SYNTAX      VTSSVlanListQuarter
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Fourth quarter of bit-array indicating source VLAN list. All traffic in
+         the VLANs specified in this list will get mirrored onto either the
+         destination port (Mirror session) or the destination VLAN (RMirror
+         source session). It's a bit-mask that indicates the VLANs. A '1'
+         indicates the VLAN ID is selected, a '0' indicates that the VLAN ID
+         isn't selected. "
+    ::= { vtssMirrorConfigSessionEntry 10 }
+
+vtssMirrorConfigSessionSourcePortListRx OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "A bit-mask that controls whether a given port is enabled for mirroring
+         of incoming traffic. A '1' indicates that the port is included, whereas
+         a '0' indicates it isn't. Only source sessions (Mirror and RMirror
+         Source) use this value. "
+    ::= { vtssMirrorConfigSessionEntry 11 }
+
+vtssMirrorConfigSessionSourcePortListTx OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "A bit-mask that controls whether a given port is enabled for mirroring
+         of outgoing traffic. A '1' indicates that the port is included, whereas
+         a '0' indicates it isn't. Only source sessions (Mirror and RMirror
+         Source) use this value. "
+    ::= { vtssMirrorConfigSessionEntry 12 }
+
+vtssMirrorConfigSessionCpuRx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether mirroring of traffic received by the internal CPU is
+         enabled or disabled. It is supported or not can be derived from Mirror
+         capabilities.Only source sessions (Mirror and RMirror Source) use this
+         value. "
+    ::= { vtssMirrorConfigSessionEntry 13 }
+
+vtssMirrorConfigSessionCpuTx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether mirroring of traffic transmitted by the internal CPU
+         is enabled or disabled. It is supported or not can be derived from
+         Mirror capabilities.Only source sessions (Mirror and RMirror Source)
+         use this value. "
+    ::= { vtssMirrorConfigSessionEntry 14 }
+
+vtssMirrorConfigSessionDestinationPortList OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination port list implemented as a bit-mask, where a '1' indicates
+         that the port is included and a '0' indicates that it isn't. Only used
+         in plain Mirror sessions and RMirror destination sessions.
+         
+         Mirror session:
+         
+         At most one bit may be set in this mask.
+         
+         RMirror destination session:
+         
+         Zero or more bits may be set in this mask."
+    ::= { vtssMirrorConfigSessionEntry 15 }
+
+vtssMirrorMibConformance OBJECT IDENTIFIER
+    ::= { vtssMirrorMib 2 }
+
+vtssMirrorMibCompliances OBJECT IDENTIFIER
+    ::= { vtssMirrorMibConformance 1 }
+
+vtssMirrorMibGroups OBJECT IDENTIFIER
+    ::= { vtssMirrorMibConformance 2 }
+
+vtssMirrorCapabilitiesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssMirrorCapabilitiesSessionCountMax,
+                  vtssMirrorCapabilitiesSessionSourceCountMax,
+                  vtssMirrorCapabilitiesRMirrorSuport,
+                  vtssMirrorCapabilitiesInternalReflectorPortSupport,
+                  vtssMirrorCapabilitiesCpuMirrorSupport }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssMirrorMibGroups 1 }
+
+vtssMirrorConfigSessionTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssMirrorConfigSessionSessionId,
+                  vtssMirrorConfigSessionMode,
+                  vtssMirrorConfigSessionType,
+                  vtssMirrorConfigSessionRMirrorVlan,
+                  vtssMirrorConfigSessionReflectorPort,
+                  vtssMirrorConfigSessionStripInnerTag,
+                  vtssMirrorConfigSessionSourceVlans0KTo1K,
+                  vtssMirrorConfigSessionSourceVlans1KTo2K,
+                  vtssMirrorConfigSessionSourceVlans2KTo3K,
+                  vtssMirrorConfigSessionSourceVlans3KTo4K,
+                  vtssMirrorConfigSessionSourcePortListRx,
+                  vtssMirrorConfigSessionSourcePortListTx,
+                  vtssMirrorConfigSessionCpuRx,
+                  vtssMirrorConfigSessionCpuTx,
+                  vtssMirrorConfigSessionDestinationPortList }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssMirrorMibGroups 2 }
+
+vtssMirrorMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssMirrorCapabilitiesInfoGroup,
+                       vtssMirrorConfigSessionTableInfoGroup }
+
+    ::= { vtssMirrorMibCompliances 1 }
+
+END

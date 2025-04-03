@@ -1,0 +1,2929 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = VTSS_SW_OPTION_REDBOX
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include <vtss/appl/redbox.h>       /* For vtss_appl_redbox_XXX()                */
+#include "redbox_api.h"             /* For redbox_util_XXX()                     */
+#include "mac_utils.hxx"            /* For mesa_mac_t::operator==()              */
+#include "misc_api.h"               /* For iport2uport()                         */
+#include "port_api.h"               /* For port_count_max()                      */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include REDBOX's trace here, because ICLI defines its own that I
+// don't want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "redbox_trace.h"
+
+// Simple way of ICLI printing to both avoid session_id and to void the return
+// value of icli_session_self_printf()
+#define REDBOX_ICLI_PRINTF(...) (void)icli_session_self_printf(__VA_ARGS__)
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define REDBOX_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {REDBOX_ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// REDBOX_ICFG_port_conf_print()
+/******************************************************************************/
+static mesa_rc REDBOX_ICFG_port_conf_print(uint32_t inst, vtss_icfg_conf_print_t &conf_print, vtss_appl_redbox_conf_t &conf, vtss_appl_redbox_conf_t &default_conf, vtss_appl_redbox_port_type_t port_type)
+{
+    vtss_ifindex_t     ifindex = port_type == VTSS_APPL_REDBOX_PORT_TYPE_A ? conf.port_a : conf.port_b;
+    vtss_ifindex_elm_t ife;
+    char               buf[100], cmd[50];
+    mesa_rc            rc;
+
+    // Print interface
+    sprintf(cmd, "%s interface", redbox_util_port_type_to_str(port_type));
+    conf_print.is_default = false;
+
+    if (ifindex == VTSS_IFINDEX_NONE) {
+        if (conf_print.req->all_defaults) {
+            VTSS_RC(vtss_icfg_conf_print(&conf_print, "no", "%s", cmd));
+        }
+    } else if (ifindex == VTSS_IFINDEX_REDBOX_NEIGHBOR) {
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", "neighbor"));
+    } else {
+        if ((rc = vtss_appl_ifindex_port_configurable(ifindex, &ife)) != VTSS_RC_OK) {
+            T_EG(REDBOX_TRACE_GRP_ICLI, "%u: Unable to decompose %s ifindex %u", inst, redbox_util_port_type_to_str(port_type), VTSS_IFINDEX_PRINTF_ARG(ifindex));
+            return rc;
+        }
+
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), buf)));
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// REDBOX_ICFG_conf_print()
+/******************************************************************************/
+static mesa_rc REDBOX_ICFG_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    uint32_t                     inst;
+    vtss_icfg_conf_print_t       conf_print;
+    vtss_appl_redbox_conf_t      conf, default_conf;
+    vtss_appl_redbox_port_type_t port_type;
+    char                         buf[20];
+
+    // Format:
+    // redbox <1-max>
+    //  [no] mode {prp-san | hsr-san | hsr-prp | hsr-hsr}
+    //  [no] port-a interface [<port_type_id> | neighbor]
+    //  [no] port-b interface [<port_type_id> | neighbor]
+    //  [no] hsr-mode {h | n | t | u | m | r}              RBNTBD!
+    //  [no] duplicate-discard                             RBNTBD!
+    //  [no] net-id <1-7>
+    //  [no] lan-id {a | b}
+    //  [no] nodes-table-age-time <1-65>
+    //  [no] proxy-node-table-age-time <1-65>
+    //  [no] duplicate-discard-age-time <10-10000>
+    //  [no] supervision-vlan {native | <vlan_id>} [pcp <0-7>]
+    //  [no] supervision-dmac-lsb <uint8>
+    //  [no] supervision-frame-interval <1-60>
+    //  [no] supervision-translate-prp-to-hsr
+    //  [no] supervision-translate-hsr-to-prp
+    //  admin-state {enable | disable}
+
+    if (req->cmd_mode != ICLI_CMD_MODE_REDBOX) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "Invalid cmd_mode (%d). Expected %d", req->cmd_mode, ICLI_CMD_MODE_REDBOX);
+        return VTSS_RC_OK;
+    }
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+    conf_print.force_no_keyword   = false;
+
+    inst = req->instance_id.generic_u32;
+
+    VTSS_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    VTSS_RC(vtss_appl_redbox_conf_get(inst, &conf));
+
+    //  [no] mode {prp-san | hsr-san | hsr-prp | hsr-hsr}
+    // Always print the mode, although it's the default, so that the user can
+    // see it explicitly
+    conf_print.is_default = false;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "mode", "%s", redbox_util_mode_to_str(conf.mode)));
+
+    //  [no] port-a interface <port_type_id>
+    //  [no] port-b interface <port_type_id>
+    for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_B; port_type++) {
+        REDBOX_ICFG_port_conf_print(inst, conf_print, conf, default_conf, port_type);
+    }
+
+#ifdef RBNTBD /* Only HSR mode h is currently supported by MESA */
+    //  [no] hsr-mode {h | n | t | u | m | r}
+    if (conf.mode != VTSS_APPL_REDBOX_MODE_PRP_SAN) {
+        conf_print.is_default = conf.hsr_mode == default_conf.hsr_mode;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "hsr-mode", redbox_util_hsr_mode_to_str(conf.hsr_mode)));
+    }
+#endif
+
+#ifdef RBNTBD /* Duplicate-Accept is not supported by MESA */
+    //  [no] duplicate-discard
+    // The default is enabled, so cannot use vtss_icfg_conf_print().
+    if (req->all_defaults || conf.duplicate_discard != default_conf.duplicate_discard) {
+        VTSS_RC(vtss_icfg_printf(result, " %sduplicate-discard\n", conf.duplicate_discard ? "" : "no "));
+    }
+#endif
+
+    //  [no] net-id <1-7>
+    if (conf.mode == VTSS_APPL_REDBOX_MODE_HSR_PRP || conf.mode == VTSS_APPL_REDBOX_MODE_HSR_HSR) {
+        conf_print.is_default = conf.net_id == default_conf.net_id;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "net-id", "%u", conf.net_id));
+    }
+
+    //  [no] lan-id {a | b}
+    if (conf.mode == VTSS_APPL_REDBOX_MODE_HSR_PRP) {
+        conf_print.is_default = conf.lan_id == default_conf.lan_id;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "lan-id", "%s", redbox_util_lan_id_to_str(conf.lan_id)));
+    }
+
+    //  [no] nodes-table-age-time
+    conf_print.is_default = conf.nt_age_time_secs == default_conf.nt_age_time_secs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "nodes-table-age-time", "%u", conf.nt_age_time_secs));
+
+    //  [no] proxy-node-table-age-time
+    if (conf.mode != VTSS_APPL_REDBOX_MODE_HSR_HSR) {
+        conf_print.is_default = conf.pnt_age_time_secs == default_conf.pnt_age_time_secs;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "proxy-node-table-age-time", "%u", conf.pnt_age_time_secs));
+    }
+
+    //  [no] duplicate-discard-age-time
+    conf_print.is_default = conf.duplicate_discard_age_time_msecs == default_conf.duplicate_discard_age_time_msecs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "duplicate-discard-age-time", "%u", conf.duplicate_discard_age_time_msecs));
+
+    //  [no] supervision-vlan {native | <vlan_id>} [pcp <0-7>]
+    if (req->all_defaults || conf.sv_vlan != default_conf.sv_vlan || conf.sv_pcp != default_conf.sv_pcp) {
+        if (conf.sv_vlan == 0) {
+            strcpy(buf, "native");
+        } else {
+            sprintf(buf, "%u", conf.sv_vlan);
+        }
+
+        if (req->all_defaults || conf.sv_pcp != default_conf.sv_pcp) {
+            VTSS_RC(vtss_icfg_printf(conf_print.result, " supervision-vlan %s pcp %u\n", buf, conf.sv_pcp));
+        } else {
+            VTSS_RC(vtss_icfg_printf(conf_print.result, " supervision-vlan %s\n", buf));
+        }
+    }
+
+    //  [no] supervision-dmac-lsb <uint8>
+    conf_print.is_default = conf.sv_dmac_lsb == default_conf.sv_dmac_lsb;
+    // Print it as hex.
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "supervision-dmac-lsb", "0x%02x", conf.sv_dmac_lsb));
+
+    //  [no] supervision-frame-interval <1-60>
+    conf_print.is_default = conf.sv_frame_interval_secs == default_conf.sv_frame_interval_secs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "supervision-frame-interval", "%u", conf.sv_frame_interval_secs));
+
+    if (conf.mode == VTSS_APPL_REDBOX_MODE_HSR_PRP) {
+        //  [no] supervision-translate-prp-to-hsr
+        // The default value is true, which is not supported by
+        // vtss_icfg_conf_print()
+        if (req->all_defaults || conf.sv_xlat_prp_to_hsr != default_conf.sv_xlat_prp_to_hsr) {
+            VTSS_RC(vtss_icfg_printf(result, " %ssupervision-translate-prp-to-hsr\n", conf.sv_xlat_prp_to_hsr ? "" : "no "));
+        }
+
+        //  [no] supervision-translate-hsr-to-prp
+        // The default value is true, which is not supported by
+        // vtss_icfg_conf_print()
+        if (req->all_defaults || conf.sv_xlat_hsr_to_prp != default_conf.sv_xlat_hsr_to_prp) {
+            VTSS_RC(vtss_icfg_printf(result, " %ssupervision-translate-hsr-to-prp\n", conf.sv_xlat_hsr_to_prp ? "" : "no "));
+        }
+    }
+
+    //  admin-state {enable | disable}
+    conf_print.is_default = conf.admin_active == default_conf.admin_active;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "admin-state", "%s", conf.admin_active ? "enable" : "disable"));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// redbox_icfg_init()
+/******************************************************************************/
+mesa_rc redbox_icfg_init(void)
+{
+    return vtss_icfg_query_register(VTSS_ICFG_REDBOX, "redbox", REDBOX_ICFG_conf_print);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+/******************************************************************************/
+// REDBOX_ICLI_do_instance_range()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_do_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing)
+{
+    vtss_appl_redbox_capabilities_t cap;
+    uint32_t                        prev_inst, inst, cnt;
+    mesa_rc                         rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_redbox_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 2;
+    }
+
+    // Add the default range first.
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    if (!include_existing) {
+        return TRUE;
+    }
+
+    prev_inst = 0;
+    while (vtss_appl_redbox_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_instance_range()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return REDBOX_ICLI_do_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_existing_instance_range()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_existing_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return REDBOX_ICLI_do_instance_range(session_id, ask, runtime, true);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_mode_get()
+/******************************************************************************/
+static bool REDBOX_ICLI_mode_get(uint32_t session_id, vtss_appl_redbox_mode_t &mode)
+{
+    vtss_appl_redbox_conf_t conf;
+    uint32_t                inst;
+    icli_cmd_mode_t         cmd_mode;
+    icli_variable_value_t   v;
+    icli_rc_t               icli_rc;
+    mesa_rc                 rc;
+
+    // Get the Redbox instance number we are currently configuring.
+    if ((icli_rc = (icli_rc_t)vtss_icli_session_mode_para_get(session_id, &cmd_mode, &v)) != ICLI_RC_OK) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "Unable to get current command mode");
+        return false;
+    }
+
+    if (cmd_mode != ICLI_CMD_MODE_REDBOX) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "Expected command mode to be redbox (%d), but got %d", ICLI_CMD_MODE_REDBOX, cmd_mode);
+        return false;
+    }
+
+    inst = v.u.u_range_uint;
+
+    if ((rc = vtss_appl_redbox_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_conf_get(%u) failed: %s", inst, error_txt(rc));
+        return false;
+    }
+
+    mode = conf.mode;
+
+    return true;
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_is_or_is_not_in_some_mode()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_is_or_is_not_in_some_mode(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, vtss_appl_redbox_mode_t mode, bool is)
+{
+    vtss_appl_redbox_mode_t conf_mode;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if (!REDBOX_ICLI_mode_get(session_id, conf_mode)) {
+        return FALSE;
+    }
+
+    if (is) {
+        runtime->present = conf_mode == mode;
+    } else {
+        runtime->present = conf_mode != mode;
+    }
+
+    return TRUE;
+}
+
+#ifdef RBNTBD
+/******************************************************************************/
+// REDBOX_ICLI_is_not_in_prp_san_mode()
+// This function is only called by hsr-mode changes, and only HSR mode H is
+// currently supported by MESA.
+/******************************************************************************/
+static BOOL REDBOX_ICLI_is_not_in_prp_san_mode(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return REDBOX_ICLI_is_or_is_not_in_some_mode(session_id, ask, runtime, VTSS_APPL_REDBOX_MODE_PRP_SAN, false /* is not */);
+}
+#endif
+
+/******************************************************************************/
+// REDBOX_ICLI_is_in_hsr_prp_mode()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_is_in_hsr_prp_mode(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return REDBOX_ICLI_is_or_is_not_in_some_mode(session_id, ask, runtime, VTSS_APPL_REDBOX_MODE_HSR_PRP, true /* is */);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_is_in_hsr_prp_or_hsr_hsr_mode()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_is_in_hsr_prp_or_hsr_hsr_mode(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (REDBOX_ICLI_is_or_is_not_in_some_mode(session_id, ask, runtime, VTSS_APPL_REDBOX_MODE_HSR_PRP, true /* is */) && runtime->present) {
+        return TRUE;
+    }
+
+    return REDBOX_ICLI_is_or_is_not_in_some_mode(session_id, ask, runtime, VTSS_APPL_REDBOX_MODE_HSR_HSR, true /* is */);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_is_not_in_hsr_hsr_mode()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_is_not_in_hsr_hsr_mode(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return REDBOX_ICLI_is_or_is_not_in_some_mode(session_id, ask, runtime, VTSS_APPL_REDBOX_MODE_HSR_HSR, false /* is not */);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_neighbor_redbox_allowed()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_neighbor_redbox_allowed(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, vtss_appl_redbox_port_type_t port_type)
+{
+    vtss_appl_redbox_capabilities_t cap;
+    uint32_t                        inst;
+    icli_cmd_mode_t                 cmd_mode;
+    icli_variable_value_t           v;
+    icli_rc_t                       icli_rc;
+    mesa_rc                         rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // Get the Redbox instance number we are currently configuring.
+    if ((icli_rc = (icli_rc_t)vtss_icli_session_mode_para_get(session_id, &cmd_mode, &v)) != ICLI_RC_OK) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "Unable to get current command mode");
+        return FALSE;
+    }
+
+    if (cmd_mode != ICLI_CMD_MODE_REDBOX) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "Expected command mode to be redbox (%d), but got %d", ICLI_CMD_MODE_REDBOX, cmd_mode);
+        return FALSE;
+    }
+
+    inst = v.u.u_range_uint;
+
+    if ((rc = vtss_appl_redbox_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 2;
+    }
+
+    if (inst == 1 && port_type == VTSS_APPL_REDBOX_PORT_TYPE_A) {
+        // Instance 1 doesn't have a left neighbor
+        runtime->present = false;
+    } else if (inst == cap.inst_cnt_max && port_type == VTSS_APPL_REDBOX_PORT_TYPE_B) {
+        // Instance N doesn't have a right neighbor
+        runtime->present = false;
+    } else {
+        runtime->present = true;
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_neighbor_redbox_allowed_port_a()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_neighbor_redbox_allowed_port_a(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return REDBOX_ICLI_neighbor_redbox_allowed(session_id, ask, runtime, VTSS_APPL_REDBOX_PORT_TYPE_A);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_neighbor_redbox_allowed_port_b()
+/******************************************************************************/
+static BOOL REDBOX_ICLI_neighbor_redbox_allowed_port_b(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return REDBOX_ICLI_neighbor_redbox_allowed(session_id, ask, runtime, VTSS_APPL_REDBOX_PORT_TYPE_B);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_show_redbox_interfaces()
+/******************************************************************************/
+static icli_rc_t REDBOX_ICLI_show_redbox_interfaces(bool sort_by_port)
+{
+    vtss_appl_redbox_capabilities_t               cap;
+    CapArray<uint32_t, MEBA_CAP_BOARD_PORT_COUNT> port2inst;
+    mesa_port_list_t                              port_list;
+    mesa_port_no_t                                port_no;
+    uint32_t                                      inst, port_cnt;
+    char                                          inst_buf[20], port_buf[40], ports_buf[1000];
+
+    REDBOX_PRINT_RC(vtss_appl_redbox_capabilities_get(&cap));
+
+    if (sort_by_port) {
+        vtss_clear(port2inst);
+
+        port_cnt = port_count_max();
+
+        REDBOX_ICLI_PRINTF("Interface  Instance\n");
+        REDBOX_ICLI_PRINTF("---------- --------\n");
+
+        for (inst = 1; inst <= cap.inst_cnt_max; inst++) {
+            REDBOX_PRINT_RC(vtss_appl_redbox_capabilities_port_list_get(inst, &port_list));
+
+            for (port_no = 0; port_no < port_cnt; port_no++) {
+                if (port_list[port_no]) {
+                    port2inst[port_no] = inst;
+                }
+            }
+        }
+
+        for (port_no = 0; port_no < port_cnt; port_no++) {
+            if (port2inst[port_no] == 0) {
+                strcpy(inst_buf, "<None>");
+            } else {
+                sprintf(inst_buf, "%u", port2inst[port_no]);
+            }
+
+            REDBOX_ICLI_PRINTF("%-10s %8s\n", icli_port_info_txt_short(VTSS_ISID_START, iport2uport(port_no), port_buf), inst_buf);
+        }
+    } else {
+        REDBOX_ICLI_PRINTF("Instance Interfaces\n");
+        REDBOX_ICLI_PRINTF("-------- ------------------------------------------------\n");
+
+        for (inst = 1; inst <= cap.inst_cnt_max; inst++) {
+            REDBOX_PRINT_RC(vtss_appl_redbox_capabilities_port_list_get(inst, &port_list));
+            REDBOX_ICLI_PRINTF("%8u %s\n", inst, icli_port_list_info_txt(VTSS_ISID_START, port_list, ports_buf, true /* short form */));
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_bool_to_yes_no()
+/******************************************************************************/
+static const char *REDBOX_ICLI_bool_to_yes_no(bool val, bool capital_yes = false)
+{
+    return val ? capital_yes ? "YES!" : "Yes" : "No";
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_bool_to_yes_no_dash()
+/******************************************************************************/
+static const char *REDBOX_ICLI_bool_to_yes_no_dash(bool val, bool print_dash, bool capital_yes = false)
+{
+    if (print_dash) {
+        return "-";
+    }
+
+    return REDBOX_ICLI_bool_to_yes_no(val, capital_yes);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_show_status()
+/******************************************************************************/
+static void REDBOX_ICLI_show_status(uint32_t inst, vtss_appl_redbox_conf_t &conf, vtss_appl_redbox_status_t &status, bool first_print, bool has_details)
+{
+    vtss_appl_redbox_port_type_t     port_type;
+    vtss_ifindex_elm_t               ife;
+    char                             interface_str[3][ICLI_PORTING_STR_BUF_SIZE] = {};
+    char                             buf[400];
+    const int                        width1 = 31;
+    const int                        width2 = 18;
+    vtss_appl_redbox_oper_warnings_t oper_warning;
+    bool                             first, has_notifications, print_dash;
+    int                              i;
+
+    if (status.oper_state == VTSS_APPL_REDBOX_OPER_STATE_ACTIVE) {
+        for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_C; port_type++) {
+            // Convert ifindex to something that ICLI can understand.
+            // Notice that port_c is a status thing, because it comes indirectly
+            // from the configured port_a and port_b.
+            vtss_ifindex_t &ifindex = port_type == VTSS_APPL_REDBOX_PORT_TYPE_A ? conf.port_a : port_type == VTSS_APPL_REDBOX_PORT_TYPE_B ? conf.port_b : status.port_c;
+
+            if (ifindex == VTSS_IFINDEX_REDBOX_NEIGHBOR) {
+                strcpy(interface_str[port_type], "Neighbor");
+            } else {
+                if (vtss_appl_ifindex_port_configurable(ifindex, &ife) != VTSS_RC_OK) {
+                    T_EG(REDBOX_TRACE_GRP_ICLI, "%u: Unable to decompose ifindex %u", inst, VTSS_IFINDEX_PRINTF_ARG(ifindex));
+                    return;
+                }
+
+                (void)icli_port_info_txt_short(ife.usid, iport2uport(ife.ordinal), interface_str[port_type]);
+            }
+        }
+    }
+
+    if (has_details) {
+        if (!first_print) {
+            // Not first print, but separate from previous detailed instance
+            REDBOX_ICLI_PRINTF("\n------------------------------------------------------------------------\n\n");
+        }
+
+        REDBOX_ICLI_PRINTF("%-*s %u\n", width1, "Instance:",          inst);
+        REDBOX_ICLI_PRINTF("%-*s %s\n", width1, "Mode:",              redbox_util_mode_to_str(conf.mode, true /* Capital */));
+        REDBOX_ICLI_PRINTF("%-*s %s\n", width1, "Operational State:", redbox_util_oper_state_to_str(status.oper_state));
+
+        if (status.oper_state != VTSS_APPL_REDBOX_OPER_STATE_ACTIVE) {
+            return;
+        }
+
+        if (status.oper_warnings) {
+            // Print one configurational warning per line
+            first = true;
+
+            for (i = 0; i < 8 * sizeof(status.oper_warnings); i++) {
+                oper_warning = status.oper_warnings & (vtss_appl_redbox_oper_warnings_t)VTSS_BIT(i);
+                if (oper_warning) {
+                    REDBOX_ICLI_PRINTF("%-*s %s\n", width1, first ? "Configurational Warnings:" : "", redbox_util_oper_warnings_to_str(buf, sizeof(buf), oper_warning));
+                    first = false;
+                }
+            }
+        } else {
+            REDBOX_ICLI_PRINTF("%-*s %s\n", width1, "Configurational Warnings:", "None");
+        }
+
+        REDBOX_ICLI_PRINTF("%-*s %s\n", width1, "NodesTable/ProxyNodeTable full:", REDBOX_ICLI_bool_to_yes_no(status.notif_status.nt_pnt_full));
+
+        // Print per-port properties.
+        REDBOX_ICLI_PRINTF("\n");
+        REDBOX_ICLI_PRINTF("                   Port A     Port B     Port C\n");
+        REDBOX_ICLI_PRINTF("-----------------  ---------- ---------- ----------\n");
+
+        REDBOX_ICLI_PRINTF("%-*s", width2, "Interface");
+        for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_C; port_type++) {
+            REDBOX_ICLI_PRINTF(" %-10s", interface_str[port_type]);
+        }
+
+        REDBOX_ICLI_PRINTF("\n%-*s", width2, "Link");
+        for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_C; port_type++) {
+            REDBOX_ICLI_PRINTF(" %-10s", status.notif_status.port[port_type].down ? "DOWN!" /* to draw attention */ : "Up");
+        }
+
+        REDBOX_ICLI_PRINTF("\n%-*s", width2, "Wrong LAN Rx");
+        for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_C; port_type++) {
+            if (conf.mode == VTSS_APPL_REDBOX_MODE_HSR_SAN || conf.mode == VTSS_APPL_REDBOX_MODE_HSR_HSR) {
+                print_dash = true;
+            } else if (conf.mode == VTSS_APPL_REDBOX_MODE_PRP_SAN && port_type == VTSS_APPL_REDBOX_PORT_TYPE_C) {
+                // Port C in PRP-SAN doesn't have this notification.
+                print_dash = true;
+            } else if (conf.mode == VTSS_APPL_REDBOX_MODE_HSR_PRP && (port_type == VTSS_APPL_REDBOX_PORT_TYPE_A || port_type == VTSS_APPL_REDBOX_PORT_TYPE_B)) {
+                // Port A and Port B in HSR-PRP mode don't have this
+                // notification.
+                print_dash = true;
+            } else {
+                print_dash = false;
+            }
+
+            REDBOX_ICLI_PRINTF(" %-10s", REDBOX_ICLI_bool_to_yes_no_dash(status.notif_status.port[port_type].cnt_err_wrong_lan, print_dash, true /* print 'YES!' in capitals to draw attention */));
+        }
+
+        REDBOX_ICLI_PRINTF("\n%-*s", width2, "Non-HSR-tagged Rx");
+        for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_C; port_type++) {
+            if (conf.mode == VTSS_APPL_REDBOX_MODE_PRP_SAN) {
+                // N/A in PRP-SAN mode
+                print_dash = true;
+            } else if (conf.mode != VTSS_APPL_REDBOX_MODE_HSR_HSR && port_type == VTSS_APPL_REDBOX_PORT_TYPE_C) {
+                // Port C in HSR-SAN and HSR-HSR (and PRP-SAN) doesn't have this
+                // notification.
+                print_dash = true;
+            } else {
+                print_dash = false;
+            }
+
+            REDBOX_ICLI_PRINTF(" %-10s", REDBOX_ICLI_bool_to_yes_no_dash(status.notif_status.port[port_type].hsr_untagged_rx, print_dash, true /* print 'YES!' in capitals to draw attention */));
+        }
+
+        REDBOX_ICLI_PRINTF("\n");
+    } else {
+        if (first_print) {
+            REDBOX_ICLI_PRINTF("Inst Oper. State Mode    Port A     Port B     Port C     Warnings Notifications\n");
+            REDBOX_ICLI_PRINTF("---- ----------- ------- ---------- ---------- ---------- -------- -------------\n");
+        }
+
+        REDBOX_ICLI_PRINTF("%4u %-11s", inst, redbox_util_oper_state_to_str(status.oper_state));
+
+        if (status.oper_state != VTSS_APPL_REDBOX_OPER_STATE_ACTIVE) {
+            REDBOX_ICLI_PRINTF("\n");
+            return;
+        }
+
+        // Figure out whether at least one notification is active
+        has_notifications = false;
+        if (status.notif_status.nt_pnt_full) {
+            has_notifications = true;
+        } else {
+            for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_C; port_type++) {
+                vtss_appl_redbox_port_notification_status_t &s = status.notif_status.port[port_type];
+                if (s.cnt_err_wrong_lan || s.down || s.hsr_untagged_rx) {
+                    has_notifications = true;
+                    break;
+                }
+            }
+        }
+
+        REDBOX_ICLI_PRINTF(" %-7s %-10s %-10s %-10s %-8s %s\n",
+                           redbox_util_mode_to_str(conf.mode, true /* Capitals */),
+                           interface_str[VTSS_APPL_REDBOX_PORT_TYPE_A],
+                           interface_str[VTSS_APPL_REDBOX_PORT_TYPE_B],
+                           interface_str[VTSS_APPL_REDBOX_PORT_TYPE_C],
+                           REDBOX_ICLI_bool_to_yes_no(status.oper_warnings != VTSS_APPL_REDBOX_OPER_WARNING_NONE, true /* print 'YES!' in capitals to draw attention */),
+                           REDBOX_ICLI_bool_to_yes_no(has_notifications,                                          true /* print 'YES!' in capitals to draw attention */));
+    }
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_show_statistics()
+/******************************************************************************/
+static void REDBOX_ICLI_show_statistics(uint32_t inst, vtss_appl_redbox_status_t &status, vtss_appl_redbox_statistics_t &s, bool first_print, bool has_details)
+{
+    vtss_appl_redbox_port_type_t port_type;
+    vtss_appl_redbox_sv_type_t   sv_type;
+    uint64_t                     rx, tx;
+    const int                    width = 22;
+
+    if (has_details) {
+        if (!first_print) {
+            // Not first print, but separate from previous detailed instance
+            REDBOX_ICLI_PRINTF("\n------------------------------------------------------------------------\n\n");
+        }
+
+        REDBOX_ICLI_PRINTF("Instance: %u\n\n", inst);
+        if (status.oper_state != VTSS_APPL_REDBOX_OPER_STATE_ACTIVE) {
+            REDBOX_ICLI_PRINTF("Inactive\n");
+            return;
+        }
+
+        REDBOX_ICLI_PRINTF("                       Port A                        Port B                        Port C\n");
+        REDBOX_ICLI_PRINTF("                       ----------------------------- ----------------------------- -----------------------------\n");
+        REDBOX_ICLI_PRINTF("Counter                Rx             Tx             Rx             Tx             Rx             Tx\n");
+        REDBOX_ICLI_PRINTF("---------------------- -------------- -------------- -------------- -------------- -------------- --------------\n");
+
+#define REDBOX_ICLI_COUNTER_RX_TX_PRINT(_c_, _n_) REDBOX_ICLI_PRINTF("%-*s " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") "\n", width, _n_, s.port[VTSS_APPL_REDBOX_PORT_TYPE_A].rx_##_c_##_cnt,    s.port[VTSS_APPL_REDBOX_PORT_TYPE_A].tx_##_c_##_cnt, s.port[VTSS_APPL_REDBOX_PORT_TYPE_B].rx_##_c_##_cnt,    s.port[VTSS_APPL_REDBOX_PORT_TYPE_B].tx_##_c_##_cnt, s.port[VTSS_APPL_REDBOX_PORT_TYPE_C].rx_##_c_##_cnt,    s.port[VTSS_APPL_REDBOX_PORT_TYPE_C].tx_##_c_##_cnt);
+#define REDBOX_ICLI_COUNTER_RX_PRINT(   _c_, _n_) REDBOX_ICLI_PRINTF("%-*s " VPRI64Fu("14") " %14s " VPRI64Fu("14") " %14s " VPRI64Fu("14") " %14s\n",                                           width, _n_, s.port[VTSS_APPL_REDBOX_PORT_TYPE_A].rx_##_c_##_cnt,    "-",                                                 s.port[VTSS_APPL_REDBOX_PORT_TYPE_B].rx_##_c_##_cnt,    "-",                                                 s.port[VTSS_APPL_REDBOX_PORT_TYPE_C].rx_##_c_##_cnt,    "-");
+#define REDBOX_ICLI_COUNTER_TX_PRINT(   _c_, _n_) REDBOX_ICLI_PRINTF("%-*s %14s " VPRI64Fu("14") " %14s " VPRI64Fu("14") " %14s " VPRI64Fu("14") "\n",                                           width, _n_, "-",                                                    s.port[VTSS_APPL_REDBOX_PORT_TYPE_A].tx_##_c_##_cnt, "-",                                                    s.port[VTSS_APPL_REDBOX_PORT_TYPE_B].tx_##_c_##_cnt, "-",                                                    s.port[VTSS_APPL_REDBOX_PORT_TYPE_C].tx_##_c_##_cnt);
+#define REDBOX_ICLI_COUNTER_RX_SV_PRINT(_c_, _n_) REDBOX_ICLI_PRINTF("%-*s " VPRI64Fu("14") " %14s " VPRI64Fu("14") " %14s " VPRI64Fu("14") " %14s\n",                                           width, _n_, s.port[VTSS_APPL_REDBOX_PORT_TYPE_A].sv_rx_##_c_##_cnt, "-",                                                 s.port[VTSS_APPL_REDBOX_PORT_TYPE_B].sv_rx_##_c_##_cnt, "-",                                                 s.port[VTSS_APPL_REDBOX_PORT_TYPE_C].sv_rx_##_c_##_cnt, "-");
+#define REDBOX_ICLI_COUNTER_RX_TX_PRINT_SV(_t_) {                            \
+            char buf[30];                                                    \
+            sprintf(buf, "%s Supervision", redbox_util_sv_type_to_str(_t_)); \
+            REDBOX_ICLI_PRINTF("%-*s " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") " " VPRI64Fu("14") "\n", width, buf, s.port[VTSS_APPL_REDBOX_PORT_TYPE_A].sv_rx_cnt[_t_], s.port[VTSS_APPL_REDBOX_PORT_TYPE_A].sv_tx_cnt[_t_], s.port[VTSS_APPL_REDBOX_PORT_TYPE_B].sv_rx_cnt[_t_], s.port[VTSS_APPL_REDBOX_PORT_TYPE_B].sv_tx_cnt[_t_], s.port[VTSS_APPL_REDBOX_PORT_TYPE_C].sv_rx_cnt[_t_], s.port[VTSS_APPL_REDBOX_PORT_TYPE_C].sv_tx_cnt[_t_]); \
+        }
+
+        REDBOX_ICLI_COUNTER_RX_TX_PRINT(tagged,     "Tagged");
+        REDBOX_ICLI_COUNTER_RX_TX_PRINT(untagged,   "Untagged");
+        REDBOX_ICLI_COUNTER_RX_TX_PRINT(bpdu,       "BPDUs");
+        REDBOX_ICLI_COUNTER_RX_PRINT(   own,        "Own");
+        REDBOX_ICLI_COUNTER_RX_PRINT(   wrong_lan,  "Wrong LAN");
+        REDBOX_ICLI_COUNTER_TX_PRINT(   dupl_zero,  "Zero Duplicates");
+        REDBOX_ICLI_COUNTER_TX_PRINT(   dupl_one,   "One Duplicate");
+        REDBOX_ICLI_COUNTER_TX_PRINT(   dupl_multi, "Two or more Duplicates");
+
+        for (sv_type = (vtss_appl_redbox_sv_type_t)0; sv_type < VTSS_APPL_REDBOX_SV_TYPE_CNT; sv_type++) {
+            REDBOX_ICLI_COUNTER_RX_TX_PRINT_SV(sv_type);
+        }
+
+        REDBOX_ICLI_COUNTER_RX_SV_PRINT(err,      "Erroneous Supervision");
+        REDBOX_ICLI_COUNTER_RX_SV_PRINT(filtered, "Filtered Supervision");
+    } else {
+         if (first_print) {
+             REDBOX_ICLI_PRINTF("     Port A                        Port B                        Port C\n");
+             REDBOX_ICLI_PRINTF("     ----------------------------- ----------------------------- -----------------------------\n");
+             REDBOX_ICLI_PRINTF("Inst Rx             Tx             Rx             Tx             Rx             Tx\n");
+             REDBOX_ICLI_PRINTF("---- -------------- -------------- -------------- -------------- -------------- --------------\n");
+         }
+
+         REDBOX_ICLI_PRINTF("%4u", inst);
+
+         if (status.oper_state != VTSS_APPL_REDBOX_OPER_STATE_ACTIVE) {
+             REDBOX_ICLI_PRINTF(" Inactive\n");
+             return;
+         }
+
+         for (port_type = VTSS_APPL_REDBOX_PORT_TYPE_A; port_type <= VTSS_APPL_REDBOX_PORT_TYPE_C; port_type++) {
+             vtss_appl_redbox_port_statistics_t &p = s.port[port_type];
+
+             rx = p.rx_tagged_cnt + p.rx_untagged_cnt + p.rx_bpdu_cnt;
+             tx = p.tx_tagged_cnt + p.tx_untagged_cnt + p.tx_bpdu_cnt;
+
+             REDBOX_ICLI_PRINTF(" " VPRI64Fu("14") " " VPRI64Fu("14"), rx, tx);
+         }
+
+         REDBOX_ICLI_PRINTF("\n");
+    }
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_conditional_to_str_or_dash()
+/******************************************************************************/
+static char *REDBOX_ICLI_conditional_to_str_or_dash(char *buf, bool do_print, uint32_t value)
+{
+    if (do_print) {
+        sprintf(buf, "%u", value);
+    } else {
+        sprintf(buf, "-");
+    }
+
+    return buf;
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_last_sv_type_to_str_or_dash()
+/******************************************************************************/
+static char *REDBOX_ICLI_last_sv_type_to_str_or_dash(char *buf, bool print, vtss_appl_redbox_sv_type_t sv_type)
+{
+    if (print) {
+        sprintf(buf, "%s", redbox_util_sv_type_to_str(sv_type));
+    } else {
+        sprintf(buf, "-");
+    }
+
+    return buf;
+}
+
+typedef struct {
+    char rx_wrong_lan[20];
+    char last_seen[20];
+    char sv_last_seen[20];
+    char sv_last_type[20];
+} redbox_icli_port_bufs_t;
+
+/******************************************************************************/
+// REDBOX_ICLI_port_bufs_fill()
+/******************************************************************************/
+static void REDBOX_ICLI_port_bufs_fill(redbox_icli_port_bufs_t &b, vtss_appl_redbox_mac_port_status_t &s, bool print_rx_wrong_lan)
+{
+    REDBOX_ICLI_conditional_to_str_or_dash( b.rx_wrong_lan, print_rx_wrong_lan, s.rx_wrong_lan_cnt);
+    REDBOX_ICLI_conditional_to_str_or_dash( b.last_seen,    s.rx_cnt    != 0,   s.last_seen_secs);
+    REDBOX_ICLI_conditional_to_str_or_dash( b.sv_last_seen, s.sv_rx_cnt != 0,   s.sv_last_seen_secs);
+    REDBOX_ICLI_last_sv_type_to_str_or_dash(b.sv_last_type, s.sv_rx_cnt != 0,   s.sv_last_type);
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_show_nt()
+/******************************************************************************/
+static void REDBOX_ICLI_show_nt(uint32_t inst, vtss_appl_redbox_conf_t &conf, vtss_appl_redbox_status_t &status, bool first_print, bool has_details, bool has_filter, bool has_supervision)
+{
+    vtss_appl_redbox_nt_status_t     nt_status;
+    vtss_appl_redbox_nt_mac_status_t nt_mac_status;
+    mesa_mac_t                       mac = {};
+    char                             mac_buf[20], node_type_buf[20], fwd_buf[20];
+    redbox_icli_port_bufs_t          port_bufs[2];
+    uint32_t                         inst_itr;
+    mesa_rc                          rc;
+
+    if (first_print) {
+        if (has_supervision) {
+            // Show detailed supervision frame info
+            REDBOX_ICLI_PRINTF("                                           Rx                    Last Seen             Last Type\n");
+            REDBOX_ICLI_PRINTF("                                           --------------------- --------------------- ---------------\n");
+            REDBOX_ICLI_PRINTF("Inst MAC Address       Node Type   Forward Port A     Port B     Port A     Port B     Port A  Port B\n");
+            REDBOX_ICLI_PRINTF("---- ----------------- ----------- ------- ---------- ---------- ---------- ---------- ------- -------\n");
+        } else if (has_details) {
+            // Show detailed data frame info
+            REDBOX_ICLI_PRINTF("                                           Rx                    Last Seen             Rx Wrong LAN\n");
+            REDBOX_ICLI_PRINTF("                                           --------------------- --------------------- ---------------------\n");
+            REDBOX_ICLI_PRINTF("Inst MAC Address       Node Type   Forward Port A     Port B     Port A     Port B     Port A     Port B\n");
+            REDBOX_ICLI_PRINTF("---- ----------------- ----------- ------- ---------- ---------- ---------- ---------- ---------- ----------\n");
+        } else {
+            // Show overview
+            REDBOX_ICLI_PRINTF("Inst Mode    MAC Addresses Wrong LAN\n");
+            REDBOX_ICLI_PRINTF("---- ------- ------------- ----------\n");
+        }
+    }
+
+    if (!has_supervision && !has_details) {
+        // User only wants to know the number of MAC addresses learned in the
+        // NodesTable.
+        REDBOX_ICLI_PRINTF("%4u ", inst);
+        if ((rc = vtss_appl_redbox_nt_status_get(inst, &nt_status)) != VTSS_RC_OK) {
+            T_IG(REDBOX_TRACE_GRP_ICLI, "%u: vtss_appl_redbox_nt_status_get() failed: %s", inst, error_txt(rc));
+        }
+
+        if (rc != VTSS_RC_OK || status.oper_state != VTSS_APPL_REDBOX_OPER_STATE_ACTIVE) {
+            REDBOX_ICLI_PRINTF("Inactive\n");
+            return;
+        }
+
+        REDBOX_ICLI_PRINTF("%-7s %13u %s\n", redbox_util_mode_to_str(conf.mode, true /* Capitals */), nt_status.mac_cnt, REDBOX_ICLI_bool_to_yes_no_dash(nt_status.wrong_lan, conf.mode != VTSS_APPL_REDBOX_MODE_PRP_SAN, true /* print 'YES!' in capitals to draw attention */));
+        return;
+    }
+
+    inst_itr = inst;
+    while (vtss_appl_redbox_nt_itr(&inst_itr, &inst_itr, &mac, &mac) == VTSS_RC_OK) {
+        if (inst_itr != inst) {
+            // We got into the next instance.
+            break;
+        }
+
+        if ((rc = vtss_appl_redbox_nt_mac_status_get(inst, &mac, &nt_mac_status)) != VTSS_RC_OK) {
+            // Don't use T_EG() here, because the MAC may disappear between the
+            // XXX_itr() and the XXX_status_get()
+            T_IG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_nt_mac_status_get(%s) failed: %s", mac, error_txt(rc));
+            continue;
+        }
+
+        vtss_appl_redbox_mac_port_status_t &port_a = nt_mac_status.port[VTSS_APPL_REDBOX_PORT_TYPE_A];
+        vtss_appl_redbox_mac_port_status_t &port_b = nt_mac_status.port[VTSS_APPL_REDBOX_PORT_TYPE_B];
+
+        if (has_filter) {
+            // Only print entries with non-zero Rx Wrong LAN.
+            if (port_a.rx_wrong_lan_cnt == 0 && port_b.rx_wrong_lan_cnt == 0) {
+                continue;
+            }
+        }
+
+        (void)misc_mac_txt(mac.addr, mac_buf);
+
+        if (conf.mode == VTSS_APPL_REDBOX_MODE_PRP_SAN) {
+            if (port_a.fwd && port_b.fwd) {
+                strcpy(fwd_buf, "Both");
+            } else if (port_a.fwd) {
+                strcpy(fwd_buf, "Port A");
+            } else if (port_b.fwd) {
+                strcpy(fwd_buf, "Port B");
+            } else {
+                strcpy(fwd_buf, "None");
+            }
+        } else {
+            strcpy(fwd_buf, "-");
+        }
+
+        REDBOX_ICLI_port_bufs_fill(port_bufs[0], port_a, conf.mode == VTSS_APPL_REDBOX_MODE_PRP_SAN);
+        REDBOX_ICLI_port_bufs_fill(port_bufs[1], port_b, conf.mode == VTSS_APPL_REDBOX_MODE_PRP_SAN);
+
+        sprintf(node_type_buf, redbox_util_node_type_to_str(nt_mac_status.node_type));
+
+        REDBOX_ICLI_PRINTF("%4u %-17s %-11s %-7s ",
+                           inst,
+                           mac_buf,
+                           node_type_buf,
+                           fwd_buf);
+
+        if (has_supervision) {
+            REDBOX_ICLI_PRINTF("%10u %10u %10s %10s %-7s %s\n",
+                               port_a.sv_rx_cnt,
+                               port_b.sv_rx_cnt,
+                               port_bufs[0].sv_last_seen,
+                               port_bufs[1].sv_last_seen,
+                               port_bufs[0].sv_last_type,
+                               port_bufs[1].sv_last_type);
+        } else {
+            // Data
+            REDBOX_ICLI_PRINTF("%10u %10u %10s %10s %10s %10s\n",
+                               port_a.rx_cnt,
+                               port_b.rx_cnt,
+                               port_bufs[0].last_seen,
+                               port_bufs[1].last_seen,
+                               port_bufs[0].rx_wrong_lan,
+                               port_bufs[1].rx_wrong_lan);
+        }
+    }
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_show_pnt()
+/******************************************************************************/
+static void REDBOX_ICLI_show_pnt(uint32_t inst, vtss_appl_redbox_conf_t &conf, vtss_appl_redbox_status_t &status, bool first_print, bool has_details, bool has_filter)
+{
+    vtss_appl_redbox_pnt_status_t     pnt_status;
+    vtss_appl_redbox_pnt_mac_status_t pnt_mac_status;
+    mesa_mac_t                        mac = {};
+    char                              mac_buf[20], node_type_buf[20], sv_rx_cnt_buf[20];
+    redbox_icli_port_bufs_t           port_bufs;
+    uint32_t                          inst_itr;
+    mesa_rc                           rc;
+
+    if (first_print) {
+        if (has_details) {
+            REDBOX_ICLI_PRINTF("                                    Data                               Supervision\n");
+            REDBOX_ICLI_PRINTF("                                    ---------------------------------- ------------------------------------------\n");
+            REDBOX_ICLI_PRINTF("Inst MAC Address        Node Type   Rx         Last Seen  Rx Wrong LAN Rx         Tx         Last Seen  Last Type\n");
+            REDBOX_ICLI_PRINTF("---- ------------------ ----------- ---------- ---------- ------------ ---------- ---------- ---------- ---------\n");
+        } else {
+            // Show overview
+            REDBOX_ICLI_PRINTF("Inst Mode    MAC Addresses Wrong LAN\n");
+            REDBOX_ICLI_PRINTF("---- ------- ------------- ----------\n");
+        }
+    }
+
+    if (!has_details) {
+        // User only wants to know the number of MAC addresses learned in the
+        // ProxyNodeTable.
+        REDBOX_ICLI_PRINTF("%4u ", inst);
+        if ((rc = vtss_appl_redbox_pnt_status_get(inst, &pnt_status)) != VTSS_RC_OK) {
+            T_IG(REDBOX_TRACE_GRP_ICLI, "%u: vtss_appl_redbox_pnt_status_get() failed: %s", inst, error_txt(rc));
+        }
+
+        if (rc != VTSS_RC_OK || status.oper_state != VTSS_APPL_REDBOX_OPER_STATE_ACTIVE) {
+            REDBOX_ICLI_PRINTF("Inactive\n");
+            return;
+        }
+
+        REDBOX_ICLI_PRINTF("%-7s %13u %s\n", redbox_util_mode_to_str(conf.mode, true /* Capitals */), pnt_status.mac_cnt, REDBOX_ICLI_bool_to_yes_no_dash(pnt_status.wrong_lan, conf.mode != VTSS_APPL_REDBOX_MODE_HSR_PRP, true /* print 'YES!' in capitals to draw attention */));
+        return;
+    }
+
+    inst_itr = inst;
+    while (vtss_appl_redbox_pnt_itr(&inst_itr, &inst_itr, &mac, &mac) == VTSS_RC_OK) {
+        if (inst_itr != inst) {
+            // We got into the next instance.
+            break;
+        }
+
+        if ((rc = vtss_appl_redbox_pnt_mac_status_get(inst, &mac, &pnt_mac_status)) != VTSS_RC_OK) {
+            // Don't use T_EG() here, because the MAC may disappear between the
+            // itr() and the status_get()
+            T_IG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_pnt_mac_status_get(%s) failed: %s", mac, error_txt(rc));
+            continue;
+        }
+
+        vtss_appl_redbox_mac_port_status_t &port_c = pnt_mac_status.port;
+
+        if (has_filter) {
+            // Only print entries with non-zero Rx Wrong LAN.
+            if (port_c.rx_wrong_lan_cnt == 0) {
+                continue;
+            }
+        }
+
+        (void)misc_mac_txt(mac.addr, mac_buf);
+
+        REDBOX_ICLI_port_bufs_fill(port_bufs, port_c, conf.mode == VTSS_APPL_REDBOX_MODE_HSR_PRP);
+
+        sprintf(node_type_buf, redbox_util_node_type_to_str(pnt_mac_status.node_type));
+
+        if (conf.mode == VTSS_APPL_REDBOX_MODE_HSR_PRP) {
+            sprintf(sv_rx_cnt_buf, "%u", port_c.sv_rx_cnt);
+        } else {
+            strcpy(sv_rx_cnt_buf, "-");
+        }
+
+        REDBOX_ICLI_PRINTF("%4u %s%c %-11s %10u %10s %12s %10s %10u %10s %s\n",
+                           inst,
+                           mac_buf,
+                           pnt_mac_status.locked ? '*' : ' ',
+                           node_type_buf,
+                           port_c.rx_cnt,
+                           port_bufs.last_seen,
+                           port_bufs.rx_wrong_lan,
+                           sv_rx_cnt_buf,
+                           pnt_mac_status.sv_tx_cnt,
+                           port_bufs.sv_last_seen,
+                           port_bufs.sv_last_type);
+    }
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_show_redbox()
+/******************************************************************************/
+static icli_rc_t REDBOX_ICLI_show_redbox(icli_range_t *inst_list, bool has_status, bool has_statistics, bool has_nt, bool has_details, bool has_filter, bool has_supervision)
+{
+    vtss_appl_redbox_conf_t       conf;
+    vtss_appl_redbox_status_t     status;
+    vtss_appl_redbox_statistics_t statistics;
+    uint32_t                      prev_inst, inst, i;
+    bool                          first = true, first_print = true, show;
+    mesa_rc                       rc;
+
+    while (vtss_appl_redbox_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            show = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    show = true;
+                    break;
+                }
+            }
+        } else {
+            show = true;
+        }
+
+        if (!show) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_redbox_conf_get(inst, &conf)) != VTSS_RC_OK) {
+            T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_conf_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if ((rc = vtss_appl_redbox_status_get(inst, &status)) != VTSS_RC_OK) {
+            T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_status_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if (has_status) {
+            REDBOX_ICLI_show_status(inst, conf, status, first_print, has_details);
+        } else if (has_nt) {
+            REDBOX_ICLI_show_nt(inst, conf, status, first_print, has_details, has_filter, has_supervision);
+        } else if (!has_statistics) {
+            REDBOX_ICLI_show_pnt(inst, conf, status, first_print, has_details, has_filter);
+        } else {
+            if ((rc = vtss_appl_redbox_statistics_get(inst, &statistics)) != VTSS_RC_OK) {
+                T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_statistics_get() failed: %s", error_txt(rc));
+                continue;
+            }
+
+            REDBOX_ICLI_show_statistics(inst, status, statistics, first_print, has_details);
+        }
+
+        first_print = false;
+    }
+
+    REDBOX_ICLI_PRINTF("\n");
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_something_clear())
+/******************************************************************************/
+static icli_rc_t REDBOX_ICLI_something_clear(icli_range_t *inst_list, bool has_pnt, bool has_nt)
+{
+    uint32_t prev_inst, inst, i;
+    bool     first = true, clear;
+    mesa_rc  rc;
+
+    while (vtss_appl_redbox_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            clear = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    clear = true;
+                    break;
+                }
+            }
+        } else {
+            clear = true;
+        }
+
+        if (!clear) {
+            continue;
+        }
+
+        if (has_pnt) {
+            if ((rc = vtss_appl_redbox_pnt_clear(inst)) != VTSS_RC_OK) {
+                T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_pnt_clear() failed: %s", error_txt(rc));
+                continue;
+            }
+        } else if (has_nt) {
+            if ((rc = vtss_appl_redbox_nt_clear(inst)) != VTSS_RC_OK) {
+                T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_nt_clear() failed: %s", error_txt(rc));
+                continue;
+            }
+        } else {
+            if ((rc = vtss_appl_redbox_statistics_clear(inst)) != VTSS_RC_OK) {
+                T_EG(REDBOX_TRACE_GRP_ICLI, "vtss_appl_redbox_statistics_clear() failed: %s", error_txt(rc));
+                continue;
+            }
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// REDBOX_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t REDBOX_ICLI_show_capabilities(void)
+{
+    vtss_appl_redbox_capabilities_t cap;
+    const int                       cap_width = 32;
+
+    REDBOX_PRINT_RC(vtss_appl_redbox_capabilities_get(&cap));
+
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. instance count:",             cap.inst_cnt_max);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Size of combined NT/PNT:",         cap.nt_pnt_size);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Min. NT age time (secs):",         cap.nt_age_time_secs_min);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. NT age time (secs):",         cap.nt_age_time_secs_max);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Min. PNT age time (secs):",        cap.pnt_age_time_secs_min);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. PNT age time (secs):",        cap.pnt_age_time_secs_max);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Min. DD age time (msecs):",        cap.duplicate_discard_age_time_msecs_min);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. DD age time (msecs):",        cap.duplicate_discard_age_time_msecs_max);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Min. SV frame interval (secs):",   cap.sv_frame_interval_secs_min);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. SV frame interval (secs):",   cap.sv_frame_interval_secs_max);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Statistics poll interval (secs):", cap.statistics_poll_interval_secs);
+    REDBOX_ICLI_PRINTF("%-*s %u\n", cap_width, "Alarm raised time (secs):",        cap.alarm_raised_time_secs);
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+HELP_REDBOX = Redundancy Box for PRP/HSR (IEC 62439-3)
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = mode {prp-san | hsr-san | hsr-prp | hsr-hsr}
+
+HELP_REDBOX_MODE = Set the mode of this RedBox
+DOC_CMD_DESC     = ##HELP_REDBOX_MODE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_REDBOX_MODE
+DOC_CMD_EXAMPLE  =
+
+FUNC_NAME = redbox_mode
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! mode
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_MODE
+
+! prp-san
+CMD_VAR = has_prp_san
+RUNTIME =
+HELP    = Set this RedBox to connect a standard Ethernet network to a PRP network
+
+! hsr-san
+CMD_VAR = has_hsr_san
+RUNTIME =
+HELP    = Set this RedBox to connect a standard Ethernet network to an HSR-ring
+
+! hsr-prp
+CMD_VAR = has_hsr_prp
+RUNTIME =
+HELP    = Set this RedBox to connect a PRP network to an HSR-ring
+
+! hsr-hsr
+CMD_VAR =
+RUNTIME =
+HELP    = Set this RedBox to connect two HSR-rings
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.mode = has_prp_san ? VTSS_APPL_REDBOX_MODE_PRP_SAN :
+                has_hsr_san ? VTSS_APPL_REDBOX_MODE_HSR_SAN :
+                has_hsr_prp ? VTSS_APPL_REDBOX_MODE_HSR_PRP :
+                              VTSS_APPL_REDBOX_MODE_HSR_HSR;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no mode
+
+HELP_REDBOX_NO_MODE = Set the mode of this RedBox to its default mode
+DOC_CMD_DESC     = ##HELP_REDBOX_NO_MODE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_REDBOX_NO_MODE
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_mode
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! mode
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_MODE
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.mode = default_conf.mode;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port-a interface [<port_type_id> | neighbor]
+
+HELP_REDBOX_PORT_A_INTERFACE = Assign an interface to port A
+DOC_CMD_DESC    = ##HELP_REDBOX_PORT_A_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_PORT_A_INTERFACE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_port_a_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! port-a
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_PORT_A_INTERFACE
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_PORT_A_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_REDBOX_PORT_A_INTERFACE
+
+! neighbor
+CMD_VAR = has_neighbor
+RUNTIME = REDBOX_ICLI_neighbor_redbox_allowed_port_a
+HELP    = Port A of this RedBox connects internally within the chip to the RedBox to the left of it, that is, the RedBox with one lower instance number.
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+
+    if (has_neighbor) {
+        conf.port_a = VTSS_IFINDEX_REDBOX_NEIGHBOR;
+    } else {
+        if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.port_a) != VTSS_RC_OK) {
+            REDBOX_ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no port-a interface
+
+HELP_REDBOX_NO_PORT_A_INTERFACE = Unassign port A's interface. This cannot be done on an enabled instance
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_PORT_A_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_PORT_A_INTERFACE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_port_a_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! port-a
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_PORT_A_INTERFACE
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_PORT_A_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.port_a = default_conf.port_a;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port-b interface [<port_type_id> | neighbor]
+
+HELP_REDBOX_PORT_B_INTERFACE = Assign an interface to port B
+DOC_CMD_DESC    = ##HELP_REDBOX_PORT_B_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_PORT_B_INTERFACE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_port_b_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! port-b
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_PORT_B_INTERFACE
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_PORT_B_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_REDBOX_PORT_B_INTERFACE
+
+! neighbor
+CMD_VAR = has_neighbor
+RUNTIME = REDBOX_ICLI_neighbor_redbox_allowed_port_b
+HELP    = Port B of this RedBox connects internally within the chip to the RedBox to the right of it, that is, the RedBox with one higher instance number.
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+
+    if (has_neighbor) {
+        conf.port_b = VTSS_IFINDEX_REDBOX_NEIGHBOR;
+    } else {
+        if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.port_b) != VTSS_RC_OK) {
+            REDBOX_ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no port-b interface
+
+HELP_REDBOX_NO_PORT_B_INTERFACE = Unassign port B's interface. This cannot be done on an enabled instance
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_PORT_B_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_PORT_B_INTERFACE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_port_b_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+!no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! port2
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_PORT_B_INTERFACE
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_PORT_B_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.port_b = default_conf.port_b;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = hsr-mode {h | n | t | u | m | r}
+
+! Only mode H is supported by MESA
+IF_FLAG = RBNTBD
+
+HELP_REDBOX_HSR_MODE = Select the HSR mode to run the RedBox in (not available in PRP-SAN mode).
+DOC_CMD_DESC    = ##HELP_REDBOX_HSR_MODE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_HSR_MODE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_hsr_mode
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! hsr-mode
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_not_in_prp_san_mode
+HELP    = ##HELP_REDBOX_HSR_MODE
+
+! h
+CMD_VAR = has_h
+RUNTIME =
+HELP    = HSR LRE bridges HSR-tagged traffic
+
+! n
+CMD_VAR = has_n
+RUNTIME =
+HELP    = Bridging between HSR ports is disabled
+
+! t
+CMD_VAR = has_t
+RUNTIME =
+HELP    = Transparent forwarding. Bridging occurs without HSR tag
+
+! u
+CMD_VAR = has_u
+RUNTIME =
+HELP    = Unicast forwarding. As Mode H, but also forwards traffic for which this RedBox is the unique destination
+
+! m
+CMD_VAR = has_m
+RUNTIME =
+HELP    = HSR LRE is configured in mixed mode (HSR-tagged frames forwarded as in MODE H, HSR-untagged frames forwarded according to 802.1Q)
+
+! r
+CMD_VAR =
+RUNTIME =
+HELP    = BPDUs are encapsulated/decapsulated and forwarded to avoid HSR ring short-circuits a STP topology
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.hsr_mode = has_h ? VTSS_APPL_REDBOX_HSR_MODE_H :
+                    has_n ? VTSS_APPL_REDBOX_HSR_MODE_N :
+                    has_t ? VTSS_APPL_REDBOX_HSR_MODE_T :
+                    has_u ? VTSS_APPL_REDBOX_HSR_MODE_U :
+                    has_m ? VTSS_APPL_REDBOX_HSR_MODE_M :
+                            VTSS_APPL_REDBOX_HSR_MODE_R;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no hsr-mode
+
+! Only mode H is supported by MESA
+IF_FLAG = RBNTBD
+
+HELP_REDBOX_NO_HSR_MODE = Set the HSR mode to its default (H)
+
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_HSR_MODE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_HSR_MODE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_hsr_mode
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_REDBOX
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_not_in_prp_san_mode
+
+! hsr-mode
+HELP    = ##HELP_REDBOX_NO_HSR_MODE
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.hsr_mode = default_conf.hsr_mode;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = duplicate-discard
+
+! No-DD is not supported by MESA
+IF_FLAG = RBNTBD
+
+HELP_REDBOX_DUPLICATE_DISCARD = In duplicate-discard mode, duplicates are discarded (default). The no-form causes all copies to be forwarded.
+DOC_CMD_DESC    = ##HELP_REDBOX_DUPLICATE_DISCARD
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_DUPLICATE_DISCARD
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_duplicate_discard
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! duplicate-discard
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_DUPLICATE_DISCARD
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.duplicate_discard = true;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.duplicate_discard = false;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = net-id <1-7>
+
+HELP_REDBOX_NET_ID = If a frame arriving on an LRE port has a NetId identical to this one, it gets filtered and not forwarded to the interlink port, but may get forwarded to the other LRE port.
+DOC_CMD_DESC    = ##HELP_REDBOX_NET_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NET_ID
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_net_id
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! net-id
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_in_hsr_prp_or_hsr_hsr_mode
+HELP    = ##HELP_REDBOX_NET_ID
+
+! <1-7>
+CMD_VAR = net_id
+RUNTIME =
+HELP    = ##HELP_REDBOX_NET_ID
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.net_id = net_id;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no net-id
+
+HELP_REDBOX_NO_NET_ID = Set the NetId to its default (1)
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_NET_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_NET_ID
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_net_id
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_in_hsr_prp_or_hsr_hsr_mode
+HELP    = ##ICLI_HELP_NO
+
+! net-id
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_NET_ID
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.net_id = default_conf.net_id;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = lan-id {a | b}
+
+HELP_REDBOX_LAN_ID = The LanId is used to filter frames from a HSR ring towards the PRP network. It must be 'a' for the RedBox connecting to LAN A and 'b' for the RedBox connecting to LAN B
+DOC_CMD_DESC    = ##HELP_REDBOX_LAN_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_LAN_ID
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_lan_id
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! lan-id
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_in_hsr_prp_mode
+HELP    = ##HELP_REDBOX_LAN_ID
+
+! a
+CMD_VAR = has_a
+RUNTIME =
+HELP    = ##HELP_REDBOX_LAN_ID
+
+! b
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_LAN_ID
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.lan_id = has_a ? VTSS_APPL_REDBOX_LAN_ID_A : VTSS_APPL_REDBOX_LAN_ID_B;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no lan-id
+
+HELP_REDBOX_NO_LAN_ID = Set the LanId to its default ('a')
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_LAN_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_LAN_ID
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_lan_id
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_in_hsr_prp_mode
+HELP    = ##ICLI_HELP_NO
+
+! lan-id
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_LAN_ID
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.lan_id = default_conf.lan_id;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = nodes-table-age-time <1-65>
+
+HELP_REDBOX_NT_AGE_TIME = Number of seconds without activity before a remote node is removed from the NodesTable (default is 60 seconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_NT_AGE_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NT_AGE_TIME
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_nt_age_time
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! nodes-table-age-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NT_AGE_TIME
+
+! <1-65>
+CMD_VAR = age_time
+RUNTIME =
+HELP    = ##HELP_REDBOX_NT_AGE_TIME
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.nt_age_time_secs = age_time;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no nodes-table-age-time
+
+HELP_REDBOX_NO_NT_AGE_TIME = Set the age time of the NodesTable to its default (60 seconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_NT_AGE_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_NT_AGE_TIME
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_nt_age_time
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! nodes-table-age-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_NT_AGE_TIME
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.nt_age_time_secs = default_conf.nt_age_time_secs;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = proxy-node-table-age-time <1-65>
+
+HELP_REDBOX_PNT_AGE_TIME = Number of seconds without activity before a proxy node is removed from the ProxyNodeTable (default is 60 seconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_PNT_AGE_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_PNT_AGE_TIME
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_proxy_node_table_age_time
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! proxy-node-table-age-time
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_not_in_hsr_hsr_mode
+HELP    = ##HELP_REDBOX_PNT_AGE_TIME
+
+! <1-65>
+CMD_VAR = age_time
+RUNTIME =
+HELP    = ##HELP_REDBOX_PNT_AGE_TIME
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.pnt_age_time_secs = age_time;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no proxy-node-table-age-time
+
+HELP_REDBOX_NO_PNT_AGE_TIME = Set the age time of the ProxyNodeTable to its default (60 seconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_PNT_AGE_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_PNT_AGE_TIME
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_proxy_node_table_age_time
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_not_in_hsr_hsr_mode
+HELP    = ##ICLI_HELP_NO
+
+! proxy-node-table-age-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_PNT_AGE_TIME
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.pnt_age_time_secs = default_conf.pnt_age_time_secs;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = duplicate-discard-age-time <10-10000>
+
+HELP_REDBOX_DD_AGE_TIME = Number of milliseconds before an entry in the duplicate-discard table times out (default is 40 milliseconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_DD_AGE_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_DD_AGE_TIME
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_duplicate_discard_age_time
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! duplicate-discard-age-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_DD_AGE_TIME
+
+! <10-10000>
+CMD_VAR = age_time
+RUNTIME =
+HELP    = ##HELP_REDBOX_DD_AGE_TIME
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.duplicate_discard_age_time_msecs = age_time;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no duplicate-discard-age-time
+
+HELP_REDBOX_NO_DD_AGE_TIME = Set the age time of the duplicate discard table to its default (40 milliseconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_DD_AGE_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_DD_AGE_TIME
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_duplicate_discard_age_time
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! duplicate-discard-age-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_DD_AGE_TIME
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.duplicate_discard_age_time_msecs = default_conf.duplicate_discard_age_time_msecs;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = supervision-vlan {native | <vlan_id>} [pcp <0-7>]
+HELP_REDBOX_VLAN = Set the VLAN ID and PCP value of a possible VLAN tag used in supervision frames. If the resulting VLAN is configured as tagged on the interlink port, the supervision frame will be transmitted tagged
+
+DOC_CMD_DESC    = ##HELP_REDBOX_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_VLAN
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_vlan
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_REDBOX
+MODE_VAR = inst
+
+! supervision-vlan
+HELP    = ##HELP_REDBOX_VLAN
+CMD_VAR =
+RUNTIME =
+
+! native
+HELP    = Use the interlink port's native VLAN ID (Port VLAN ID)
+CMD_VAR = has_native
+RUNTIME =
+
+! <vlan_id>
+HELP    = Use this VLAN ID when sending supervision frames
+CMD_VAR = vid
+RUNTIME =
+
+! pcp
+HELP    = Choose a PCP to be used in the 802.1Q tag.
+CMD_VAR = has_pcp
+RUNTIME =
+
+! <0-7>
+HELP    = PCP value
+CMD_VAR = pcp
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+
+    if (has_pcp) {
+        conf.sv_pcp = pcp;
+    }
+
+    if (has_native) {
+        conf.sv_vlan = 0;
+    } else {
+        conf.sv_vlan = vid;
+    }
+
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no supervision-vlan
+HELP_REDBOX_NO_VLAN = Set the VLAN ID and PCP value used in possible VLAN tags in supervision frames to their defaults (native and 7)
+
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_VLAN
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_no_vlan
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_REDBOX
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! supervision-vlan
+HELP    = ##HELP_REDBOX_NO_VLAN
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_vlan = default_conf.sv_vlan;
+    conf.sv_pcp  = default_conf.sv_pcp;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = supervision-dmac-lsb <uint8>
+
+HELP_REDBOX_SV_DMAC_LSB = Set the least significant byte used in the destination MAC address (01-15-4e-00-01-xx) of generated PRP/HSR supervision frames
+DOC_CMD_DESC    = ##HELP_REDBOX_SV_DMAC_LSB
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_SV_DMAC_LSB
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_sv_dmac_lsb
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! supervision-dmac-lsb
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_SV_DMAC_LSB
+
+! <uint8>
+CMD_VAR = lsb
+RUNTIME =
+HELP    = ##HELP_REDBOX_SV_DMAC_LSB
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_dmac_lsb = lsb;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no supervision-dmac-lsb
+HELP_REDBOX_NO_SV_DMAC_LSB = Set the least significant byte of the destination MAC address used in generated PRP/HSR supervision frames to its default (0x00)
+
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_SV_DMAC_LSB
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_SV_DMAC_LSB
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_sv_dmac_lsb
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_REDBOX
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! supervision-dmac-lsb
+HELP    = ##HELP_REDBOX_NO_SV_DMAC_LSB
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_dmac_lsb = default_conf.sv_dmac_lsb;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = supervision-frame-interval <1-60>
+
+HELP_REDBOX_SV_INTERVAL = Number of seconds between transmission of supervision frames (default is 2 seconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_SV_INTERVAL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_SV_INTERVAL
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_sv_frame_interval
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! supervision-frame-interval
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_SV_INTERVAL
+
+! <1-10>
+CMD_VAR = interval
+RUNTIME =
+HELP    = ##HELP_REDBOX_SV_INTERVAL
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_frame_interval_secs = interval;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no supervision-frame-interval
+
+HELP_REDBOX_NO_SV_INTERVAL = Set the interval between supervision frame transmissions to its default (2 seconds)
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_SV_INTERVAL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_SV_INTERVAL
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = redbox_no_sv_frame_interval
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! supervision-frame-interval
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_SV_INTERVAL
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_default_get(&default_conf));
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_frame_interval_secs = default_conf.sv_frame_interval_secs;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = supervision-translate-prp-to-hsr
+IF_FLAG =
+
+HELP_REDBOX_XLAT_PRP_TO_HSR = If enabled, the RedBox will software-translate supervision frames received on the PRP network to HSR supervision frames and transmit on the HSR ring, otherwise supervision frames will be hardware-forwarded.
+DOC_CMD_DESC    = ##HELP_REDBOX_XLAT_PRP_TO_HSR
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_XLAT_PRP_TO_HSR
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_xlat_prp_to_hsr
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! supervision-translate-prp-to-hsr
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_in_hsr_prp_mode
+HELP    = ##HELP_REDBOX_XLAT_PRP_TO_HSR
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_xlat_prp_to_hsr = true;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_xlat_prp_to_hsr = false;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = supervision-translate-hsr-to-prp
+IF_FLAG =
+
+HELP_REDBOX_XLAT_HSR_TO_PRP = If enabled, the RedBox will software-translate supervision frames received on the HSR ring to PRP supervision frames and transmit on the PRP network, otherwise supervision frames will be hardware-forwarded.
+DOC_CMD_DESC    = ##HELP_REDBOX_XLAT_HSR_TO_PRP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_XLAT_HSR_TO_PRP
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_xlat_hst_to_prp
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! supervision-translate-hsr-to-prp
+CMD_VAR =
+RUNTIME = REDBOX_ICLI_is_in_hsr_prp_mode
+HELP    = ##HELP_REDBOX_XLAT_HSR_TO_PRP
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_xlat_hsr_to_prp = true;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.sv_xlat_hsr_to_prp = false;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = admin-state {enable | disable}
+
+HELP_REDBOX_ADMIN_STATE = Enable or disable this RedBox instance
+DOC_CMD_DESC    = ##HELP_REDBOX_ADMIN_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_ADMIN_STATE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_admin_state
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+MODE_VAR  = inst
+
+! admin-state
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_ADMIN_STATE
+
+! enable
+CMD_VAR = has_enable
+RUNTIME =
+HELP    = Enable this RedBox instance
+
+CMD_VAR =
+RUNTIME =
+HELP    = Disable this RedBox instance
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_get(inst, &conf));
+    conf.admin_active = has_enable;
+    REDBOX_PRINT_RC(vtss_appl_redbox_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no redbox {<uint> | all}
+
+HELP_REDBOX_NO_REDBOX = Delete a particular or all RedBox instances
+DOC_CMD_DESC    = ##HELP_REDBOX_NO_REDBOX
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_NO_REDBOX
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_no_redbox
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! redbox
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_NO_REDBOX
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = REDBOX_ICLI_existing_instance_range
+HELP    = Delete a particular RedBox instance
+
+! all
+CMD_VAR = has_all
+RUNTIME =
+HELP    = Delete all RedBox instances
+
+VARIABLE_BEGIN
+    uint32_t next_inst;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        while (vtss_appl_redbox_itr(&inst, &next_inst) == VTSS_RC_OK) {
+            // Delete this redbox instance
+            inst = next_inst;
+            REDBOX_PRINT_RC(vtss_appl_redbox_conf_del(inst));
+        }
+    } else {
+       // Delete this redbox instance
+       REDBOX_PRINT_RC(vtss_appl_redbox_conf_del(inst));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show redbox interfaces [sort-by-interface]
+
+HELP_SHOW_REDBOX_INTERFACES = Show which port interfaces can be selected as Port A and Port B for a given RedBox instance
+DOC_CMD_DESC     = ##HELP_SHOW_REDBOX_INTERFACES
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_SHOW_REDBOX_INTERFACES
+DOC_CMD_EXAMPLE  =
+
+FUNC_NAME = redbox_show_redbox_interfaces
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_SHOW_REDBOX_INTERFACES
+
+! redbox
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX
+
+! interfaces
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_SHOW_REDBOX_INTERFACES
+
+! sort-by-interface
+CMD_VAR = sort_by_interface
+RUNTIME =
+HELP    = Sort the list by interface rather than by RedBox instance
+
+CODE_BEGIN
+    ICLI_RC(REDBOX_ICLI_show_redbox_interfaces(sort_by_interface));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! A bit cumbersome command, but can't split it into several commands, because of
+! the [<range_list>] argument, which confuses ICLI when it installs the commands
+COMMAND = show redbox [<range_list>] {status [details] | statistics [details] | nodes-table [details [filter] | supervision [filter]] | proxy-node-table [details [filter]]}
+
+HELP_SHOW_REDBOX = Show the state or counters of one or more RedBox instances
+DOC_CMD_DESC     = ##HELP_SHOW_REDBOX
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_SHOW_REDBOX
+DOC_CMD_EXAMPLE  =
+
+FUNC_NAME = redbox_show_redbox
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_SHOW_REDBOX
+
+! redbox
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = REDBOX_ICLI_instance_range
+HELP    = List of RedBox instances to show status, table contents or statistics for. If left out, all created RedBox instances will be shown
+
+! status
+CMD_VAR = has_status
+RUNTIME =
+HELP    = Show status
+
+! details
+CMD_VAR = has_status_details
+RUNTIME =
+HELP    = Show detailed status
+
+! statistics
+CMD_VAR = has_statistics
+RUNTIME =
+HELP    = Show statistics
+
+! details
+CMD_VAR = has_statistics_details
+RUNTIME =
+HELP    = Show detailed statistics
+
+! nodes-table
+CMD_VAR = has_nt
+RUNTIME =
+HELP    = Show NodesTable
+
+! details
+CMD_VAR = has_nt_details
+RUNTIME =
+HELP    = Show detailed NodesTable data contents
+
+! filter
+CMD_VAR = has_nt_filter
+RUNTIME =
+HELP    = Only show NodesTable data contents for entries that have non-zero 'Rx Wrong LAN'
+
+! supervision
+CMD_VAR = has_nt_sv
+RUNTIME =
+HELP    = Show detailed NodesTable supervision contents
+
+! filter
+CMD_VAR = has_nt_sv_filter
+RUNTIME =
+HELP    = Only show NodesTable supervision contents for entries that have non-zero 'Rx Wrong LAN'
+
+! proxy-node-table
+CMD_VAR =
+RUNTIME =
+HELP    = ProxyNodeTable contents
+
+! details
+CMD_VAR = has_pnt_details
+RUNTIME =
+HELP    = Show detailed ProxyNodeTable contents
+
+! filter
+CMD_VAR = has_pnt_filter
+RUNTIME =
+HELP    = Only show ProxyNodeTable entries that have non-zero 'Rx Wrong LAN'
+
+CODE_BEGIN
+    ICLI_RC(REDBOX_ICLI_show_redbox(inst_list, has_status, has_statistics, has_nt, has_status_details || has_statistics_details || has_nt_details || has_pnt_details, has_nt_filter || has_nt_sv_filter || has_pnt_filter, has_nt_sv));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear redbox [<range_list>] {proxy-node-table | nodes-table | statistics}
+
+HELP_CLEAR_REDBOX = Clear statistics or table contents of one or more RedBox instances
+DOC_CMD_DESC    = ##HELP_CLEAR_REDBOX
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CLEAR_REDBOX
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_clear_redbox
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_CLEAR_REDBOX
+
+! redbox
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = REDBOX_ICLI_instance_range
+HELP    = List of RedBox instances to clear tables or statistics for. If left out, all created RedBox instances will have their tables or statistics cleared
+
+! proxy-node-table
+CMD_VAR = has_pnt
+RUNTIME =
+HELP    = Clear unlocked entries of the ProxyNodeTable
+
+! nodes-table
+CMD_VAR = has_nt
+RUNTIME =
+HELP    = Clear the NodesTable
+
+! statistics
+CMD_VAR =
+RUNTIME =
+HELP    = Clear statistics
+
+CODE_BEGIN
+    ICLI_RC(REDBOX_ICLI_something_clear(inst_list, has_pnt, has_nt));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show redbox capabilities
+
+HELP_REDBOX_SHOW_CAPABILITIES = Show RedBox capabilities
+DOC_CMD_DESC    = ##HELP_REDBOX_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_show_capabilities
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! redbox
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX
+
+! capabilities
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_SHOW_CAPABILITIES
+
+CODE_BEGIN
+    ICLI_RC(REDBOX_ICLI_show_capabilities());
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show redbox [<range_list>] state
+
+HELP_REDBOX_DEBUG_STATE = Show current RedBox state
+DOC_CMD_DESC    = ##HELP_REDBOX_DEBUG_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_DEBUG_STATE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_show_redbox_state
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! redbox
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = REDBOX_ICLI_instance_range
+HELP    = List of RedBox instances to dump state for
+
+! state
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_DEBUG_STATE
+
+VARIABLE_BEGIN
+    uint32_t inst = 0, i;
+    bool     show_this;
+VARIABLE_END
+
+CODE_BEGIN
+    redbox_debug_port_state_dump(icli_session_self_printf);
+
+    while (vtss_appl_redbox_itr(&inst, &inst) == VTSS_RC_OK) {
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            show_this = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    show_this = true;
+                    break;
+                }
+            }
+        } else {
+            show_this = true;
+        }
+
+        if (!show_this) {
+            continue;
+        }
+
+        REDBOX_PRINT_RC(redbox_debug_state_dump(inst, icli_session_self_printf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug clear redbox [<range_list>] notifications
+
+HELP_REDBOX_DEBUG_CLEAR_NOTIF = Clear redbox notifications (mainly used for testing to avoid waiting for them to time out themselves)
+DOC_CMD_DESC    = ##HELP_REDBOX_DEBUG_CLEAR_NOTIF
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_DEBUG_CLEAR_NOTIF
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = redbox_clear_notifications
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_CLEAR
+
+! redbox
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = REDBOX_ICLI_instance_range
+HELP    = List of RedBox instances to clear
+
+! notifications
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_REDBOX_DEBUG_CLEAR_NOTIF
+
+VARIABLE_BEGIN
+    uint32_t prev_inst, inst, i;
+    bool     first = true, clear;
+VARIABLE_END
+
+CODE_BEGIN
+    while (vtss_appl_redbox_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            clear = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    clear = true;
+                    break;
+                }
+            }
+        } else {
+            clear = true;
+        }
+
+        if (!clear) {
+            continue;
+        }
+
+        mesa_rc redbox_debug_clear_notifications(uint32_t inst);
+        REDBOX_PRINT_RC(redbox_debug_clear_notifications(inst));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_REDBOX_DEBUG_TIMERS = Show current RedBox timers
+COMMAND         = debug show redbox timers
+DOC_CMD_DESC    = ##HELP_REDBOX_DEBUG_TIMERS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_DEBUG_TIMERS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_REDBOX
+HELP            = ##HELP_REDBOX_DEBUG_TIMERS
+
+CODE_BEGIN
+    void redbox_timer_debug_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    redbox_timer_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_REDBOX_DEBUG_SPV_SUSP_RES = Suspend or resume Tx of Supervision frames
+COMMAND         = debug redbox [<range_list>] supervision tx [{suspend | resume}] [{own | proxied}]
+DOC_CMD_DESC    = ##HELP_REDBOX_DEBUG_SPV_SUSP_RES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_REDBOX_DEBUG_SPV_SUSP_RES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = inst_list
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = has_suspend
+CMD_VAR         = has_resume
+CMD_VAR         = has_own
+CMD_VAR         = has_proxied
+RUNTIME         =
+RUNTIME         =
+RUNTIME         = REDBOX_ICLI_instance_range
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##HELP_REDBOX
+HELP            = List of RedBox instances to resume or suspend SV frames from
+HELP            = Supervision frames
+HELP            = Transmission
+HELP            = Suspend Tx of supervision frames
+HELP            = Resume Tx of supervision frames
+HELP            = Suspend/Resume only RB's own SV frames
+HELP            = Suspend/Resume only proxied SV frames (from PNT).
+VARIABLE_BEGIN
+    uint32_t inst = 0, i, update_this;
+    bool     own_suspended, proxied_suspended, suspend_own, suspend_proxied;
+VARIABLE_END
+
+CODE_BEGIN
+    // Suspension of Tx of Supervision (SV) frames is useful for instance when
+    // you need to e.g. check counters or see what happens if sending SV frames
+    // from outside through the RB or switch core.
+    while (vtss_appl_redbox_itr(&inst, &inst) == VTSS_RC_OK) {
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            update_this = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    update_this = true;
+                    break;
+                }
+            }
+        } else {
+            update_this = true;
+        }
+
+        if (!update_this) {
+            continue;
+        }
+
+        // Get the current suspend/resume settings
+        mesa_rc redbox_debug_tx_spv_suspend_get(uint32_t inst, bool &own_suspended, bool &proxied_suspended);
+        REDBOX_PRINT_RC(redbox_debug_tx_spv_suspend_get(inst, own_suspended, proxied_suspended));
+
+        if (has_suspend || has_resume) {
+            if (has_own) {
+                suspend_own     = has_suspend;
+                suspend_proxied = proxied_suspended;
+            } else if (has_proxied) {
+                suspend_own     = own_suspended;
+                suspend_proxied = has_suspend;
+            } else {
+                // If user hasn't specified what to suspend or resume, she means
+                // everything.
+                suspend_own     = has_suspend;
+                suspend_proxied = has_suspend;
+            }
+
+            mesa_rc redbox_debug_tx_spv_suspend_set(uint32_t inst, bool suspend_own, bool suspend_proxied);
+            REDBOX_PRINT_RC(redbox_debug_tx_spv_suspend_set(inst, suspend_own, suspend_proxied));
+        } else {
+            REDBOX_PRINT_RC(redbox_debug_tx_spv_suspend_get(inst, own_suspended, proxied_suspended));
+            REDBOX_ICLI_PRINTF("Inst = %u: Own are %s, proxied are %s\n", inst, own_suspended ? "suspended" : "active", proxied_suspended ? "suspended" : "active");
+        }
+    }
+CODE_END
+CMD_END
+

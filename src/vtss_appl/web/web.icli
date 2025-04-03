@@ -1,0 +1,196 @@
+//
+# Copyright (c) 2006-2019 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+//
+//
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG =
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+
+#include "icli_porting_util.h"
+#ifdef VTSS_SW_OPTION_LIBFETCH
+#include "fetch.h"
+#endif
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_WEB
+FUNCTION_END
+
+//
+// Export Segment
+//   This segment contains the API declarations of the global functions in
+//   Function Segment. This will be pasted exactly to the generated H file.
+//   So, others can include the H file to use the global functions.
+//
+EXPORT_BEGIN
+EXPORT_END
+
+CMD_BEGIN
+IF_FLAG = defined(CYGPKG_ATHTTPD)
+COMMAND         = debug ip http status
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = Use the debug ip http status command to display HTTP server status.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = 
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+RUNTIME = 
+
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##ICLI_HELP_IP
+HELP      = ##ICLI_HELP_HTTP
+HELP      = ##ICLI_HELP_STATUS
+
+VARIABLE_BEGIN
+    int i;
+VARIABLE_END
+
+CODE_BEGIN
+
+    ICLI_PRINTF("Authentication Failed Counter: %d\n", httpstate.auth_failed_cnt);
+    ICLI_PRINTF("HTTP daemon restart counter: %d\n", httpstate.httpd_restart_cnt);
+    ICLI_PRINTF("Method: %s\n", httpstate.method == CYG_HTTPD_METHOD_GET ? "GET" : httpstate.method == CYG_HTTPD_METHOD_POST ? "POST" : httpstate.method == CYG_HTTPD_METHOD_HEAD ? "HEAD" : "Unknown");
+    ICLI_PRINTF("URL: %s\n", httpstate.url);
+
+    if (httpstate.ip_addr_ptr) {
+        char hostname[MAXHOSTNAMELEN];
+        ICLI_PRINTF("Found 'Host' in HTTP header ... length = %d, ", httpstate.ip_addr_len);
+        memcpy(hostname, httpstate.ip_addr_ptr, httpstate.ip_addr_len);
+        hostname[httpstate.ip_addr_len] = '\0';
+        ICLI_PRINTF("Host: %s\n", hostname);
+    }
+
+    ICLI_PRINTF("\nReceived Buffer: length = %d\n", httpstate.inbuffer_len);
+    ICLI_PRINTF("%s\n", httpstate.inbuffer);
+
+#ifdef CYGOPT_NET_ATHTTPD_USE_COOKIES
+    ICLI_PRINTF("HTTP Session Count: %d\n", httpstate.http_session_cnt);
+    ICLI_PRINTF("HTTP Active Session Timeout: %d\n", httpstate.active_sess_timeout);
+    ICLI_PRINTF("HTTP Absolute Session Timeout: %d\n", httpstate.absolute_sess_timeout);
+    ICLI_PRINTF("\nHTTPS Session Count: %d\n", httpstate.https_session_cnt);
+    ICLI_PRINTF("HTTPS Active Session Timeout: %d\n", httpstate.https_active_sess_timeout);
+    ICLI_PRINTF("HTTPS Absolute Session Timeout: %d\n", httpstate.https_absolute_sess_timeout);
+
+    if (httpstate.http_session_cnt || httpstate.https_session_cnt) {
+        ICLI_PRINTF("\nIndx  Session ID  SSL  Socket ID  Active Timestamp  Absolute Timestamp\n");
+        ICLI_PRINTF("---  ----------  ---  ---------  ----------------  ------------------\n");
+        for (i = 0; i < CYGNUM_FILEIO_NFILE; i++) {
+            if (httpstate.sessions[i].sess_id) {
+                ICLI_PRINTF("%3d  %10d    %s  %9d  %16d  %16d\n",
+                            i,
+                            httpstate.sessions[i].sess_id,
+                            httpstate.sessions[i].is_ssl ? "Y" : "N",
+                            httpstate.sessions[i].sess_descriptor,
+                            httpstate.sessions[i].active_timestamp,
+                            httpstate.sessions[i].absolute_timestamp);
+            }
+        }
+    }
+#endif /* CYGOPT_NET_ATHTTPD_USE_COOKIES */
+
+    ICLI_PRINTF("\nCurrent Timestamp: %d\n", time(NULL));
+    ICLI_PRINTF("Idx  Session ID  SSL  Socket ID  Timestamp\n");
+    ICLI_PRINTF("---  ----------  ---  ---------  ---------\n");
+    for (i = 0; i < CYGPKG_NET_MAXSOCKETS; i++) {
+        if (httpstate.sockets[i].descriptor != -1) {
+            ICLI_PRINTF("%3d  %10d    %s  %9d  %9d\n",
+                        i,
+                        httpstate.sockets[i].sess_id,
+#ifdef CYGOPT_NET_ATHTTPD_HTTPS
+                        httpstate.sockets[i].ssl ? "Y" : "N",
+#else
+                        "N",
+#endif /* CYGOPT_NET_ATHTTPD_HTTPS */
+                        httpstate.sockets[i].descriptor,
+                        httpstate.sockets[i].timestamp);
+        }
+    }
+CODE_END
+
+CMD_END
+
+
+CMD_BEGIN
+IF_FLAG = defined(CYGPKG_ATHTTPD)
+COMMAND         = debug ip http restart
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = Use the debug ip http restart command to restart the HTTP deaemon.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = 
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+RUNTIME = 
+
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##ICLI_HELP_IP
+HELP      = ##ICLI_HELP_HTTP
+HELP      = Restart the HTTP daemon
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    cyg_httpd_restart();
+CODE_END
+
+CMD_END
+

@@ -1,0 +1,866 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Port Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_mirror_no_reflector_port.htm";
+
+var RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI = 1;
+var rmirrorPortMax = 53;                      //configNormalPortMax + configStackPortCount;
+var rmirrorPortMaxForArray = rmirrorPortMax + 1;
+var RMIRROR_DEFAULT_SWITCH_ID = 999;
+
+//------------------------------------------------------------------------------------------------
+
+var RMIRROR_ENABLED = 1;
+var RMIRROR_DISABLED = 0;
+
+var RMIRROR_DISABLED_PORT = 0;
+
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR       = 0;
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE        = 1;
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_INTERMEDIATE  = 2;
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION   = 3;
+
+var last_mirror_port = -1;
+var modes = Array();
+//var isid = -1;
+var mgmtVid = 1;
+
+var oTMode = Array("Disabled", "Enabled");
+var oVMode = Array(0, 1);
+
+var oPorts = new Array(rmirrorPortMaxForArray);
+
+for(var k = 0; k < rmirrorPortMaxForArray; k++) {
+    oPorts[k] = new Array(rmirrorPortMaxForArray);
+}
+
+var reqObject;
+
+//------------------------------------------------------------------------------
+// remove_ws()
+// Returns (in x.str) a string where all white space is removed.
+// If two consecutive numbers are only having white space between them,
+// the function returns false. Otherwise true.
+//------------------------------------------------------------------------------
+function remove_ws(x)
+{
+    var result = "", whitespace_seen = false;
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c != ' ') {
+            if (whitespace_seen && result.length > 0 && result.charAt(result.length - 1) >= '0' && result.charAt(result.length - 1) <= '9') {
+                return false;
+            }
+            result += c;
+            whitespace_seen = false;
+        } else {
+            whitespace_seen = true;
+        }
+
+        x.idx++;
+    }
+
+    x.str = result;
+    x.idx = 0;
+    x.len = x.str.length;
+    return true;
+}
+
+//------------------------------------------------------------------------------
+// strtoul()
+//------------------------------------------------------------------------------
+function strtoul(x)
+{
+    var len = x.str.length;
+    var sub = "";
+
+    if (x.idx == x.len) {
+        // No more characters in string
+        return -1;
+    }
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c < '0' || c > '9') {
+            break;
+        }
+
+        x.idx++;
+        sub += c;
+    }
+
+    if (sub.length === 0) {
+        return -1;
+    }
+
+    return parseInt(sub, 10);
+}
+
+//------------------------------------------------------------------------------
+// is_vlan_list()
+//------------------------------------------------------------------------------
+function is_vlan_list(id, print_warning_if_empty)
+{
+    var fld = $(id);
+
+    if (!fld) {
+        alert("Ehh: " + id);
+    }
+
+    var x = {str:fld.value};
+    x.idx = 0;
+    x.len = x.str.length;
+
+    if (!remove_ws(x)) {
+        GiveAlert("VLANs must be separated by commas, not spaces", fld);
+        return false;
+    }
+
+    var range = false, comma = false;
+    var start;
+
+    while (x.idx < x.len) {
+        var n = strtoul(x);
+
+        if (n < 0) {
+            GiveAlert("Invalid character ('" + x.str.charAt(x.idx) + "') found in VLAN list", fld);
+            return false;
+        }
+
+        if (n < configVlanIdMin || n > configVlanIdMax) {
+            GiveAlert("VLAN IDs must be integers between " + configVlanIdMin + " and " + configVlanIdMax, fld);
+            return false;
+        }
+
+        if (range) {
+            // End of range has been reached
+            range = 0;
+            if (n < start) {
+                GiveAlert("Invalid range detected in VLAN list", fld);
+                return false;
+            }
+        } else if (x.str.charAt(x.idx) == '-') {
+            // Start of range
+            start = n;
+            range = true;
+            x.idx++;
+        }
+
+        comma = false;
+        if (!range && x.str.charAt(x.idx) == ',') {
+            comma = true;
+            x.idx++;
+        }
+    }
+
+    // Check for trailing comma/dash
+    if (comma || range) {
+        GiveAlert("VLAN list cannot end with a comma or a dash", fld);
+        return false;
+    }
+
+    return true;
+}
+
+// Function that can update the mode slect boxes to support all modes or only "disable and "tx only"
+function UpdateRow(id ,all,value)
+{
+    var oT = [];
+    var oV = [];
+
+    if (all) {
+        oT = Array("Disabled","Both","Rx only","Tx only"); // Text
+        oV = Array("0","3","1","2"); // Disabled, enabled,rx only,tx only
+    } else {
+        oT = Array("Disabled","Rx only"); // Text
+        oV = Array("0","1"); // Disabled, enabled,rx only,tx only
+    }
+    UpdateIdSelect("mode_"+ id,oT,oV,value);
+}
+
+function UpdatePortDropDown (PortInTable)
+{
+    var port_sel = document.getElementById("taggedselect");
+    for (var i = 0; i < port_sel.options.length; i++) {
+        var opt = port_sel.options[i];
+        var sel = (parseInt(opt.value, 10) == PortInTable);
+        opt.selected = sel;
+        opt.defaultSelected = sel;
+        if (sel) {
+            port_sel.selectedIndex = i;
+        }
+    }
+}
+
+function SetFocusOnVlans()
+{
+    type = document.getElementById("type").value;
+
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("mode_"+i).disabled = true;
+        }
+    }
+}
+
+function SetBlurOnVlans()
+{
+    type = document.getElementById("type").value;
+
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        if (document.getElementById("vlans").value === "") {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("mode_"+i).disabled = false;
+            }
+        }
+    }
+}
+
+function ChangeMode()
+{
+    var i;
+    var aa;
+    mode = document.getElementById("mode").value;
+    type = document.getElementById("type").value;
+    hidden_switch_id = document.getElementById("hidden_switch_id").value;
+    tagged_select = document.getElementById("taggedselect").value;
+    var is_disabled;
+
+    if ( mode == RMIRROR_DISABLED ) {
+        // when you set as disabled, all configurations will be set as disabled
+        // --------------------------------------------------------------------
+        //is_disabled = true;
+        // --------------------------------------------------------------------
+        is_disabled = false;
+    } else {
+        is_disabled = false;
+    }
+
+    // check mode
+    document.getElementById("vid").disabled = is_disabled;
+    document.getElementById("type").disabled = is_disabled;
+    document.getElementById("taggedselect").disabled = is_disabled;
+    for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+        // to skip the stack ports:
+        if (isStackPort(i)) {
+            continue;
+        }
+        document.getElementById("mode_"+i).disabled = is_disabled;
+        document.getElementById("intermediate_"+i).disabled = is_disabled;
+        document.getElementById("destination_"+i).disabled = is_disabled;
+    }
+
+    // check type
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) { // none or mirror
+
+        if ( mode == RMIRROR_ENABLED ) {
+            if ( RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI == 1 ) {
+                document.getElementById("vid").disabled = true;
+                document.getElementById("taggedselect").disabled = true;
+
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+                    document.getElementById("mode_"+i).disabled = false;
+                    document.getElementById("intermediate_"+i).disabled = true;
+                    document.getElementById("destination_"+i).disabled = false;
+                }
+            } else {
+                document.getElementById("taggedselect").disabled = true;
+
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+                    document.getElementById("mode_"+i).disabled = true;
+                    document.getElementById("intermediate_"+i).disabled = true;
+                    document.getElementById("destination_"+i).disabled = true;
+                }
+            }
+        }
+
+    } else if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) { // source
+
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("destination_"+i).disabled = true;
+        }
+
+    } else if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_INTERMEDIATE ) { // intermediate
+
+        document.getElementById("taggedselect").disabled = true;
+
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("mode_"+i).disabled = true;
+            document.getElementById("destination_"+i).disabled = true;
+        }
+
+    } else if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION ) { // destination
+
+        document.getElementById("taggedselect").disabled = true;
+
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("mode_"+i).disabled = true;
+        }
+    }
+
+    // update mode with intermediate port and type == source
+    var MODE_DISABLED = 4;
+    if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+
+            if (document.getElementById("intermediate_"+i).checked) {
+                //UpdateRow(i,false, MODE_DISABLED);
+                //UpdateRow(i, false, modes[i]);
+                aa = document.getElementById("mode_"+i).value;
+                UpdateRow(i, false, aa);
+            } else {
+                //UpdateRow(i,true, MODE_DISABLED);
+                //UpdateRow(i, true, modes[i]);
+                aa = document.getElementById("mode_"+i).value;
+                UpdateRow(i, true, aa);
+            }
+        }
+    }
+
+    // update mode with destination port and type == mirror
+    if ( RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI == 1 ) {
+        MODE_DISABLED = 4;
+        if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+
+                if (document.getElementById("destination_"+i).checked) {
+                    //UpdateRow(i,false, MODE_DISABLED);
+                    //UpdateRow(i, false, modes[i]);
+                    aa = document.getElementById("mode_"+i).value;
+                    UpdateRow(i, false, aa);
+                } else {
+                    //UpdateRow(i,true, MODE_DISABLED);
+                    //UpdateRow(i, true, modes[i]);
+                    aa = document.getElementById("mode_"+i).value;
+                    UpdateRow(i, true, aa);
+                }
+            }
+        }
+    }
+
+    // update destination port when the type is destination and intermediate port is selected
+    if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION ) {
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+
+            if (document.getElementById("intermediate_"+i).checked) {
+                document.getElementById("destination_"+i).checked = 0;
+                document.getElementById("destination_"+i).disabled = true;
+            }
+        }
+    }
+
+    // update destination port when the type is mirror and destination port is selected
+    var is_destination_selected = 0;
+    if ( RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI == 1 &&
+    mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) {
+
+        if ( hidden_switch_id == RMIRROR_DEFAULT_SWITCH_ID ) {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+
+                if (document.getElementById("destination_"+i).checked) {
+                    is_destination_selected = i;
+                }
+            }
+            if ( is_destination_selected > 0 ) {
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+
+                    if ( i == is_destination_selected ) {
+                        continue;
+                    }
+                    document.getElementById("destination_"+i).checked = 0;
+                    document.getElementById("destination_"+i).disabled = true;
+                }
+
+                // update hidden_switch_id
+                UpdateIdValue("hidden_switch_id", SpomGetCurrentSid());
+            }
+        } else if ( hidden_switch_id == SpomGetCurrentSid() || !SpomIsStack() ) { // for standalone, spom.js return -1 as switch id
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+
+                if (document.getElementById("destination_"+i).checked) {
+                    is_destination_selected = i;
+                }
+            }
+            if ( is_destination_selected > 0 ) {
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+
+                    if ( i == is_destination_selected ) {
+                        continue;
+                    }
+                    document.getElementById("destination_"+i).checked = 0;
+                    document.getElementById("destination_"+i).disabled = true;
+                }
+            } else {
+                // update hidden_switch_id
+                UpdateIdValue("hidden_switch_id", RMIRROR_DEFAULT_SWITCH_ID);
+            }
+        } else {
+            // disable all nodes
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("destination_"+i).checked = 0;
+                document.getElementById("destination_"+i).disabled = true;
+            }
+        }
+    }
+    
+    // update source ports based on vlans
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        if (document.getElementById("vlans").value === "") {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("mode_"+i).disabled = false;
+            }
+        } else {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("mode_"+i).disabled = true;
+            }
+        }
+    }
+
+    // update vlans
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_INTERMEDIATE || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION ) {
+        document.getElementById("vlans").disabled = true;
+    } else {
+        document.getElementById("vlans").disabled = false;
+    }
+
+    // disable intermediate and destination setting on CPU port
+    if (configSupportCPUMirror) {
+        document.getElementById("intermediate_CPU").disabled = true;
+        document.getElementById("destination_CPU").disabled = true;
+    }
+}
+
+function addRow(index, frag, values)
+{
+    var portno          = values[0];
+    var rx_mirror_ena  = values[1];
+    var tx_mirror_ena  = values[2];
+    var intermediate_ena = values[3];
+    var destination_ena = values[4];
+
+    var tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+
+    addTextCell(tr, configPortName(portno, 0), "cr");
+
+    var oT = Array("Disabled","Both","Rx only","Tx only"); // Text
+    var oV = Array("0","3","1","2"); // Disabled, enabled,rx only,tx only
+
+    // Determine the mode
+    val = 0;
+    if (parseInt(rx_mirror_ena, 10)) {
+    val = val + 1;
+    }
+    if (parseInt(tx_mirror_ena, 10)) {
+    val = val + 2;
+    }
+
+    // Add the drop down list
+    addSelectCell(tr, oT, oV, val, "cr", "mode_" + portno);
+    modes[portno] = val; // Remember configuration. May be needed for updating the SelectCell
+
+    // add the intermediate port checkbox
+    var td = addCheckBoxCell(tr, parseInt(intermediate_ena, 10), "c", "intermediate_" + portno);
+    td.onclick = ChangeMode;
+
+    // add the destination port checkbox
+    td = addCheckBoxCell(tr, parseInt(destination_ena, 10), "c", "destination_" + portno);
+    td.onclick = ChangeMode;
+
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+function UpdateTable (ref, rconfig)
+{
+    // create holder for accumulated tbody elements and text nodes
+    var frag = document.createDocumentFragment();
+
+    for(var i = 0; i < rconfig.length; i++) {
+        if(rconfig[i].length) {
+            var pval = rconfig[i].split("/");
+            addRow(i, frag, pval);
+        }
+    }
+    var tbody = document.getElementById(ref);
+    clearChildNodes(tbody);
+    if (!tbody.appendChild(frag)) { // Add Frag to table body
+        alert("This browser doesn't support dynamic tables.");
+    }
+}
+
+function processUpdate(req, ref)
+{
+    // Format:
+    //  <session_id#session_id#..>,<sessionid>,<mode>,<vid>,<type>,<switch_id>,<reflector_port>,<sid#sid#..>,<hidden_switch_id>
+    //  |<vlans>
+    //  |<source enable>/<destination enable>/<intermediate>/<destination>,<source enable>/<destination enable>/<intermediate>/<destination>,.....
+    //  |<sid1>/<reflector_port1>#<reflector_port2>#..,<sid2>/<reflector_port1>#<reflector_port2>#..
+
+    if(redirectOnError(req)) {
+        return;
+    }
+
+    if (reqObject != req) {
+        reqObject = req;
+    }
+
+    if(req.responseText) {
+        var oTSession = [];
+        var oVSession = [];
+
+        // Get portstart and port max
+        var config = req.responseText.split("|");
+        var pval = config[0].split(",");
+        var allsid = pval[0].split('#');
+
+        var update_sid = parseInt(pval[1], 10);
+        var update_mode = parseInt(pval[2], 10);
+        var update_vid = pval[3];
+        var update_type = parseInt(pval[4], 10);
+        var update_MirrorSwitch = parseInt(pval[5], 10);
+        var update_MirrorPort = parseInt(pval[6], 10);
+        var update_switchlist = pval[7];
+        var hidden_switch_id = parseInt(pval[8], 10);
+        var allreflectorports = config[3].split(",");
+
+        var oTType = [];
+        var oVType = [];
+
+        // build session array
+        for (var m = 0; m < allsid.length; m++) {
+            if(allsid[m].length) {
+                oTSession[m] = parseInt(allsid[m], 10);
+                oVSession[m] = parseInt(allsid[m], 10);
+            }
+        }
+
+        // update session id
+        // --------------------------------------------------------------------
+        //UpdateIdSelect("sessionid", oTSession, oVSession, update_sid);
+        // --------------------------------------------------------------------
+        UpdateIdValue("sessionid", update_sid);
+
+        // update mode
+        UpdateIdSelect("mode", oTMode, oVMode, update_mode);
+
+        // update vid
+        UpdateIdValue("vid", update_vid);
+
+        // update hidden_switch_id
+        UpdateIdValue("hidden_switch_id", hidden_switch_id);
+
+        if ( RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI == 1 ) {
+            oTType = Array("Mirror", "Source(RMirror)", "Intermediate(RMirror)", "Destination(RMirror)");
+            oVType = Array(0, 1, 2, 3);
+        } else {
+            oTType = Array("None", "Source(RMirror)", "Intermediate(RMirror)", "Destination(RMirror)");
+            oVType = Array(0, 1, 2, 3);
+        }
+
+        // update type
+        UpdateIdSelect("type", oTType, oVType, update_type);
+
+        // Create the "taggedselect" drop down list
+        UpdatePortDropDown(update_MirrorPort);
+
+        // Create the table
+        UpdateTable(ref, config[2].split(","));
+
+        // update vlans
+        UpdateIdValue("vlans", unescape(config[1]));
+
+        // change form setting
+        ChangeMode();
+
+    } else {
+        SpomHandleError();
+    }
+}
+
+function checkForm(form)
+{
+    var switch_type;
+    var fld;
+
+    // Check created VLANs
+    if (!is_vlan_list("vlans", true)) {
+        return false;
+    }
+
+    //vid
+    switch_type = document.getElementById("type").value;
+    fld = document.getElementById("vid");
+    if ( switch_type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) {
+        return true;
+    }
+    if (!isWithinRange("vid", 1, 4095, "'VLAN ID'", " ")) {
+        return false;
+    }
+    if (fld.value == mgmtVid) {
+        GiveAlert("The RMIRROR VLAN ID should not equal switch management VLAN ID.", fld);
+        return false;
+    }
+
+    return true;                // Feed the chickens and go home
+}
+
+function requestUpdate()
+{
+ //    document.getElementById("update").style.visibility = "visible";
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    loadXMLDoc(SpomAddSidArg("/config/rmirror"), processUpdate, 'RMIRRORData');
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function requestUpdateBySessionID()
+{
+    var sid;
+
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    sid = document.getElementById("sessionid").value;
+    loadXMLDoc(SpomAddSidArg("/config/rmirror?sessionid="+sid), processUpdate, 'RMIRRORData');
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    //requestUpdate();            // Update page to reflect selector
+    requestUpdateBySessionID();
+    //isid = sid;
+}
+
+function DocLoad()
+{
+    //requestUpdate();
+    requestUpdateBySessionID();
+}
+
+// Because we disables some of the element in "runtime", we need to
+// do take special care of the reset.
+function ResetUpdate()
+{
+    //document.RMIRRORForm.reset();
+    //ChangeMode();
+    processUpdate(reqObject, 'RMIRRORData');
+}
+
+ </script>
+</head>
+
+<body class="content" onload="DocLoad();">
+
+<h1>Mirroring &amp; Remote Mirroring Configuration</h1>
+
+<h2 class="SPOM_only">Stack Global Settings</h2>
+
+<form name="RMIRRORForm" method="POST" action="/config/rmirror" onsubmit="return checkForm(this);">
+
+<table id="rmirrorconfig" summary="RMIRROR Global Configuration" class="config">
+ <tbody>
+
+<!--
+  <tr class="config">
+   <td class="param_label"><label accesskey="S" for="sessionid">Session Number</label></td>
+   <td>
+    <select id="sessionid" name="sessionid" style="width: 240px" onchange="requestUpdateBySessionID();">
+      <option value="1">1</option>
+    </select>
+   </td>
+  </tr>
+-->
+
+  <tr class="config">
+   <td class="param_label"><label accesskey="M" for="mode">Mode</label></td>
+   <td>
+    <select id="mode" name="mode" style="width: 240px" onchange="ChangeMode();">
+      <option value="0">Disabled</option>
+      <option value="1">Enabled</option>
+    </select>
+   </td>
+  </tr>
+
+  <tr class="config">
+   <td class="param_label"><label accesskey="T" for="type">Type</label></td>
+   <td>
+    <select id="type" name="type" style="width: 240px" onchange="ChangeMode();">
+      <option value="o">None</option>
+      <option value="1">Source</option>
+      <option value="2">Intermediate</option>
+      <option value="3">Destination</option>
+    </select>
+   </td>
+  </tr>
+
+ <tr class="config">
+  <td class="param_label"><label accesskey="V" for="vid">VLAN ID</label></td>
+  <td><input type="text" id="vid" name="vid" value="200" size="11" maxlength="4"></td>
+ </tr>
+
+  <tr class="config">
+   <td class="param_label"><label accesskey="R" for="taggedselect">Option for Inner Tagged</label></td>
+   <td>
+    <select id="taggedselect" name="taggedselect" style="width: 240px" onchange="ChangeMode();">
+      <option value="0">Tagged All</option>
+      <option value="1">Untagged All</option>
+    </select>
+   </td>
+  </tr>
+
+ </tbody>
+</table>
+
+<h2>Source VLAN(s) Configuration</h2>
+<table summary="Source VLAN(s) Configuration" cellspacing="0" class="config">
+  <tbody>
+    <!-- The worst-case VLAN string length is 9685 -->
+    <tr class="config">
+        <td class="param_label">Source VLANs</td>
+        <td class="cl"><input id="vlans" name="vlans" maxlength="9685" style="width: 240px" value="" onfocus="SetFocusOnVlans();" onblur="SetBlurOnVlans();"/></td>
+    </tr>
+  </tbody>
+</table>
+
+<br class="Standalone_only">
+<h2>Port Configuration</h2>
+<h2 class="SPOM_only"> <span id="display_sid"></span></h2>
+
+<table id="switchconfig" summary="Switch Port Configuration" class="config">
+
+ <thead>
+  <tr class="config_header">
+   <th>Port</th>
+   <th>Source</th>
+   <th>Intermediate</th>
+   <th>Destination</th>
+  </tr>
+ </thead>
+ <tbody id="RMIRRORData">
+ </tbody>
+</table>
+
+<p>
+<input type="hidden" id="sessionid" name="sessionid" value="1">
+<input type="hidden" id="submit_sid" name="sid">
+<input type="hidden" id="hidden_switch_id" name="hidden_switch_id">
+<input type="submit" value="Apply">
+<input type="reset" value="Reset" onclick="ResetUpdate();">
+</p>
+</form>
+</body>
+</html>

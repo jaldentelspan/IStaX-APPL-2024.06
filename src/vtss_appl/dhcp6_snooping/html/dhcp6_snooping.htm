@@ -1,0 +1,256 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>DHCPv6 Snooping Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/config.js"></script>
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_dhcp6_snooping.htm";
+
+// Global variables
+var myDynamicTable;
+
+var oTTrustMode = Array("Untrusted", "Trusted");
+var oVTrustMode = Array("untrusted", "trusted");
+
+/* Check function before send out the HTML request */
+function checkForm() {
+
+    return true;
+}
+
+function processGlobalsUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed (" + name + ")");
+        return;
+    }
+
+    //alert(recv_json.toSource());
+
+    document.getElementById('snooping_mode').value = recv_json.SnoopingMode;
+    document.getElementById('unknown_nh_mode').value = recv_json.UnknownNextHeaderMode;
+}
+
+/* 
+ * Add table header
+ */
+function addHeader(table_rows) {
+    // 1st row
+    var row = {
+        fields: [
+            { type: "disp_hdr", params: ["Instance ID", 1, 2], "hidden": true },
+            { type: "disp_hdr", params: ["Port", 1, 2] },
+            { type: "disp_hdr", params: ["Trust Mode", 1, 2] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+/*
+ * Add a single row in the dynamic table.
+ */
+function addRow(key, val, key_prefix) {
+    var row_affix = myDynamicTable.getRowPrefixs("rowKeyPrefix") + rowKey2Id(key);
+    var row = {
+        "key": key,
+        fields: [
+            { type: "text", params: [key, "c", null, key_prefix + key] },
+            { type: "select", params: [oTTrustMode, oVTrustMode, val.TrustMode, "c", "TrustMode_" + row_affix] }
+        ]
+    };
+
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+function processPortsUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed (" + name + ")");
+        return;
+    }
+
+    //alert(recv_json.toSource());
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+        { text: "*", className: "c" },
+        { name: "TrustMode" }
+    ]);
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+}
+
+/* Change snooping mode select menu */
+function onClickSave() {
+    globalvars = [{
+        "SnoopingMode": document.getElementById('snooping_mode').value,
+        "UnknownNextHeaderMode": document.getElementById('unknown_nh_mode').value
+        }];
+    requestJsonDoc("dhcp6Snooping.config.global.set", globalvars);
+
+    myDynamicTable.submitEvent("ports", "dhcp6Snooping.config.interface", null);
+
+    milliSleep(500);
+
+    requestGlobalsUpdate();
+    requestPortsUpdate();
+
+    return true;
+}
+
+function onClickReset() {
+
+    requestGlobalsUpdate();
+    requestPortsUpdate();
+
+    return true;
+}
+
+/* Send the HTML request */
+function requestGlobalsUpdate() {
+    requestJsonDoc("dhcp6Snooping.config.global.get", null, processGlobalsUpdate, "globals");
+}
+
+function requestPortsUpdate() {
+    myDynamicTable.restore();
+    requestJsonDoc("dhcp6Snooping.config.interface.get", null, processPortsUpdate, "ports");
+}
+
+/* Initialize resores when HTML document is ready */
+window.addEvent('domready', function () {
+
+    // only show warning for Serval1, Caracal and Ocelot platforms
+    // (configArchServal include both Serval1 and Ocelot)
+    var warndiv = document.getElementById('keySizeWarningCell');
+    if (warndiv && (configArchServal || configArchLuton26)) {
+        warndiv.style.display = 'visible';
+    } else {
+        warndiv.style.display = 'none';
+    }
+
+    // Create a table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", { func: checkForm, params: [] });
+
+    requestGlobalsUpdate();
+    requestPortsUpdate();
+});
+
+    </script>
+</head>
+
+<body class="content" style="height: calc(100vh - 30px);">
+    <h1>DHCPv6 Snooping Configuration</h1>
+    <div class="refreshbar">
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+
+    <h2>Switch Configuration</h2>
+
+    <div style="display: flex;">
+        <div style="float: left;">
+        <table summary="Configuration" cellspacing="0" class="config">
+            <tr class="config">
+                <td class="param_label">Snooping Mode</td>
+                <td class="cl">
+                    <select id="snooping_mode" name="snooping_mode">
+                        <option value="disabled" selected>Disabled</option>
+                        <option value="enabled">Enabled</option>
+                    </select>
+                </td>
+            </tr>
+            <tr class="config">
+                <td class="param_label">Unknown IPv6 Next-Headers</td>
+                <td class="cl">
+                    <select id="unknown_nh_mode" name="snooping_mode">
+                        <option value="drop" selected>Drop</option>
+                        <option value="allow">Allow</option>
+                    </select>
+                </td>
+            </tr>
+        </table>
+
+        </div>
+        <div id="keySizeWarningCell" style="border:2px solid darkred; padding: 5px; margin: 0 10px 0 10px; flex: 1;">
+            <b>Please note</b>: Enabling this function require you to change the <i>Key Type</i> to "MAC and IP Address"
+            for all ports that will receive DHCPv6 packets. You can do this in the
+            <a href="/qos_port_classification.htm">QoS Port Classification</a> page.
+        </div>
+        <div style="clear: both;"></div>
+    </div>
+
+    <h2>Port Configuration</h2>
+    <div id="myTableContainer" style="height:60vh; overflow-y:auto; display: inline-block;">
+        <div id="myTableContent" style="height:100%; width:100%; margin-right:20px;"></div>
+    </div>
+
+    <p id="Snoopingv6ModeButtons">
+        <input type="button" value="Save" onClick="onClickSave();">
+        <input type="button" value="Reset" onclick="onClickReset();">
+    </p>
+
+</body>
+</html>

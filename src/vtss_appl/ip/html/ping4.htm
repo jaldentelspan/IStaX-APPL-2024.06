@@ -1,0 +1,188 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Ping (IPv4)</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+  <script type="text/javascript" src="lib/config.js"></script>
+  <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_diagnostics.htm#ping";
+
+function checkForm()
+{
+    // ip_addr must be valid unicast address, excluding 0.0.0.0
+    if (!isValidDomainOrIP("ip_addr", "'Hostname or IP Address'", false, 4, 4, null, configIPDNSSupport, false, true)) {
+        return false;
+    }
+
+    // length
+    if (!isWithinRange("length", configPingLenMin, configPingLenMax, "'Payload Size'", " bytes")) {
+        return false;
+    }
+
+    // pdata
+    if (!isWithinRange("pdata", configPingPdataMin, configPingPdataMax, "'Payload Data'", "")) {
+        return false;
+    }
+
+    // count
+    if (!isWithinRange("count", configPingCntMin, configPingCntMax, "'Packet Count'", " times")) {
+        return false;
+    }
+
+    // TTL
+    if (!isWithinRange("ttlvalue", configPingTtlMin, configPingTtlMax, "'TTL'", "")) {
+        return false;
+    }
+
+    // source VLAN and Address
+    var src_vid_fld = document.getElementById("src_vid");
+    var src_portno_fld = document.getElementById("src_portno");
+    var src_addr_fld = document.getElementById("src_addr");
+
+    if (src_portno_fld && src_portno_fld.value.length > 0) {
+        if (!isInt(src_portno_fld.value)) {
+            GiveAlert("Port Number must be a positive integer value", src_portno_fld);
+            return false;
+        }
+        var portno = parseInt(src_portno_fld.value, 10);
+        if (portno === 0) {
+            GiveAlert("Port Number must be a positive integer value", src_portno_fld);
+            return false;
+        }
+    }
+
+    if (src_portno_fld && src_portno_fld.value.length > 0 && src_addr_fld && src_addr_fld.value.length > 0) {
+        GiveAlert("You may only specify either the Source Interface Address or the Port Number - not both", src_portno_fld);
+        return false;
+    }
+
+    if (src_vid_fld && src_vid_fld.value.length > 0 && 
+            (src_addr_fld && src_addr_fld.value.length > 0 || src_portno_fld && src_portno_fld.value.length > 0)) {
+        GiveAlert("You may only specify either the VID or the PortNo or Address for the Source Interface", src_vid_fld);
+        return false;
+    }
+
+    // source VLAN
+    if (src_vid_fld && src_vid_fld.value.length > 0) {
+        if (!isWithinRange("src_vid", configVidMin, configVidMax, "'Source VLAN'", "")) {
+            return false;
+        }
+    }
+
+    // source ip_addr must be valid unicast address, excluding 0.0.0.0
+    if (!isValidDomainOrIP("src_addr", "'Source IP Address'", false, 4, 4, null, false, false, false)) {
+        return false;
+    }
+
+    return true;
+}
+ </script>
+</head>
+
+<body class="content">
+
+<h1>Ping (IPv4)</h1>
+
+<p>Fill in the parameters as needed and press "Start" to initiate the Ping session.</p>
+
+<form method="POST" action="/config/ping4" onsubmit="return checkForm();">
+
+<table summary="Ping (IPv4)" cellspacing="0" border="0">
+ <tr>
+  <td class="hdrl"><label for="ip_addr">Hostname or IP Address</label></td>
+  <td class="cl"><input type="text" value="" id="ip_addr" name="ip_addr" size="15" maxlength="253"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="length">Payload Size</label></td>
+  <td class="cl"><input type="text" value="56" id="length" name="length" size="15" maxlength="4"></td>
+  <td> bytes </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="pdata">Payload Data Pattern</label></td>
+  <td class="cl"><input type="text" value="0" id="pdata" name="pdata" size="15" maxlength="4"></td>
+  <td> (single byte value; integer or hex with prefix '0x') </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="count">Packet Count</label></td>
+  <td class="cl"><input type="text" value="5" id="count" name="count" size="15" maxlength="2"></td>
+  <td> packets </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="ttlvalue">TTL Value</label></td>
+  <td class="cl"><input type="text" value="64" id="ttlvalue" name="ttlvalue" size="15" maxlength="3"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="src_vid">VID for Source Interface</label></td>
+  <td class="cl"><input type="text" value="" id="src_vid" name="src_vid" size="15" maxlength="64"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="src_portno">Source Port Number</label></td>
+  <td class="cl"><input type="text" value="" id="src_portno" name="src_portno" size="15" maxlength="2"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="src_addr">IP Address for Source Interface</label></td>
+  <td class="cl"><input type="text" value="" id="src_addr" name="src_addr" size="15" maxlength="64"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="quiet">Quiet (only print result)</label></td>
+  <td class="cl"><input type="checkbox" value="" id="quiet" name="quiet"></td>
+  <td> &nbsp; </td>
+ </tr>
+</table>
+
+<p>
+<input type="submit" value="Start">
+</p>
+
+</form>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

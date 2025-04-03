@@ -1,0 +1,85 @@
+diff --git a/ospfd/ospf_vty.c b/ospfd/ospf_vty.c
+index 705104d..f9976a3 100644
+--- a/ospfd/ospf_vty.c
++++ b/ospfd/ospf_vty.c
+@@ -1034,7 +1034,7 @@ DEFUN (ospf_area_vlink,
+ 	}
+ 
+ 	/* Deal with other parameters */
+-	for (i = 5; i < argc; i++) {
++	for (i = 4; i < argc; i++) {
+ 
+ 		/* vty_out (vty, "argv[%d]->arg - %s%s", i, argv[i]->text,
+ 		 * VTY_NEWLINE); */
+@@ -1042,7 +1042,7 @@ DEFUN (ospf_area_vlink,
+ 		switch (argv[i]->arg[0]) {
+ 
+ 		case 'a':
+-			if (i > 5
++			if (i > 4
+ 			    || strncmp(argv[i]->arg, "authentication-", 15)
+ 				       == 0) {
+ 				/* authentication-key - this option can occur
+@@ -1052,7 +1052,7 @@ DEFUN (ospf_area_vlink,
+ 							must check for
+ 				   authentication option. */
+ 				memset(auth_key, 0, OSPF_AUTH_SIMPLE_SIZE + 1);
+-				strncpy(auth_key, argv[i + 1]->text,
++				strncpy(auth_key, argv[i + 1]->arg,
+ 					OSPF_AUTH_SIMPLE_SIZE);
+ 				vl_config.auth_key = auth_key;
+ 				i++;
+@@ -1093,7 +1093,7 @@ DEFUN (ospf_area_vlink,
+ 					strtol(argv[i]->arg, NULL, 10);
+ 				if (vl_config.crypto_key_id < 0)
+ 					return CMD_WARNING;
+-				i++;
++				i += 2;
+ 				if (i < argc) {
+ 					memset(md5_key, 0,
+ 					       OSPF_AUTH_MD5_SIZE + 1);
+@@ -1172,13 +1172,13 @@ DEFUN (no_ospf_area_vlink,
+ 	/* If we are down here, we are reseting parameters */
+ 
+ 	/* Deal with other parameters */
+-	for (i = 6; i < argc; i++) {
++	for (i = 5; i < argc; i++) {
+ 		/* vty_out (vty, "argv[%d] - %s%s", i, argv[i], VTY_NEWLINE); */
+ 
+ 		switch (argv[i]->arg[0]) {
+ 
+ 		case 'a':
+-			if (i > 2
++			if (i > 5
+ 			    || strncmp(argv[i]->text, "authentication-", 15)
+ 				       == 0) {
+ 				/* authentication-key - this option can occur
+@@ -1208,6 +1208,7 @@ DEFUN (no_ospf_area_vlink,
+ 				if (vl_config.crypto_key_id < 0)
+ 					return CMD_WARNING;
+ 				vl_config.md5_key = NULL;
++			i += 2;
+ 			} else
+ 				return CMD_WARNING;
+ 			break;
+@@ -8734,6 +8735,20 @@ static int config_write_virtual_link(struct vty *vty, struct ospf *ospf)
+ 				vty_out(vty, " area %s virtual-link %s%s", buf,
+ 					inet_ntoa(vl_data->vl_peer),
+ 					VTY_NEWLINE);
++
++			/* Auth type */
++			if (IF_DEF_PARAMS(vl_data->vl_oi->ifp)->auth_type == OSPF_AUTH_SIMPLE) {
++				vty_out(vty, " area %s virtual-link %s authentication%s", buf, inet_ntoa(vl_data->vl_peer), VTY_NEWLINE);
++			} else {
++				if (IF_DEF_PARAMS(vl_data->vl_oi->ifp)->auth_type == OSPF_AUTH_CRYPTOGRAPHIC) {
++					vty_out(vty, " area %s virtual-link %s authentication message-digest%s", buf, inet_ntoa(vl_data->vl_peer), VTY_NEWLINE);
++				} else {
++					if (IF_DEF_PARAMS(vl_data->vl_oi->ifp)->auth_type == OSPF_AUTH_NULL) {
++						vty_out(vty, " area %s virtual-link %s authentication null%s", buf, inet_ntoa(vl_data->vl_peer), VTY_NEWLINE);
++					}
++				}
++			}
++
+ 			/* Auth key */
+ 			if (IF_DEF_PARAMS(vl_data->vl_oi->ifp)->auth_simple[0]
+ 			    != '\0')

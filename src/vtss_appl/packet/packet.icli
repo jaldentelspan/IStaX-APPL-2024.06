@@ -1,0 +1,1425 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "packet_api.h"
+#include "conf_api.h"
+#include "mgmt_api.h"
+#include "misc_api.h"
+#include "msg_api.h"        /* For msg_switch_is_local()     */
+#include "vtss/appl/vlan.h" /* For VTSS_APPL_VLAN_ID_DEFAULT */
+#include "icli_porting_util.h"
+
+#if defined(VTSS_SW_OPTION_AFI)
+#include "afi_api.h"
+
+// Re-define AFI_SINGLE_RATE_FPH_MIN/MAX from LLU to non-LLU,
+// because the ICLI module code can't cope with u64 in ranges.
+#define PACKET_ICLI_AFI_SINGLE_RATE_FPH_MIN (u32)AFI_SINGLE_RATE_FPH_MIN
+// Unfortunately, the ICLI interface doesn't support 64-bit ranges, so we cannot
+// offer the full potential on all platforms (read: Serval1) of the FPH option.
+#define PACKET_ICLI_AFI_SINGLE_RATE_FPH_MAX (AFI_SINGLE_RATE_FPH_MAX > 0xFFFFFFFFLLU ? 0xFFFFFFFFLLU : AFI_SINGLE_RATE_FPH_MAX)
+#else
+// In order to get this module compiled for targets that don't include the AFI
+// module, we have to define the following.
+// This is not a problem at all, since the ICLI commands where they are used
+// are taken out of ICLI at runtime.
+#define PACKET_ICLI_AFI_SINGLE_RATE_FPH_MIN 10
+#define PACKET_ICLI_AFI_SINGLE_RATE_FPH_MAX 100
+#define AFI_MULTI_RATE_BPS_MAX  100000LLU
+#endif /* defined(VTSS_SW_OPTION_AFI) */
+
+// AFI EMIX in ICLI is in kbps, but the constant we get from
+// the AFI module is in bps. Since the constant is used in
+// an ICLI command syntax, we need to have a separate define
+#define PACKET_ICLI_MULTI_RATE_KBPS_MAX (AFI_MULTI_RATE_BPS_MAX / 1000LLU)
+
+// Anything that can be transmitted in a single DCB on all platforms
+#define PACKET_CLI_TX_FRAME_LENGTH_MAX VTSS_MAX_FRAME_LENGTH_MAX
+
+/*lint -esym(459, PACKET_ICLI_debug_packet_cmd)            */
+/*lint -esym(459, PACKET_ICLI_tx_cnt)                      */
+/*lint -esym(459, PACKET_ICLI_tx_seq)                      */
+/*lint -esym(459, PACKET_ICLI_afi_frame_counting_enabled)  */
+/*lint -esym(459, PACKET_ICLI_afi_frame_seq_number_offset) */
+INCLUDE_END
+
+FUNCTION_BEGIN
+static ulong PACKET_ICLI_tx_cnt = 1;
+static bool  PACKET_ICLI_dmac_incr, PACKET_ICLI_smac_incr;
+static uint32_t PACKET_ICLI_sleep_ms;
+
+typedef struct {
+    bool         enable;
+    mesa_etype_t tpid;
+    mesa_vid_t   vid;
+    mesa_pcp_t   pcp;
+    mesa_dei_t   dei;
+} PACKET_ICLI_tag_t;
+
+static BOOL packet_icli_cpu_shaper_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return icli_present_cap(ask, runtime, MESA_CAP_QOS_CPU_PORT_SHAPER);
+}
+
+/******************************************************************************/
+// PACKET_ICLI_runtime_redbox_present()
+/******************************************************************************/
+static BOOL PACKET_ICLI_runtime_redbox_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+#if defined(VTSS_SW_OPTION_REDBOX)
+        runtime->present = TRUE;
+#else
+        runtime->present = FALSE;
+#endif
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/******************************************************************************/
+// PACKET_ICLI_runtime_afi_present()
+/******************************************************************************/
+static BOOL PACKET_ICLI_runtime_afi_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+#if defined(VTSS_SW_OPTION_AFI)
+        runtime->present = fast_cap(VTSS_APPL_CAP_AFI);
+#else
+        runtime->present = FALSE;
+#endif
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL PACKET_ICLI_runtime_afi_v2(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+#if defined(VTSS_SW_OPTION_AFI)
+        runtime->present = fast_cap(VTSS_APPL_CAP_AFI) && !fast_cap(MESA_CAP_AFI_V1);
+#else
+        runtime->present = FALSE;
+#endif
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL PACKET_ICLI_runtime_afi_fph(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = PACKET_ICLI_AFI_SINGLE_RATE_FPH_MIN;
+        runtime->range.u.sr.range[0].max = PACKET_ICLI_AFI_SINGLE_RATE_FPH_MAX;
+        return TRUE;
+    }
+    return PACKET_ICLI_runtime_afi_present(session_id, ask, runtime);
+}
+
+static BOOL PACKET_ICLI_runtime_afi_rate(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = 1;
+        runtime->range.u.sr.range[0].max = PACKET_ICLI_MULTI_RATE_KBPS_MAX;
+        return TRUE;
+    }
+    return PACKET_ICLI_runtime_afi_present(session_id, ask, runtime);
+}
+
+static BOOL PACKET_ICLI_runtime_packet_length(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = 14;
+        runtime->range.u.sr.range[0].max = fast_cap(MESA_CAP_PORT_FRAME_LENGTH_MAX);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL PACKET_ICLI_runtime_icpu_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        if (!misc_cpu_is_external()) {
+            runtime->present = TRUE;
+        } else {
+            runtime->present = FALSE;
+        }
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+#if defined(VTSS_SW_OPTION_AFI)
+/****************************************************************************/
+// PACKET_ICLI_emix_parse()
+/****************************************************************************/
+static mesa_rc PACKET_ICLI_emix_parse(u32 session_id, char *emix, u32 packet_length, u32 *frame_sizes_bytes)
+{
+    u32 cnt = 0;
+
+    if (emix == NULL) {
+        ICLI_PRINTF("%% emix is NULL\n");
+        return VTSS_RC_ERROR;
+    }
+
+    while (emix[cnt] != '\0') {
+        u32 fs;
+
+        if (cnt >= AFI_MULTI_LEN_MAX) {
+            ICLI_PRINTF("%% The maximum supported EMIX length is %u frame%s\n", AFI_MULTI_LEN_MAX, AFI_MULTI_LEN_MAX == 1 ? "s" : "");
+            return VTSS_RC_ERROR;
+        }
+
+        switch (emix[cnt]) {
+        case 'a':
+            fs = 64;
+            break;
+
+        case 'b':
+            fs = 128;
+            break;
+
+        case 'c':
+            fs = 256;
+            break;
+
+        case 'd':
+            fs = 512;
+            break;
+
+        case 'e':
+            fs = 1024;
+            break;
+
+        case 'f':
+            fs = 1280;
+            break;
+
+        case 'g':
+            fs = 1518;
+            break;
+
+        case 'u':
+            fs = packet_length;
+            break;
+
+        default:
+           ICLI_PRINTF("%% Unsupported EMIX character '%c'. Valid range is 'a' - 'g'\n", emix[cnt]);
+           return VTSS_RC_ERROR;
+        }
+
+        frame_sizes_bytes[cnt++] = fs;
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* defined(VTSS_SW_OPTION_AFI) */
+
+/******************************************************************************/
+// PACKET_ICLI_frame_compose()
+/******************************************************************************/
+static mesa_rc PACKET_ICLI_frame_compose(u32 session_id, u8 *buffer, u32 frame_size_bytes, BOOL has_dmac, mesa_mac_t *dmac, BOOL has_smac, mesa_mac_t *smac, PACKET_ICLI_tag_t *otag, PACKET_ICLI_tag_t *itag, BOOL has_etype, u16 etype, mesa_port_no_t port_no, BOOL has_data, uint8_t data[4], bool random_payload, uint8_t fixed_payload_value)
+{
+    static i32   PACKET_ICLI_tx_seq;
+    u32          i, pos = 12;
+    conf_board_t conf;
+
+    memset(buffer, 0xff, 14);
+    for (i = 14; i < frame_size_bytes - 4 /* FCS */; i++) {
+        if (random_payload) {
+            buffer[i] = rand();
+        } else {
+            buffer[i] = fixed_payload_value;
+        }
+    }
+
+    if (has_dmac) {
+        memcpy(buffer, dmac->addr, 6);
+    }
+
+    if (conf_mgmt_board_get(&conf) < 0) {
+        ICLI_PRINTF("%% Unable to obtain board configuration\n");
+        return VTSS_RC_ERROR;
+    }
+
+    memcpy(buffer + 6, has_smac ? smac->addr : conf.mac_address.addr, 6);
+
+    if (otag->enable) {
+        buffer[pos + 0] = (otag->tpid >> 8) & 0xFF;
+        buffer[pos + 1] = (otag->tpid >> 0) & 0xFF;
+        buffer[pos + 2] = ((otag->pcp & 0x7) << 5) | ((otag->dei & 0x1) << 4) | ((otag->vid >> 8) & 0x0F);
+        buffer[pos + 3] = (otag->vid >> 0) & 0xFF;
+        pos += 4;
+    }
+
+    if (itag->enable) {
+        buffer[pos + 0] = (itag->tpid >> 8) & 0xFF;
+        buffer[pos + 1] = (itag->tpid >> 0) & 0xFF;
+        buffer[pos + 2] = ((itag->pcp & 0x7) << 5) | ((itag->dei & 0x1) << 4) | ((itag->vid >> 8) & 0x0F);
+        buffer[pos + 3] = (itag->vid >> 0) & 0xFF;
+        pos += 4;
+    }
+
+    if (has_etype) {
+        buffer[pos + 0] = (etype >> 8) & 0xFF;
+        buffer[pos + 1] = (etype >> 0) & 0xFF;
+    }
+
+    pos += 2;
+
+    if (has_data) {
+        buffer[pos + 0] = data[0];
+        buffer[pos + 1] = data[1];
+        buffer[pos + 2] = data[2];
+        buffer[pos + 3] = data[3];
+    } else {
+        buffer[pos] = port_no;
+        *((u32 *)&buffer[pos + 2]) = PACKET_ICLI_tx_seq++;
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// PACKET_ICLI_frame_tx_props_setup()
+/******************************************************************************/
+static mesa_rc PACKET_ICLI_frame_tx_props_setup(u32 session_id, packet_tx_props_t *tx_props, u8 *buffer, u32 frame_size_bytes, BOOL switch_frm, PACKET_ICLI_tag_t *tag, u64 port_mask, BOOL has_fph, BOOL has_emix, BOOL has_masquerade, mesa_port_no_t port_no, BOOL has_rb_tag_disable, BOOL has_rb_dd_disable, BOOL has_rb_fwd_port_a, BOOL has_rb_fwd_port_b, BOOL has_rb_fwd_both)
+{
+    packet_tx_props_init(tx_props);
+
+#ifdef VTSS_SW_OPTION_REDBOX
+    tx_props->tx_info.rb_tag_disable = has_rb_tag_disable;
+    tx_props->tx_info.rb_dd_disable  = has_rb_dd_disable;
+    tx_props->tx_info.rb_fwd         = has_rb_fwd_port_a ? MESA_PACKET_RB_FWD_A : has_rb_fwd_port_b ? MESA_PACKET_RB_FWD_B : has_rb_fwd_both ? MESA_PACKET_RB_FWD_BOTH : MESA_PACKET_RB_FWD_DEFAULT;
+#endif
+
+    tx_props->packet_info.modid  = VTSS_MODULE_ID_PACKET;
+    tx_props->packet_info.frm    = buffer;
+    tx_props->packet_info.len    = frame_size_bytes - 4 /* FCS */;
+    tx_props->tx_info.switch_frm = switch_frm;
+    if (switch_frm) {
+        tx_props->tx_info.tag.vid = tag->vid;
+        tx_props->tx_info.tag.pcp = tag->pcp;
+        tx_props->tx_info.tag.dei = tag->dei;
+    } else {
+        tx_props->tx_info.dst_port_mask = port_mask;
+    }
+
+    if (has_masquerade) {
+        tx_props->tx_info.masquerade_port = port_no;
+
+        if (has_fph || has_emix) {
+             // In order to preserve the source port in the IFH when
+             // up-injecting through the AFI (due to a chip-bug), the pipeline
+             // point must be set to MESA_PACKET_PIPELINT_PT_ANA_CLM or later.
+            tx_props->tx_info.pipeline_pt = MESA_PACKET_PIPELINE_PT_ANA_CLM;
+        }
+    }
+
+    if (!has_fph && !has_emix) {
+        // Single- and multi-frame flows require no_free to be FALSE
+        tx_props->packet_info.no_free = TRUE; /* Avoid deallocation of packet */
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// PACKET_ICLI_mac_incr()
+/******************************************************************************/
+static void PACKET_ICLI_mac_incr(uint8_t mac[6])
+{
+    int i;
+    for (i = 5; i >= 0; i--) {
+        if (++mac[i] != 0) {
+            break;
+        }
+    }
+}
+
+/******************************************************************************/
+// PACKET_ICLI_frame_tx()
+/******************************************************************************/
+static mesa_rc PACKET_ICLI_frame_tx(u32 session_id, packet_tx_props_t *tx_props)
+{
+    vtss_tick_count_t start_ticks = 0;
+    u32               i;
+
+    if (PACKET_ICLI_tx_cnt > 1) {
+        start_ticks = vtss_current_time();
+        ICLI_PRINTF("Transmitting %lu frames...", PACKET_ICLI_tx_cnt);
+    }
+
+    for (i = 0; i < PACKET_ICLI_tx_cnt; i++) {
+        if (i == PACKET_ICLI_tx_cnt - 1) {
+            tx_props->packet_info.no_free = FALSE; // Free the frame after this last one is transmitted
+        }
+
+        if (i > 0) {
+            if (PACKET_ICLI_dmac_incr) {
+                PACKET_ICLI_mac_incr(&tx_props->packet_info.frm[0]);
+            }
+
+            if (PACKET_ICLI_smac_incr) {
+                PACKET_ICLI_mac_incr(&tx_props->packet_info.frm[6]);
+            }
+
+            if (PACKET_ICLI_sleep_ms != 0) {
+                VTSS_OS_MSLEEP(PACKET_ICLI_sleep_ms);
+            }
+        }
+
+        // packet_tx() prints an error if it fails, so don't bother catching the return value.
+        (void)packet_tx(tx_props);
+    }
+
+    if (PACKET_ICLI_tx_cnt > 1) {
+        vtss_tick_count_t end_ticks = vtss_current_time();
+        u64               ms;
+        char              buf[40];
+
+        ms = VTSS_OS_TICK2MSEC(end_ticks - start_ticks);
+        mgmt_long2str_float(buf, ms, 3);
+        ICLI_PRINTF("Done in %s seconds.\n", buf);
+    }
+
+    return VTSS_RC_OK;
+}
+
+FUNCTION_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug packet cmd [<1-100> [parameter-count <0-4> [<int> [<int> [<int> [<int>]]]]]]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+FUNC_NAME = PACKET_ICLI_debug_packet_cmd
+
+! debug
+CMD_VAR =
+BYWORD  =
+HELP    = ##ICLI_HELP_DEBUG
+RUNTIME =
+
+! packet
+CMD_VAR =
+BYWORD  =
+HELP    = Packet module
+RUNTIME =
+
+! cmd
+CMD_VAR =
+BYWORD  =
+HELP    = Display or run debug command
+RUNTIME =
+
+! <1-100>
+CMD_VAR = cmd_no
+BYWORD  =
+HELP    = Command number
+RUNTIME =
+
+! parameter-count
+CMD_VAR =
+BYWORD  =
+HELP    = Count of parameters to command
+RUNTIME =
+
+! <u32>
+CMD_VAR = para_cnt
+BYWORD  =
+HELP    = Count of parameters
+RUNTIME =
+
+! <u32>
+CMD_VAR = para_1
+BYWORD  =
+HELP    = Parameter 1
+RUNTIME =
+
+! <u32>
+CMD_VAR = para_2
+BYWORD  =
+HELP    = Parameter 2
+RUNTIME =
+
+! <u32>
+CMD_VAR = para_3
+BYWORD  =
+HELP    = Parameter 3
+RUNTIME =
+
+! <u32>
+CMD_VAR = para_4
+BYWORD  =
+HELP    = Parameter 4
+RUNTIME =
+
+VARIABLE_BEGIN
+    u32 parms[5];
+VARIABLE_END
+
+CODE_BEGIN
+    if (cmd_no) {
+        parms[0] = cmd_no;
+
+        if (para_cnt) {
+            parms[1] = (u32)para_1;
+            parms[2] = (u32)para_2;
+            parms[3] = (u32)para_3;
+            parms[4] = (u32)para_4;
+        }
+
+        // because of cmd_no
+        para_cnt++;
+    }
+
+    /*lint -esym(459, packet_dbg) */
+    packet_dbg((packet_dbg_printf_t)icli_session_self_printf, para_cnt, parms);
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug packet throttle [xtr-qu <0-7>] [max-frms-per-sec <uint>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+BYWORD  =
+HELP    = ##ICLI_HELP_DEBUG
+RUNTIME =
+
+! packet
+CMD_VAR =
+BYWORD  =
+HELP    = Packet module
+RUNTIME =
+
+! throttle
+CMD_VAR =
+BYWORD  =
+HELP    = Display or set current Rx queue throttling configuration
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+! xtr-qu
+CMD_VAR = has_xtr_qu
+BYWORD  =
+HELP    = The extraction queue to configure or show settings for. Defaults to 'all'
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+! <0-7>
+CMD_VAR = xtr_qu
+BYWORD  =
+HELP    = The extraction queue number
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+! max-frms-per-sec
+CMD_VAR = has_max_frms_per_sec
+BYWORD  =
+HELP    = The maximum number of frames to extract in one second without suspending the Rx queue. 0 disables throttling
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+! <uint>
+CMD_VAR = max_frms_per_sec
+BYWORD  =
+HELP    = The maximum number of frames
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+VARIABLE_BEGIN
+    packet_throttle_cfg_t  throttle_cfg;
+    mesa_packet_rx_queue_t xtr_qu_min, xtr_qu_max;
+    char                   usage[100];
+    mesa_rc                rc;
+VARIABLE_END
+
+CODE_BEGIN
+#ifndef ROUNDING_DIVISION
+/* Round x divided by y to nearest integer. x and y are integers */
+#define ROUNDING_DIVISION(x, y) (((x) + ((y) / 2)) / (y))
+#endif
+
+    if (has_xtr_qu) {
+        xtr_qu_min = xtr_qu_max = xtr_qu;
+    } else {
+        // all queues
+        xtr_qu_min = 0;
+        xtr_qu_max = VTSS_PACKET_RX_QUEUE_CNT - 1;
+    }
+
+    if ((rc = packet_rx_throttle_cfg_get(&throttle_cfg)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Couldn't get current throttle configuration: %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_max_frms_per_sec) {
+        for (xtr_qu = xtr_qu_min; xtr_qu <= xtr_qu_max; ++xtr_qu) {
+            throttle_cfg.frm_limit_per_tick[xtr_qu]  = max_frms_per_sec > 0 ? MAX(ROUNDING_DIVISION(max_frms_per_sec,  PACKET_THROTTLE_FREQ_HZ), 1) : 0;
+            throttle_cfg.byte_limit_per_tick[xtr_qu] = throttle_cfg.frm_limit_per_tick[xtr_qu] * 1518;
+            throttle_cfg.suspend_tick_cnt[xtr_qu]    = 0;
+        }
+
+        if ((rc = packet_rx_throttle_cfg_set(&throttle_cfg)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Couldn't set new throttle configuration: %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        ICLI_PRINTF("Throttle tick frequency: %d ticks/second\n\n", PACKET_THROTTLE_FREQ_HZ);
+        ICLI_PRINTF("Xtr Qu  Frames/Sec  Bytes/Sec   Usage            \n");
+        ICLI_PRINTF("------- ----------- ----------- -----------------\n");
+
+        for (xtr_qu = xtr_qu_min; xtr_qu <= xtr_qu_max; ++xtr_qu) {
+            ICLI_PRINTF("%6u  %10u  %10u  %s\n", xtr_qu, throttle_cfg.frm_limit_per_tick[xtr_qu] * PACKET_THROTTLE_FREQ_HZ, throttle_cfg.byte_limit_per_tick[xtr_qu] * PACKET_THROTTLE_FREQ_HZ, packet_rx_queue_usage(xtr_qu, usage, sizeof(usage)));
+        }
+
+        ICLI_PRINTF("\n");
+    }
+
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(MSCC_BRSDK)
+
+COMMAND   = debug packet rx [mtu <64-16384>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+BYWORD  =
+HELP    = ##ICLI_HELP_DEBUG
+RUNTIME =
+
+! packet
+CMD_VAR =
+BYWORD  =
+HELP    = Packet module
+RUNTIME =
+
+! rx
+CMD_VAR =
+BYWORD  =
+HELP    = Rx configuration
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+! mtu
+CMD_VAR = has_mtu
+BYWORD  =
+HELP    = Set the Rx MTU (does not affect IP stack's MTU).
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+! <64-16384>
+CMD_VAR = mtu
+BYWORD  =
+HELP    = The Rx MTU (in bytes) including FCS, but excluding IFH.
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+
+VARIABLE_BEGIN
+    packet_rx_cfg_t rx_cfg;
+VARIABLE_END
+
+CODE_BEGIN
+    if (packet_rx_cfg_get(&rx_cfg) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Couldn't get current Rx configuration.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_mtu) {
+        rx_cfg.mtu = mtu;
+        if (packet_rx_cfg_set(&rx_cfg) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Couldn't set new Rx configuration.\n");
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        ICLI_PRINTF("CPU Rx MTU incl. FCS, excl. Internal Frame Header: %u bytes\n\n", rx_cfg.mtu);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG   =
+COMMAND   = debug packet process {enable | disable}
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+BYWORD  =
+HELP    = ##ICLI_HELP_DEBUG
+RUNTIME =
+
+! packet
+CMD_VAR =
+BYWORD  =
+HELP    = Packet module
+RUNTIME =
+
+! process
+CMD_VAR =
+BYWORD  =
+HELP    = Process frames on Rx
+RUNTIME =
+
+! enable
+CMD_VAR = has_enable
+BYWORD  =
+HELP    = Enable Rx packet processing, that is, forward frames to listeners.
+RUNTIME =
+
+! disable
+CMD_VAR =
+BYWORD  =
+HELP    = Disable Rx packet processing, that is, discard frames as soon as they arrive.
+RUNTIME =
+
+CODE_BEGIN
+    packet_rx_process_set(has_enable);
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug packet shaper [max-kbps <uint>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+BYWORD  =
+HELP    = ##ICLI_HELP_DEBUG
+RUNTIME = packet_icli_cpu_shaper_present
+
+! packet
+CMD_VAR =
+BYWORD  =
+HELP    = Packet module
+RUNTIME =
+
+! shaper
+CMD_VAR =
+BYWORD  =
+HELP    = Display or set current CPU Rx port shaping rate
+RUNTIME =
+
+! max-kbps
+CMD_VAR = has_max_kbps
+BYWORD  =
+HELP    = The maximum number of kilobits (line-rate (L1)) per second to forward towards the CPU. 0 disables this feature.
+RUNTIME =
+
+! <uint>
+CMD_VAR = max_kbps
+BYWORD  =
+HELP    = The maximum number of kilobits to receive at the CPU per second. 0 disables this feature.
+RUNTIME =
+
+CODE_BEGIN
+    if (has_max_kbps) {
+        if (packet_rx_shaping_cfg_set(max_kbps) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Couldn't set new shaping configuration.\n");
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        if (packet_rx_shaping_cfg_get(&max_kbps) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Couldn't get current shaping configuration.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        if (max_kbps == 0) {
+            ICLI_PRINTF("CPU Rx Shaping is disabled\n");
+        } else {
+            ICLI_PRINTF("CPU Rx Shaping set to %u kbps (L1 rate)\n", max_kbps);
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+HELP_FRAME = Frame function
+HELP_FRAME_TX = Transmit frame
+
+CMD_BEGIN
+
+IF_FLAG   =
+COMMAND   = debug frame tx [interface <port_type_list>] [redbox-tag-disable] [redbox-dd-disable] [redbox-forward {port-a | port-b | both}] [{fph <uint> [keep-paused]} | {emix <word> kbps <uint> [rate-type {line | data}] [keep-paused]}] [packet-length <uint>] [dmac <mac_addr>] [smac <mac_addr>] [otag vid <0-4095> [tpid <0-65535>] [pcp <0-7>] [dei <0-1>]] [itag vid <0-4095> [tpid <0-65535>] [pcp <0-7>] [dei <0-1>]] [etype <0-65535>] [masquerade] [data <0-255> <0-255> <0-255> <0-255>] [payload {random | fixed <uint8>}]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+FUNC_NAME = PACKET_ICLI_debug_frame_tx
+
+HELP    = ##ICLI_HELP_DEBUG
+HELP    = ##HELP_FRAME
+HELP    = ##HELP_FRAME_TX
+
+HELP    = Optional port list. If this is not specified, the frame will be transmitted switched.
+HELP    = Port list
+
+HELP    = Set RedBox Tag Disable flag in IFH
+HELP    = Set RedBox Duplicate Discard disable flag in IFH
+HELP    = Set RedBox forward option in IFH
+HELP    = Set RedBox forward option to Port A
+HELP    = Set RedBox forward option to Port B
+HELP    = Set RedBox forward option to both Port A and Port B
+
+HELP    = Inject frame periodically at a given frequency (frames per hour)
+HELP    = Frames per hour
+HELP    = Send frame to H/W, but don't start the flow (mainly for debugging)
+
+HELP    = Inject a sequence of frames periodically
+HELP    = EMIX, that is, a string indicating the frame length and order of the individual frames. Lengths in bytes: 'a' = 64, 'b' = 128, 'c' = 256, 'd' = 512, 'e' = 1024, 'f' = 1280, 'g' = 1518, 'u' = Use 'packet-length'.
+
+HELP    = The sequence should take this number of kbps, which is either line or data rate, depending on rate-type.
+HELP    = Number of kilobits per second.
+
+HELP    = Specify a rate-type. Defaults to 'line'
+HELP    = The kbps is specified in Layer1 (line) rate (default).
+HELP    = The kbps is specified in Layer2 (data) rate.
+HELP    = Send frames to H/W, but don't start the flow (mainly for debugging)
+
+HELP    = Packet length, excluding FCS
+HELP    = Bytes, excluding FCS
+
+HELP    = Destination MAC
+HELP    = MAC address
+
+HELP    = Source MAC
+HELP    = MAC address
+
+HELP    = Specify an outer tag
+HELP    = Specify Outer tag VLAN ID
+HELP    = Outer tag VLAN ID value
+HELP    = Specify outer tag TPID
+HELP    = Outer tag TPID (defaults to 0x88a8)
+HELP    = Specify outer tag PCP (defaults to 0)
+HELP    = Outer tag DEI value
+HELP    = Specify outer tag DEI (defaults to 0)
+HELP    = Outer tag DEI value
+
+HELP    = Specify an inner tag
+HELP    = Specify inner tag VLAN ID
+HELP    = Inner tag VLAN ID value
+HELP    = Specify inner tag TPID
+HELP    = Inner tag TPID (defaults to 0x8100)
+HELP    = Specify inner tag PCP (defaults to 0)
+HELP    = Inner tag DEI value
+HELP    = Specify inner tag DEI (defaults to 0)
+HELP    = Inner tag DEI value
+
+HELP    = Ether type
+HELP    = Ether type
+
+HELP    = The interface is the masquerade port number, i.e. the port number the frame pretends to ingress. The frame will be transmitted switched when specified
+
+HELP    = Specify first four bytes of data after ethertype. This will be filled after a possibly random/fixed payload
+HELP    = Data byte #1
+HELP    = Data byte #2
+HELP    = Data byte #3
+HELP    = Data byte #4
+
+HELP    = Select what to fill payload with (default is random)
+HELP    = Fill with a random payload
+HELP    = Fill with a fixed value
+HELP    = Fixed value to fill payload with
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_interface
+CMD_VAR = plist
+
+CMD_VAR = has_rb_tag_disable
+CMD_VAR = has_rb_dd_disable
+CMD_VAR =
+CMD_VAR = has_rb_fwd_port_a
+CMD_VAR = has_rb_fwd_port_b
+CMD_VAR = has_rb_fwd_both
+
+CMD_VAR = has_fph
+CMD_VAR = fph
+CMD_VAR = has_single_keep_paused
+CMD_VAR = has_emix
+CMD_VAR = emix
+CMD_VAR =
+CMD_VAR = kbps
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_data_rate
+CMD_VAR = has_multi_keep_paused
+CMD_VAR = has_packet_length
+CMD_VAR = packet_length
+CMD_VAR = has_dmac
+CMD_VAR = dmac
+CMD_VAR = has_smac
+CMD_VAR = smac
+CMD_VAR = has_otag
+CMD_VAR =
+CMD_VAR = ovid
+CMD_VAR = has_otpid
+CMD_VAR = otpid
+CMD_VAR = has_opcp
+CMD_VAR = opcp
+CMD_VAR = has_odei
+CMD_VAR = odei
+CMD_VAR = has_itag
+CMD_VAR =
+CMD_VAR = ivid
+CMD_VAR = has_itpid
+CMD_VAR = itpid
+CMD_VAR = has_ipcp
+CMD_VAR = ipcp
+CMD_VAR = has_idei
+CMD_VAR = idei
+CMD_VAR = has_etype
+CMD_VAR = etype
+CMD_VAR = has_masquerade
+CMD_VAR = has_data
+CMD_VAR = data1
+CMD_VAR = data2
+CMD_VAR = data3
+CMD_VAR = data4
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_payload_fixed
+CMD_VAR = fixed_payload_value
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+RUNTIME = PACKET_ICLI_runtime_redbox_present
+RUNTIME = PACKET_ICLI_runtime_redbox_present
+RUNTIME = PACKET_ICLI_runtime_redbox_present
+RUNTIME = PACKET_ICLI_runtime_redbox_present
+RUNTIME = PACKET_ICLI_runtime_redbox_present
+RUNTIME = PACKET_ICLI_runtime_redbox_present
+
+RUNTIME = PACKET_ICLI_runtime_afi_present
+RUNTIME = PACKET_ICLI_runtime_afi_fph
+RUNTIME = PACKET_ICLI_runtime_afi_v2
+RUNTIME = PACKET_ICLI_runtime_afi_present
+RUNTIME = PACKET_ICLI_runtime_afi_present
+RUNTIME = PACKET_ICLI_runtime_afi_present
+RUNTIME = PACKET_ICLI_runtime_afi_rate
+RUNTIME = PACKET_ICLI_runtime_afi_present
+RUNTIME = PACKET_ICLI_runtime_afi_present
+RUNTIME = PACKET_ICLI_runtime_afi_present
+RUNTIME = PACKET_ICLI_runtime_afi_v2
+RUNTIME =
+RUNTIME = PACKET_ICLI_runtime_packet_length
+
+VARIABLE_BEGIN
+    mesa_port_no_t    iport, port_no = 0;
+    u8                *buffer = NULL;
+    u32               i, j, port_cnt = 0;
+    u64               port_mask = 0;
+    BOOL              switch_frm;
+    mesa_rc           rc = VTSS_RC_OK;
+    packet_tx_props_t tx_props;
+    PACKET_ICLI_tag_t otag, itag, *tag;
+    uint8_t           data[4];
+    bool              random_payload;
+
+#if defined(VTSS_SW_OPTION_AFI)
+    CapArray<u32, VTSS_APPL_CAP_AFI_MULTI_LEN_MAX> frame_sizes_bytes;
+    u32               array_size = frame_sizes_bytes.size();
+    u32               single_id, multi_id;
+    afi_single_conf_t single_conf;
+    afi_multi_conf_t  multi_conf;
+#else
+    u32               frame_sizes_bytes[1];
+    u32               array_size = 1;
+#endif /* (!)defined(VTSS_SW_OPTION_AFI) */
+VARIABLE_END
+
+CODE_BEGIN
+    // frame_sizes_bytes[] includes FCS, packet_length doesn't.
+    frame_sizes_bytes[0] = has_packet_length ? packet_length + 4 /* FCS */ : 64;
+    packet_length        = frame_sizes_bytes[0];
+
+    random_payload = !has_payload_fixed;
+
+    memset(&otag, 0, sizeof(otag));
+    memset(&itag, 0, sizeof(itag));
+
+    data[0] = data1;
+    data[1] = data2;
+    data[2] = data3;
+    data[3] = data4;
+
+    if (has_otag) {
+        otag.enable = TRUE;
+        otag.tpid   = has_otpid ? otpid : 0x88a8;
+        otag.vid    = ovid;
+        otag.pcp    = has_opcp ? opcp : 0;
+        otag.dei    = has_odei ? odei : 0;
+    }
+
+    if (has_itag) {
+        itag.enable = TRUE;
+        itag.tpid   = has_itpid ? itpid : 0x8100;
+        itag.vid    = ivid;
+        itag.pcp    = has_ipcp ? ipcp : 0;
+        itag.dei    = has_idei ? idei : 0;
+    } else {
+        // For the sake of switched Tx with no specified VID.
+        itag.vid    = VTSS_APPL_VLAN_ID_DEFAULT;
+    }
+
+    tag = has_otag ? &otag : &itag;
+
+    if (has_masquerade) {
+        if (!has_interface) {
+            ICLI_PRINTF("%% interface is mandatory when masquerading. Notice that only one port can be specified, and that port becomes the masqueraded ingress port\n");
+            return ICLI_RC_ERROR;
+        }
+
+        switch_frm = TRUE;
+    } else {
+        switch_frm = !has_interface;
+    }
+
+    if (!switch_frm || has_masquerade) {
+        for (i = 0; i < plist->cnt; ++i) {
+            if (!msg_switch_is_local(plist->switch_range[i].isid)) {
+                // Cannot transmit on remote switches
+                continue;
+            }
+
+            for (j = 0; j < plist->switch_range[i].port_cnt; j++) {
+                iport = plist->switch_range[i].begin_iport + j;
+
+                port_mask |= VTSS_BIT64(iport);
+                port_no = iport;
+                port_cnt++;
+            }
+        }
+
+        if (has_masquerade && port_cnt != 1) {
+            ICLI_PRINTF("%% Exactly one port must be specified when masquerading\n");
+            return ICLI_RC_ERROR;
+        }
+
+        if (port_cnt == 0) {
+            ICLI_PRINTF("%% No ports selected\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    if (!has_fph) {
+        fph = 0;
+    }
+
+#if defined(VTSS_SW_OPTION_AFI)
+    // Keep Lint happy:
+    memset(&single_conf, 0, sizeof(single_conf));
+    vtss_clear(multi_conf);
+
+    if (has_fph || has_emix) {
+        if (port_cnt > 1) {
+            ICLI_PRINTF("%% Can only inject to one port when requesting AFI injection\n");
+            return ICLI_RC_ERROR;
+        }
+
+        if (switch_frm && !has_masquerade) {
+            ICLI_PRINTF("%% Cannot send AFI frames switched\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    if (has_fph) {
+        if ((rc = afi_single_conf_init(&single_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to initialize AFI single-frame flow configuration structure (%s)\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        single_conf.params.fph                = fph;
+        single_conf.params.first_frame_urgent = TRUE;
+    } else if (has_emix) {
+        if (PACKET_ICLI_emix_parse(session_id, emix, packet_length, frame_sizes_bytes.data()) != VTSS_RC_OK) {
+            return ICLI_RC_ERROR;
+        }
+
+        if ((rc = afi_multi_conf_init(&multi_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to initialize EMIX configuration structure (%s)\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        multi_conf.params.bps       = kbps * 1000LLU;
+        multi_conf.params.line_rate = has_data_rate ? FALSE : TRUE;
+        multi_conf.params.seq_cnt   = 0; // Keep running
+    }
+#else
+    // Avoid warnings
+    has_fph                = has_fph;
+    has_data_rate          = has_data_rate;
+    has_single_keep_paused = has_single_keep_paused;
+    has_multi_keep_paused  = has_multi_keep_paused;
+    fph                    = fph;
+    emix                   = emix;
+    kbps                   = kbps;
+#endif /* defined(VTSS_SW_OPTION_AFI) */
+
+    for (i = 0; i < array_size; i++) {
+        packet_tx_props_t *the_tx_props;
+
+        if (frame_sizes_bytes[i] == 0) {
+            break;
+        }
+
+#if defined(VTSS_SW_OPTION_AFI)
+        if (has_fph) {
+            the_tx_props = &single_conf.tx_props;
+        } else if (has_emix) {
+            the_tx_props = &multi_conf.tx_props[i];
+        } else
+#endif /* defined (VTSS_SW_OPTION_AFI) */
+        {
+            the_tx_props = &tx_props;
+        }
+
+        T_D("Frame size = %u bytes (incl. FCS)", frame_sizes_bytes[i]);
+
+        if ((buffer = packet_tx_alloc(frame_sizes_bytes[i] - 4 /* FCS */)) == NULL) {
+            ICLI_PRINTF("%% Couldn't allocate Tx buffer\n");
+            rc = VTSS_RC_ERROR;
+            goto do_exit;
+        }
+
+        if ((rc = PACKET_ICLI_frame_compose(session_id, buffer, frame_sizes_bytes[i], has_dmac, &dmac, has_smac, &smac, &otag, &itag, has_etype, etype, port_no, has_data, data, random_payload, fixed_payload_value)) != VTSS_RC_OK) {
+            goto do_exit;
+        }
+
+        if ((rc = PACKET_ICLI_frame_tx_props_setup(session_id, the_tx_props, buffer, frame_sizes_bytes[i], switch_frm, tag, port_mask, has_fph, has_emix, has_masquerade, port_no, has_rb_tag_disable, has_rb_dd_disable, has_rb_fwd_port_a, has_rb_fwd_port_b, has_rb_fwd_both)) != VTSS_RC_OK) {
+            goto do_exit;
+        }
+
+        if (!has_fph && !has_emix) {
+            // AFI flow start is deferred to after this loop.
+            if ((rc = PACKET_ICLI_frame_tx(session_id, the_tx_props)) != VTSS_RC_OK) {
+                goto do_exit;
+            }
+        }
+    }
+
+#if defined(VTSS_SW_OPTION_AFI)
+    if (has_fph) {
+        if ((rc = afi_single_alloc(&single_conf, &single_id)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to allocate single-frame AFI flow (%s)\n", error_txt(rc));
+            goto do_exit;
+        }
+
+        if (has_single_keep_paused) {
+            if ((rc = afi_single_frm_to_hw(single_id)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Unable to send frame to H/W (%s)\n", error_txt(rc));
+                (void)afi_single_free(single_id, NULL);
+                goto do_exit;
+            }
+        } else {
+            if ((rc = afi_single_pause_resume(single_id, FALSE)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Unable to start single-frame AFI flow (%s)\n", error_txt(rc));
+                (void)afi_single_free(single_id, NULL);
+                goto do_exit;
+            }
+        }
+    } else if (has_emix) {
+        if ((rc = afi_multi_alloc(&multi_conf, &multi_id)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to allocate an EMIX flow (%s)\n", error_txt(rc));
+            goto do_exit;
+        }
+
+        if (has_multi_keep_paused) {
+            if ((rc = afi_multi_frms_to_hw(multi_id)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Unable to send frames to H/W (%s)\n", error_txt(rc));
+                (void)afi_multi_free(multi_id, NULL);
+                goto do_exit;
+            }
+        } else {
+            if ((rc = afi_multi_pause_resume(multi_id, FALSE)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Unable to start EMIX flow (%s)\n", error_txt(rc));
+                (void)afi_multi_free(multi_id, NULL);
+                goto do_exit;
+            }
+        }
+    }
+#endif /* defined(VTSS_SW_OPTION_AFI) */
+
+do_exit:
+#if defined(VTSS_SW_OPTION_AFI)
+    // Whether or not an error occurred, we can safely
+    // free the packet buffers now when using the AFI.
+    if (has_fph || has_emix) {
+         // #buffer is guaranteed to be assigned to
+         // single_conf.tx_props.packet_info.frm or one of the
+         // multi_conf.tx_props[i].packet_info.frm pointers, which we will free
+         // below, so prevent it from being freed further below.
+         buffer = NULL;
+    }
+
+    if (has_fph) {
+        u8 *ptr = single_conf.tx_props.packet_info.frm;
+
+        if (ptr) {
+            packet_tx_free(ptr);
+        }
+    } else if (has_emix) {
+        for (i = 0; i < multi_conf.tx_props.size(); i++) {
+            u8 *ptr = multi_conf.tx_props[i].packet_info.frm;
+
+            if (ptr) {
+                packet_tx_free(ptr);
+            }
+        }
+    }
+#endif /* defined(VTSS_SW_OPTION_AFI) */
+
+    if (rc != VTSS_RC_OK) {
+
+        if (buffer) {
+            packet_tx_free(buffer);
+        }
+
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+HELP_FRAME_TX_CNT = Number of frames to transmit with one call to 'debug frame tx'
+
+CMD_BEGIN
+COMMAND   = debug show frame tx-cnt
+IF_FLAG   =
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##HELP_FRAME
+HELP      = ##HELP_FRAME_TX_CNT
+
+CODE_BEGIN
+    char buf[100];
+
+    if (PACKET_ICLI_sleep_ms) {
+        sprintf(buf, "%u ms", PACKET_ICLI_sleep_ms);
+    } else {
+        strcpy(buf, "Disabled");
+    }
+
+    ICLI_PRINTF("Tx count:              %lu\n", PACKET_ICLI_tx_cnt);
+    ICLI_PRINTF("DMAC++ for each Tx:    %s\n",  PACKET_ICLI_dmac_incr ? "Yes" : "No");
+    ICLI_PRINTF("SMAC++ for each Tx:    %s\n",  PACKET_ICLI_smac_incr ? "Yes" : "No");
+    ICLI_PRINTF("Sleep between each Tx: %s\n",  buf);
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND   = debug frame tx-cnt <uint> [dmac-incr] [smac-incr] [sleep <uint>]
+IF_FLAG   =
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##HELP_FRAME
+HELP      = ##HELP_FRAME_TX_CNT
+HELP      = Number of frames to Tx with one invocation of 'debug frame tx ...'
+HELP      = Increment DMAC for each Tx
+HELP      = Increment SMAC for each Tx
+HELP      = Sleep between each frame Tx
+HELP      = Number of millisecond to sleep between each frame Tx.
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = tx_cnt
+CMD_VAR   = has_dmac_incr
+CMD_VAR   = has_smac_incr
+CMD_VAR   = has_sleep
+CMD_VAR   = sleep_ms
+
+CODE_BEGIN
+    PACKET_ICLI_tx_cnt    = tx_cnt;
+    PACKET_ICLI_dmac_incr = has_dmac_incr;
+    PACKET_ICLI_smac_incr = has_smac_incr;
+    PACKET_ICLI_sleep_ms  = has_sleep ? sleep_ms : 0;
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(MSCC_BRSDK)
+
+COMMAND = debug ufdma
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! ufdma
+CMD_VAR =
+RUNTIME = PACKET_ICLI_runtime_icpu_present
+HELP    = VTSS uFDMA API
+BYWORD  =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    system("cat /proc/vc3fdma");
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(MSCC_BRSDK)
+
+COMMAND = debug frame capture [rx] [tx]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! frame
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! capture
+CMD_VAR =
+RUNTIME =
+HELP    = Enable capturing of frames to file: packet_trace. The size of the file is limited to 2MB, if the size of the file exceeds 2MB, packet tracing will be stopped
+BYWORD  =
+
+! rx
+CMD_VAR = has_rx
+RUNTIME =
+HELP    = Enable capturing of received frames
+BYWORD  =
+
+! tx
+CMD_VAR = has_tx
+RUNTIME =
+HELP    = Enable capturing of sent frames
+BYWORD  =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    packet_debug_rx_packet_trace(has_rx);
+    packet_debug_tx_packet_trace(has_tx);
+CODE_END
+CMD_END

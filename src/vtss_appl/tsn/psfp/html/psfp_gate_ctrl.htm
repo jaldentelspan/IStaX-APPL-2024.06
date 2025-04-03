@@ -1,0 +1,221 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>PSFP Stream Gate Configuration Overview</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="psfp_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_psfp_gate_ctrl.htm";
+
+// Global variables
+var configTable, variables;
+
+/******************************************************************************/
+// on_edit_button_click()
+/******************************************************************************/
+function on_edit_button_click()
+{
+    var elm_ids = this.id.split("_");
+    document.location.href = "psfp_gate_edit.htm?gateid=" + elm_ids[1];
+}
+
+/******************************************************************************/
+// on_del_submit_done()
+/******************************************************************************/
+function on_del_submit_done(gate_id, error_msg, last)
+{
+    if (error_msg) {
+        alert(error_msg);
+        return;
+    }
+
+    requestUpdate();
+}
+
+/******************************************************************************/
+// on_del_button_click()
+/******************************************************************************/
+function on_del_button_click()
+{
+    var elm_ids = this.id.split("_"), gate_id;
+
+    if (elm_ids[0] == "newDeleteButton") {
+        configTable.delNewRow("_", this.id);
+    } else {
+        gate_id = elm_ids[1];
+        psfp_lib_json_submit("psfp.config.gate.del", [[gate_id]], on_del_submit_done);
+    }
+}
+
+/******************************************************************************/
+// on_add_button_click()
+/******************************************************************************/
+function on_add_button_click()
+{
+    document.location.href = "psfp_gate_edit.htm";
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    // 1st row (numbers are colspan, rowspan)
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Stream Gate ID",       1, 2]},
+        {type: "disp_hdr", params: ["Enabled",              1, 2]},
+        {type: "disp_hdr", params: ["Gate State",           1, 2]},
+        {type: "disp_hdr", params: ["Cycle Time",           1, 2]},
+        {type: "disp_hdr", params: ["Cycle Time Extension", 1, 2]},
+        {type: "disp_hdr", params: ["Base Time",            2, 1]},
+        {type: "disp_hdr", params: ["IPV",                  1, 2]},
+        {type: "disp_hdr", params: ["Control List Length",  1, 2]},
+        {type: "disp_hdr", params: ["Close Gate Due To",    2, 1]},
+        {type: "disp_hdr", params: ["",                     2, 2]}]
+    });
+
+    // 2nd row
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Seconds"]},
+        {type: "disp_hdr", params: ["ISO 8601"]},
+        {type: "disp_hdr", params: ["Invalid Rx"]},
+        {type: "disp_hdr", params: ["Octets Exceeded"]}]
+    });
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(gate_id, conf)
+{
+    var row;
+
+    row = {fields: [
+        {type: "text",  params: [gate_id,                                                                                                           "cr"]},
+        {type: "text",  params: [conf.AdminGateEnabled ? "Yes" : "No",                                                                              "cl"]},
+        {type: "text",  params: [psfp_lib_gate_state_map[conf.AdminGateState],                                                                      "cl"]},
+        {type: "text",  params: [conf.AdminCycleTimeNumerator.toString()          + " " + psfp_lib_time_unit_map[conf.AdminCycleTimeUnit],          "cr"]},
+        {type: "text",  params: [conf.AdminCycleTimeExtensionNumerator.toString() + " " + psfp_lib_time_unit_map[conf.AdminCycleTimeExtensionUnit], "cr"]},
+        {type: "text",  params: [conf.AdminBaseTimeTxt,                                                                                             "cr"]},
+        {type: "text",  params: [conf.AdminBaseTimeIso8601,                                                                                         "cr"]},
+        {type: "text",  params: [psfp_lib_ipv_map[conf.AdminIpv],                                                                                   "cl"]},
+        {type: "text",  params: [conf.AdminGclLength,                                                                                               "cr"]},
+        {type: "text",  params: [conf.AdminCloseGateInvalidRxEnable      ? "Yes" : "No",                                                           "cl"]},
+        {type: "text",  params: [conf.AdminCloseGateOctetsExceededEnable ? "Yes" : "No",                                                           "cl"]},
+        {type: "image", params: ["c", "images/edit.gif", "Edit",   "Edit_"   + gate_id, on_edit_button_click]},
+        {type: "image", params: ["c", "images/del.gif",  "Delete", "Delete_" + gate_id, on_del_button_click]}]
+    };
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows = new Array();
+
+    // Add table header
+    add_header(table_rows);
+
+    // Add one row per gate ID.
+    Object.each(variables.gate_conf, function(record, idx) {
+        table_rows.push(add_row(record.key, record.val));
+    });
+
+    // The maximum number of stream gates that can be configured is limited by
+    // the allowed index range [0; capabilities.max_gate_instances[
+    table_rows.push(
+        {fields: [
+           {type: "text",  params: ["", "c", 12]},
+           {type: "image", params: ["c", "images/add.gif", "Add new stream gate", null, on_add_button_click]}]
+        });
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    new_gate_id = 0;
+
+    // Add table rows
+    var table_rows = add_rows();
+    configTable.addRows(table_rows);
+
+    // Update this dynamic table
+    configTable.update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate(recv_json)
+{
+    variables = {gate_conf: {}};
+    psfp_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    configTable = new DynamicTable("GateTableContent", "config");
+
+    psfp_lib_disable_button_add("refresh_button");
+
+    requestUpdate();
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>PSFP Stream Gate Configuration Overview</h1>
+
+<div class="refreshbar">
+  <input type="button" id="refresh_button" value="Refresh" onClick="requestUpdate(); this.blur();"/>
+  <img id="psfp_update" alt="" src="images/updating.gif">
+</div>
+
+<div id="GateTableContent"></div>
+
+</body>
+</html>
+

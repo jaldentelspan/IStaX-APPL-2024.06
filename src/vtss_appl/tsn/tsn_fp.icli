@@ -1,0 +1,990 @@
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include <vtss/appl/tsn.h>          /* For vtss_appl_tsn_XXX()                   */
+#include "tsn_api.h"                /* For vtss_appl_tsn_XXX()                   */
+#include "icli_cmd_func.h"          /* For icli_config_XXX()                     */
+#include "icli_porting_util.h"      /* For icli_port_info_txt()                  */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include "topo_api.h"               /* for topo_usid2isid()                      */
+#include "mgmt_api.h"               /* For mgmt_enum_descriptor2txt()            */
+#include "tsn_serializer.hxx"       /* For mgmt_enum_descriptor2txt()            */
+#include "tsn_fp_serializer.hxx"    /* For mgmt_enum_descriptor2txt()            */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+INCLUDE_END
+
+#define CAPA vtss_appl_tsn_capabilities
+
+FUNCTION_BEGIN
+
+#undef IC_RC
+#define IC_RC(expr) do {                              \
+    mesa_rc _rc_ = (expr);                            \
+    if (_rc_ != VTSS_RC_OK) {                            \
+        ICLI_PRINTF("%% TSN: %s!\n", error_txt(_rc_));\
+        return _rc_;                                  \
+    }                                                 \
+} while (0)
+
+#ifdef VTSS_SW_OPTION_ICFG
+
+// Helper macros:
+#define SHOW_(p)  ((req->all_defaults) || (c.p != dc.p))
+#define PRT_(...) do { VTSS_RC(vtss_icfg_printf(result, __VA_ARGS__)); } while (0)
+
+#define CAPA vtss_appl_tsn_capabilities
+
+/******************************************************************************/
+// TSN_fp_ICFG_port_conf()
+/******************************************************************************/
+static mesa_rc TSN_fp_ICFG_port_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_isid_t         isid = topo_usid2isid(req->instance_id.port.usid);
+    mesa_port_no_t      iport = uport2iport(req->instance_id.port.begin_uport);
+    vtss_ifindex_t      ifindex;
+    VTSS_RC(vtss_ifindex_from_port(isid, iport, &ifindex));
+
+    vtss_appl_tsn_fp_cfg_t dc;  // Default config
+    VTSS_RC(vtss_appl_tsn_fp_cfg_get_default(&dc));
+
+    vtss_appl_tsn_fp_cfg_t c;   // config
+    VTSS_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+
+    if (CAPA->has_queue_frame_preemption) {
+        int i;
+        if (SHOW_(enable_tx)) {
+            if (c.enable_tx) {
+                PRT_(" tsn frame-preemption\n");
+            } else {
+                PRT_(" no tsn frame-preemption\n");
+            }
+        }
+
+        if (SHOW_(verify_disable_tx)) {
+            if (c.verify_disable_tx) {
+                PRT_(" tsn frame-preemption verify-disable\n");
+            } else {
+                PRT_(" no tsn frame-preemption verify-disable\n");
+            }
+        }
+
+        if (SHOW_(ignore_lldp_tx)) {
+            if (c.ignore_lldp_tx) {
+                PRT_(" tsn frame-preemption ignore-lldp\n");
+            } else {
+                PRT_(" no tsn frame-preemption ignore-lldp\n");
+            }
+        }
+
+        for (i = 0; i < 8; i++) {
+            if (SHOW_(admin_status[i])) {
+                if (c.admin_status[i]) {
+                    PRT_(" tsn frame-preemption queue %d\n", i);
+                } else {
+                    PRT_(" no tsn frame-preemption queue %d\n", i);
+                }
+            }
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// tsn_fp_icfg_init()
+/******************************************************************************/
+mesa_rc tsn_fp_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_FP_PORT_CONF, "tsn", TSN_fp_ICFG_port_conf));
+    return VTSS_RC_OK;
+}
+
+#endif /* VTSS_SW_OPTION_ICFG */
+
+static BOOL TSN_ICLI_runtime_fp(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = CAPA->has_queue_frame_preemption;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+
+HELP_TSN                        = Time Sensitive Network (TSN)
+HELP_TSN_STATUS                 = Status
+HELP_TSN_INTERFACE              = Interface
+HELP_TSN_INTERFACE_LIST         = Interface selector
+
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show tsn frame-preemption status [ interface <port_type_list> ]
+
+DOC_CMD_DESC    = Displays the frame-preemption status
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show tsn frame-preemption status interface gi 1/1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption
+BYWORD  =
+
+! status
+CMD_VAR =
+RUNTIME =
+HELP    = Status of frame preemption
+BYWORD  =
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_INTERFACE
+BYWORD  = interface : Option
+
+! <port_type_list>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_TSN_INTERFACE_LIST
+BYWORD  = <Port : port_type_list>
+
+VARIABLE_BEGIN
+    port_iter_t               pit;
+    vtss_ifindex_t            ifindex;
+    vtss_appl_tsn_fp_status_t status;
+    char                      buf[128];
+    mesa_rc                   rc;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, port)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+
+        ICLI_PRINTF("interface %s\n", icli_port_info_txt(VTSS_ISID_START, pit.uport, buf));
+
+        if ((rc = vtss_appl_tsn_fp_status_get(ifindex, &status)) != VTSS_RC_OK) {
+            ICLI_PRINTF(" %s\n", error_txt(rc));
+            continue;
+        }
+
+        ICLI_PRINTF(" HoldAdvance         : %u nanoseconds\n", status.hold_advance);
+        ICLI_PRINTF(" ReleaseAdvance      : %u nanoseconds\n", status.release_advance);
+        ICLI_PRINTF(" PreemptionActive    : %s\n", status.preemption_active ? "TRUE" : "FALSE");
+        ICLI_PRINTF(" HoldRequest         : %s\n", status.hold_request ? "TRUE" : "FALSE");
+        ICLI_PRINTF(" StatusVerify        : %s\n", mgmt_enum_descriptor2txt(vtss_appl_tsn_mm_status_verify_txt, status.status_verify));
+        ICLI_PRINTF(" LocPreemptSupported : %s\n", status.loc_preempt_supported ? "TRUE" : "FALSE");
+        ICLI_PRINTF(" LocPreemptEnabled   : %s\n", status.loc_preempt_enabled ? "TRUE" : "FALSE");
+        ICLI_PRINTF(" LocPreemptActive    : %s\n", status.loc_preempt_active ? "TRUE" : "FALSE");
+        ICLI_PRINTF(" LocAddFragSize      : %u (%u octets)\n", status.loc_add_frag_size, (status.loc_add_frag_size + 1) * 64);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn frame-preemption
+
+DOC_CMD_DESC    = Enable frame-preemption on interface
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn frame-preemption
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption interface configuration
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_appl_tsn_fp_cfg_t  c;
+    vtss_ifindex_t          ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        c.enable_tx = TRUE;
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn frame-preemption
+
+DOC_CMD_DESC    = Disable frame-preemption on interface
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn frame-preemption
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption interface configuration
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_appl_tsn_fp_cfg_t  c;
+    vtss_ifindex_t          ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        c.enable_tx = FALSE;
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn frame-preemption verify-disable
+
+DOC_CMD_DESC    = Enable verify-disable on interface
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn frame-preemption verify-disable
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption interface configuration
+BYWORD  =
+
+! verify-disable
+CMD_VAR =
+RUNTIME =
+HELP    = Disable verification of preemption capability of link partner
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_appl_tsn_fp_cfg_t  c;
+    vtss_ifindex_t          ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        c.verify_disable_tx = TRUE;
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn frame-preemption verify-disable
+
+DOC_CMD_DESC    = Disable verify-disable on interface
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn frame-preemption verify-disable
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption interface configuration
+BYWORD  =
+
+! verify-disable
+CMD_VAR =
+RUNTIME =
+HELP    = Disable verification of preemption capability of link partner
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_appl_tsn_fp_cfg_t  c;
+    vtss_ifindex_t          ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        c.verify_disable_tx = FALSE;
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn frame-preemption queue <0~7>
+
+DOC_CMD_DESC    = Enable frame-preemption on specific queue(s)
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn frame-preemption queue 0-5
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption queue configuration
+BYWORD  =
+
+! queue
+CMD_VAR =
+RUNTIME =
+HELP    = Specify queue
+BYWORD  =
+
+! <0~7>
+CMD_VAR = queue
+RUNTIME =
+HELP    = Specific queue or range
+BYWORD  = <Queue : 0~7>
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_appl_tsn_fp_cfg_t  c;
+    u32                     queue_cnt;
+    u32                     queue_val;
+    vtss_ifindex_t          ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        if (queue) {
+            for (queue_cnt = 0; queue_cnt < queue->cnt; queue_cnt++) {
+                for (queue_val = queue->range[queue_cnt].min; queue_val <= queue->range[queue_cnt].max; queue_val++) {
+                    c.admin_status[queue_val] = TRUE;
+                }
+            }
+        }
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn frame-preemption queue <0~7>
+
+DOC_CMD_DESC    = Disable frame-preemption on specific queue(s)
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn frame-preemption queue 0-5
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption queue configuration
+BYWORD  =
+
+! queue
+CMD_VAR =
+RUNTIME =
+HELP    = Specify queue
+BYWORD  =
+
+! <queue:0~7>
+CMD_VAR = queue
+RUNTIME =
+HELP    = Specific queue or range
+BYWORD  = <Queue : 0~7>
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_appl_tsn_fp_cfg_t  c;
+    u32                     queue_cnt;
+    u32                     queue_val;
+    vtss_ifindex_t          ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        if (queue) {
+            for (queue_cnt = 0; queue_cnt < queue->cnt; queue_cnt++) {
+                for (queue_val = queue->range[queue_cnt].min; queue_val <= queue->range[queue_cnt].max; queue_val++) {
+                    c.admin_status[queue_val] = FALSE;
+                }
+            }
+        }
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug tsn frame-preemption add-frag-size <0-3>
+
+DOC_CMD_DESC    = Configure add-frag-size parameter.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = debug tsn frame-preemption add-frag-size 3
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! add-frag-size
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! add-frag-size value
+CMD_VAR = size
+RUNTIME =
+HELP    = size value 0-3 (meaning 64, 128,196, 256 bytes)
+BYWORD  =
+
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(tsn_util_debug_set_add_frag_size(ifindex, size));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug tsn frame-preemption [enable {tx-on|tx-off}] [verify-disable {on|off}] [queue <0~7>] [verify-time <0-128>] [frag-size <0-3>]
+
+DOC_CMD_DESC    = Call frame preemption API directly with parameters.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = debug tsn frame-preemption enable tx-on verify-disable off queue 0-3 verify-time 20 frag-size 0
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! enable
+CMD_VAR = has_enable
+RUNTIME =
+HELP    = Enable/disable frame-preemption tx
+BYWORD  =
+
+! has_tx_on
+CMD_VAR = has_tx_on
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! has_tx_off
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! verify-disable
+CMD_VAR = has_verify_disable
+RUNTIME =
+HELP    = Set verify-disable
+BYWORD  =
+
+! verify-disable on
+CMD_VAR = has_on
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! verify-disable off
+CMD_VAR =
+RUNTIME =
+HELP    = Set verify-disable on/off
+BYWORD  =
+
+! queue
+CMD_VAR = has_queue
+RUNTIME =
+HELP    = Specify queue
+BYWORD  =
+
+! <queue:0~7>
+CMD_VAR = queue
+RUNTIME =
+HELP    = Specific queue or range
+BYWORD  = <Queue : 0~7>
+
+! verify-time
+CMD_VAR = has_verify_time
+RUNTIME =
+HELP    = Set verify-time in millisecs
+BYWORD  =
+
+! <verify_time>
+CMD_VAR = verify_time
+RUNTIME =
+HELP    =
+BYWORD  =
+
+
+! frag-size
+CMD_VAR = has_frag_size
+RUNTIME =
+HELP    = Set frag-size
+BYWORD  =
+
+! <add_frag_size>
+CMD_VAR = frag_size
+RUNTIME =
+HELP    =
+BYWORD  =
+
+
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    u32                     queue_cnt;
+    u32                     queue_val;
+    mesa_qos_fp_port_conf_t api_conf = {};
+
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(mesa_qos_fp_port_conf_get(NULL, pit.iport, &api_conf));
+        ICLI_PRINTF("Cur tx_en:%u ver_dis:%u queue:%u %u %u %u %u %u %u %u time %u size %u \n",
+            api_conf.enable_tx,
+            api_conf.verify_disable_tx,
+            api_conf.admin_status[0], api_conf.admin_status[1],api_conf.admin_status[2], api_conf.admin_status[3],
+            api_conf.admin_status[4], api_conf.admin_status[5],api_conf.admin_status[6], api_conf.admin_status[7],
+            api_conf.verify_time,
+            api_conf.add_frag_size
+        );
+
+        if (has_enable) {
+            api_conf.enable_tx = (has_tx_on)?true:false;
+        }
+
+        if (has_verify_disable) {
+            api_conf.verify_disable_tx = (has_on)?true:false;
+        }
+
+        if (has_verify_time) {
+            api_conf.verify_time = verify_time;
+        }
+
+        if (has_queue) {
+            for (queue_cnt = 0; queue_cnt < queue->cnt; queue_cnt++) {
+                for (queue_val = queue->range[queue_cnt].min; queue_val <= queue->range[queue_cnt].max; queue_val++) {
+                    api_conf.admin_status[queue_val] = true;
+                }
+            }
+        }
+
+        if (has_frag_size) {
+            api_conf.add_frag_size = frag_size;
+        }
+
+        ICLI_PRINTF("New tx_en:%u ver_dis:%u queue:%u %u %u %u %u %u %u %u time %u size %u \n",
+            api_conf.enable_tx,
+            api_conf.verify_disable_tx,
+            api_conf.admin_status[0], api_conf.admin_status[1],api_conf.admin_status[2], api_conf.admin_status[3],
+            api_conf.admin_status[4], api_conf.admin_status[5],api_conf.admin_status[6], api_conf.admin_status[7],
+            api_conf.verify_time,
+            api_conf.add_frag_size
+        );
+
+        IC_RC(mesa_qos_fp_port_conf_set(NULL, pit.iport, &api_conf));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn frame-preemption ignore-lldp
+
+DOC_CMD_DESC    = Do not wait to receive lldp message before starting frame-preemption in transmit direction.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn frame-preemption ignore-lldp
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! ignore-lldp
+CMD_VAR =
+RUNTIME =
+HELP    = Do not wait to receive lldp message before starting frame-preemption in transmit direction.
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_fp_cfg_t  c;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        c.ignore_lldp_tx = TRUE;
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn frame-preemption ignore-lldp
+
+DOC_CMD_DESC    =  Wait to receive lldp message before starting frame-preemption in transmit direction.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn frame-preemption ignore-lldp
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_fp
+HELP    =
+BYWORD  =
+
+! frame-preemption
+CMD_VAR =
+RUNTIME =
+HELP    = Frame preemption queue configuration
+BYWORD  =
+
+! ignore-lldp
+CMD_VAR =
+RUNTIME =
+HELP    = Wait to receive lldp message before starting frame-preemption in transmit direction.
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_fp_cfg_t  c;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_fp_cfg_get(ifindex, &c));
+        c.ignore_lldp_tx = FALSE;
+        IC_RC(vtss_appl_tsn_fp_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END

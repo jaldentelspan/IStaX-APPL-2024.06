@@ -1,0 +1,393 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>OSPF6 IntraAreaPrefix Link State Database</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/mootools-more.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/format.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_ospf6_db_intra_area_prefix.htm";
+
+// Global variables
+var timerID; // For auto-refresh button
+
+var myDynamicTable /*, ospf6InstanceIdInfo*/ ; // For dynamic table
+
+var oTOspf6InstanceId = Array("All");
+var oVOspf6InstanceId = Array("0");
+var selectedInstanceId = 0;
+
+var oTLsdbType = Array("None", "Link", "Router", "Network", "InterAreaPrefix", "InterAreaRouter", "NSSA", "IntraAreaPrefix", "External");
+var oVLsdbType = Array("none", "link", "router", "network", "interAreaPrefix", "interAreaRouter", "nssa", "intraAreaPrefix", "external");
+
+var oTExtType = Array("-", "E1", "E2");
+var oVExtType = Array("none", "externalType1", "externalType2");
+
+var firstIndex = 0,
+    lastIndex = 0,
+    perPageEntryNum = 20,
+    total_num = 0;
+
+function addHeader(table_rows) {
+    //1st row
+    var row = {
+        fields: [
+            { type: "disp_hdr", params: ["Area ID"] },
+            { type: "disp_hdr", params: ["Link State Type"] },
+            { type: "disp_hdr", params: ["Link State ID"] },
+            { type: "disp_hdr", params: ["Advertising Router"] },
+            { type: "disp_hdr", params: ["Age (in seconds)"] },
+            { type: "disp_hdr", params: ["Sequence"] },
+            { type: "disp_hdr", params: ["Checksum"] },
+            { type: "disp_hdr", params: ["Length"] },
+            { type: "disp_hdr", params: ["Number of Links"] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+function addRow(key, val, idx) {
+    var row = {
+        fields: [
+            { type: "text", params: [key[1], "cr"] },
+            { type: "text", params: [oTLsdbType[oVLsdbType.indexOf(key[2])], "cl"] },
+            { type: "text", params: [key[3], "cr"] },
+            { type: "text", params: [key[4], "cr"] },
+            { type: "text", params: [val.Age, "cr"] },
+            { type: "text", params: ["0x" + val.Sequence.toString(16).toUpperCase(), "cr"] },
+            { type: "text", params: ["0x" + val.Checksum.toString(16).toUpperCase(), "cr"] },
+            { type: "text", params: [val.Length, "cr"] },
+            { type: "text", params: [key[2] == "intraAreaPrefix" ? val.PrefixCnt : "-", "cr"] }
+          ]
+    };
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 11;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record, idx) {
+        table_rows.push(addRow(record.key, record.val, idx));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+/* Return true when start_key <= key. Otherwise, return false. */
+function entryKeyGreatOrEqual(start_key, key) {
+    for (var idx = 0; idx < start_key.length; idx++) {
+        if (idx === 0) { // OSPF6 instance ID
+            if (oVOspf6InstanceId.indexOf(start_key[idx]) != parseInt(key[idx], 10)) {
+                return (oVOspf6InstanceId.indexOf(start_key[idx]) <= parseInt(key[idx], 10));
+            }
+        } else if (idx == 2) { // Link state type
+            if (oVLsdbType.indexOf(start_key[idx]) != oVLsdbType.indexOf(key[idx])) {
+                return (oVLsdbType.indexOf(start_key[idx]) <= oVLsdbType.indexOf(key[idx]));
+            }
+        } else if (Ipv4Str2Val(start_key[idx]) != Ipv4Str2Val(key[idx])) {
+            return (Ipv4Str2Val(start_key[idx]) <= Ipv4Str2Val(key[idx]));
+        }
+    }
+
+    return true;
+}
+
+function getEntryList(json_arry, key, updateOspf6InstanceIdSelectMenu) {
+    var entry_list = new Array();
+    var i;
+    var found_firstIndex = false;
+
+    if (updateOspf6InstanceIdSelectMenu) {
+        // Restore to default setting first
+        oTOspf6InstanceId = Array("All");
+        oVOspf6InstanceId = Array("0");
+    }
+
+    // Get the entry index which key is larger than or equal to the starting key
+    firstIndex = json_arry.length >= 1 ? json_arry.length - 1 : 0;
+    for (i = 0; i < json_arry.length; i++) {
+        if (updateOspf6InstanceIdSelectMenu && !oTOspf6InstanceId[json_arry[i].key[0]]) {
+            oTOspf6InstanceId.push(json_arry[i].key[0]);
+            oVOspf6InstanceId.push(json_arry[i].key[0]);
+        }
+
+        if (!found_firstIndex && entryKeyGreatOrEqual(key, json_arry[i].key)) {
+            found_firstIndex = true;
+            firstIndex = i;
+        }
+    }
+
+    lastIndex = Math.min(firstIndex + parseInt($("entriesNumPerPage").value, 10), total_num);
+    entry_list = json_arry.slice(firstIndex, lastIndex);
+
+    return entry_list;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected OSPF6 instance ID
+    // or equals the default configuration.
+    var myConf = new Array();
+    myConf = recv_json;
+
+    // myConf is saved when 'Refresh' occurs(i.e., '|<', '<<', '>>', and '>|' won't save myConf)
+    if (name) {
+        // Save the received JSON data (both of the original and filtered)
+        myDynamicTable.saveRecvJson(name, myConf);
+        myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+        // Get the table summary
+        total_num = myConf.length;
+        firstIndex = 0;
+        lastIndex = Math.min(total_num, $("entriesNumPerPage").value);
+
+        // Get the entries shown in the page.
+        selectedInstanceId = parseInt($("ospf6InstanceIdSelectMenu").options[$("ospf6InstanceIdSelectMenu").selectedIndex].value, 10);
+        var start_keys = [selectedInstanceId,
+                    $("startAreaId").value,
+                    $("startLsdbType").value,
+                    $("startLinkStateId").value,
+                    $("startAdvRouterId").value];
+        myConf = getEntryList(myConf, start_keys, true);
+    }
+
+    // Add table summery
+    $("summaryDesc").innerHTML = (total_num ? (firstIndex + 1) : 0) + " - " + (lastIndex) + " of " + total_num + (total_num > 1 ? " entries" : " entry");
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Update the first entry in the table into start entry
+    if (total_num && myConf.length) {
+        UpdateIdSelect("ospf6InstanceIdSelectMenu", oTOspf6InstanceId, oVOspf6InstanceId, myConf[0].key[0]);
+        UpdateIdValue("startAreaId", myConf[0].key[1]);
+        UpdateIdSetSelect("startLsdbType", myConf[0].key[2]);
+        UpdateIdValue("startLinkStateId", myConf[0].key[3]);
+        UpdateIdValue("startAdvRouterId", myConf[0].key[4]);
+    }
+
+    // Refresh timer
+    var autorefresh = $("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+
+    UpdatePageController();
+}
+
+/* Update the received HTML request */
+function requestUpdate() {
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("ospf6.status.db_detail.intraAreaPrefix.get", null, processUpdate, "status");
+}
+
+function GetFirstEntry() {
+    if (firstIndex) {
+        var orig_json = myDynamicTable.getRecvJson("status");
+        var start_keys = [0,
+            "0.0.0.0",
+            "none",
+            "0.0.0.0",
+            "0.0.0.0" ];
+        var entry_list = getEntryList(orig_json, start_keys, false);
+        processUpdate(entry_list);
+    }
+}
+
+// Disable '|<' and '<<' if the page is in the begining of the table.
+// Disable '>>' and '>|' in the page is in the end of the table.
+function UpdatePageController() {
+    if (!firstIndex) {
+        $("first_page").disabled = $("prev_page").disabled = true;
+    } else {
+        $("first_page").disabled = $("prev_page").disabled = false;
+    }
+
+    if (lastIndex == total_num) {
+        $("next_page").disabled = $("last_page").disabled = true;
+    } else {
+        $("next_page").disabled = $("last_page").disabled = false;
+    }
+}
+
+function GetPreviousEntry() {
+    if (firstIndex) {
+        var json_arry = new Array();
+        json_arry = myDynamicTable.getRecvJson("status");
+        lastIndex = firstIndex;
+        firstIndex = Math.max(lastIndex - parseInt($("entriesNumPerPage").value, 10), 0);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function GetNextEntry() {
+    if (lastIndex != total_num) {
+        var json_arry = new Array();
+        json_arry = myDynamicTable.getRecvJson("status");
+        firstIndex = lastIndex;
+        lastIndex = firstIndex + Math.min($("entriesNumPerPage").value, total_num - firstIndex);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function GetLastEntry() {
+    if (total_num && (lastIndex != total_num)) {
+        var json_arry = new Array();
+        var num_per_page = $("entriesNumPerPage").value;
+        json_arry = myDynamicTable.getRecvJson("status");
+        // 'total_num' must minus 1 to prevernt from errr in the condition that 'total_num' is the multiple 'num_per_page'
+        firstIndex = Math.floor((total_num - 1) / num_per_page) * num_per_page;
+        lastIndex = firstIndex + Math.min($("entriesNumPerPage").value, total_num - firstIndex);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function checkRefresh(fld) {
+    if (fld.checked) {
+        requestUpdate();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+/* Initialize resores when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+
+    // To ensure the completed data, we request the configured data after the
+    // instance data is received and it is requested only one time.
+    requestUpdate();
+});
+
+function checkForm() {
+    // Start options
+    if (!isIpStr("startAreaId", false, "'Area ID'", 2, false) ||
+        !isIpStr("startLinkStateId", false, "' Link State ID'", 2, false) ||
+        !isIpStr("startAdvRouterId", false, "' Adveretising Router ID'", 2, false)) {
+        return false;
+    }
+
+    // entriesNumPerPage
+    if (!isWithinRange("entriesNumPerPage", 1, 999, "'entries per page'")) {
+        return false;
+    }
+
+    return true;
+}
+
+    </script>
+</head>
+
+<body class="content">
+    <h1>OSPF6 IntraArea Prefix Link State Database</h1>
+    <p>
+        <span class="displaytext">Start from </span>
+        <!-- Start options: OSPF6 Instance ID -->
+        <!-- span class="displaytext">OSPF6 Instance ID </span -->
+        <select id="ospf6InstanceIdSelectMenu" style="display:none;">
+            <option value="0">All</option>
+        </select>
+        <!-- Start options: Area ID -->
+        <span class="displaytext">Area ID </span>
+        <input type="text" id="startAreaId" name="startAreaId" maxlength="15" size="15" value="0.0.0.0">
+        <!-- Start options: Link State Type -->
+        <span class="displaytext">, Link State Type </span>
+        <select id="startLsdbType" name="startLsdbType">
+            <option value="router" selected>Router</option>
+            <option value="network" selected>Network</option>
+            <option value="intraAreaPrefix">IntraArea Prefix</option>
+            <option value="interAreaPrefix">InterArea Prefix</option>
+            <option value="interAreaRouter">InterArea Router</option>
+            <option value="external">External</option>
+            <option value="link">Link</option>
+        </select>
+        <!-- Start options: Link State ID -->
+        <span class="displaytext">, Link State ID </span>
+        <input type="text" id="startLinkStateId" name="startLinkStateId" maxlength="15" size="15" value="0.0.0.0">
+        <!-- Start options: Advertising Router -->
+        <span class="displaytext">, Advertising Router </span>
+        <input type="text" id="startAdvRouterId" name="startAdvRouterId" maxlength="15" size="15" value="0.0.0.0">
+        <!-- Start options: entries number per page -->
+        <span class="displaytext"> with </span>
+        <input type="text" id="entriesNumPerPage" name="entriesNumPerPage" maxlength="3" size="3" value="20">
+        <span class="displaytext"> entries per page. </span>
+    </p>
+    <div class="refreshbar">
+        <span id="summaryDesc"></span> &nbsp;&nbsp;&nbsp;&nbsp;
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="if(!checkForm()) {return false;} checkRefresh(this);">
+        <input type="button" value="Refresh" onClick='if(!checkForm()) {return false;} requestUpdate(); this.blur();'>
+        <input type="button" id="first_page" value=" |<< " title="First page" onclick="if(!checkForm()) {return false;} GetFirstEntry();    this.blur();">
+        <input type="button" id="prev_page" value=" << " title="Previous page" onclick="if(!checkForm()) {return false;} GetPreviousEntry(); this.blur();">
+        <input type="button" id="next_page" value=" >> " title="Next page" onclick="if(!checkForm()) {return false;} GetNextEntry();     this.blur();">
+        <input type="button" id="last_page" value=" >>| " title="Last page" onclick="if(!checkForm()) {return false;} GetLastEntry();     this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+    <p>&nbsp;</p>
+</body>
+
+</html>

@@ -1,0 +1,275 @@
+-- *****************************************************************
+-- AGGR-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-AGGR-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    TruthValue FROM SNMPv2-TC
+    VTSSDisplayString FROM VTSS-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSPortList FROM VTSS-TC
+    VTSSPortStatusSpeed FROM VTSS-TC
+    ;
+
+vtssAggrMib MODULE-IDENTITY
+    LAST-UPDATED "201707310000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "This is a private mib of aggregation management"
+    REVISION    "201707310000Z"
+    DESCRIPTION
+        "Added new aggregation modes: disabled, reserved, static, lacpActive,
+         lacpPassive"
+    REVISION    "201507070000Z"
+    DESCRIPTION
+        "Port speed is moved into the TC MIB"
+    REVISION    "201411180000Z"
+    DESCRIPTION
+        "Added aggregation group status table"
+    REVISION    "201407010000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 19 }
+
+
+VTSSAggregationMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The aggregation mode."
+    SYNTAX      INTEGER { disabled(0), reserved(1), static(2),
+                          lacpActive(3), lacpPassive(4) }
+
+vtssAggrMibObjects OBJECT IDENTIFIER
+    ::= { vtssAggrMib 1 }
+
+vtssAggrConfig OBJECT IDENTIFIER
+    ::= { vtssAggrMibObjects 2 }
+
+vtssAggrConfigModeGlobals OBJECT IDENTIFIER
+    ::= { vtssAggrConfig 1 }
+
+vtssAggrConfigModeGlobalsSmacAddr OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to true to enable the use of the Source MAC address, or false to
+         disable. By default, Source MAC Address is enabled."
+    ::= { vtssAggrConfigModeGlobals 1 }
+
+vtssAggrConfigModeGlobalsDmacAddr OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to true to enable the use of the Destination MAC address, or false
+         to disable. By default, Destination MAC Address is disabled."
+    ::= { vtssAggrConfigModeGlobals 2 }
+
+vtssAggrConfigModeGlobalsSourceAndDestinationIpAddr OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to true to enable the use of the IP address, or false to disable.
+         By default, Destination MAC Address is enabled."
+    ::= { vtssAggrConfigModeGlobals 3 }
+
+vtssAggrConfigModeGlobalsTcpOrUdpSportAndDportNo OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to true to enable the use of the TCP/UDP Port Number, or false to
+         disable. By default, TCP/UDP Port Number is enabled."
+    ::= { vtssAggrConfigModeGlobals 4 }
+
+vtssAggrConfigGroupTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSAggrConfigGroupEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The table is static Link Aggregation Group configuration table. The
+         index is Aggregration Group Identifier."
+    ::= { vtssAggrConfig 2 }
+
+vtssAggrConfigGroupEntry OBJECT-TYPE
+    SYNTAX      VTSSAggrConfigGroupEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry has a set of parameters"
+    INDEX       { vtssAggrConfigGroupAggrIndexNo }
+    ::= { vtssAggrConfigGroupTable 1 }
+
+VTSSAggrConfigGroupEntry ::= SEQUENCE {
+    vtssAggrConfigGroupAggrIndexNo  VTSSInterfaceIndex,
+    vtssAggrConfigGroupPortMembers  VTSSPortList,
+    vtssAggrConfigGroupAggrMode     VTSSAggregationMode
+}
+
+vtssAggrConfigGroupAggrIndexNo OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Link Aggregation Group Identifier."
+    ::= { vtssAggrConfigGroupEntry 1 }
+
+vtssAggrConfigGroupPortMembers OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The bitmap type containing the port members' list for this aggregation
+         group."
+    ::= { vtssAggrConfigGroupEntry 2 }
+
+vtssAggrConfigGroupAggrMode OBJECT-TYPE
+    SYNTAX      VTSSAggregationMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Aggregation group mode."
+    ::= { vtssAggrConfigGroupEntry 3 }
+
+vtssAggrStatus OBJECT IDENTIFIER
+    ::= { vtssAggrMibObjects 3 }
+
+vtssAggrStatusGroupTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSAggrStatusGroupEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The table is Aggregation Group status table. The index is Aggregration
+         Group Identifier."
+    ::= { vtssAggrStatus 3 }
+
+vtssAggrStatusGroupEntry OBJECT-TYPE
+    SYNTAX      VTSSAggrStatusGroupEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry has a set of parameters"
+    INDEX       { vtssAggrStatusGroupAggrIndexNo }
+    ::= { vtssAggrStatusGroupTable 1 }
+
+VTSSAggrStatusGroupEntry ::= SEQUENCE {
+    vtssAggrStatusGroupAggrIndexNo      VTSSInterfaceIndex,
+    vtssAggrStatusGroupConfiguredPorts  VTSSPortList,
+    vtssAggrStatusGroupAggregatedPorts  VTSSPortList,
+    vtssAggrStatusGroupSpeed            VTSSPortStatusSpeed,
+    vtssAggrStatusGroupAggrMode         VTSSAggregationMode,
+    vtssAggrStatusGroupType             VTSSDisplayString
+}
+
+vtssAggrStatusGroupAggrIndexNo OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Link Aggregation Group Identifier."
+    ::= { vtssAggrStatusGroupEntry 1 }
+
+vtssAggrStatusGroupConfiguredPorts OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Configured member ports of the aggregation Group."
+    ::= { vtssAggrStatusGroupEntry 2 }
+
+vtssAggrStatusGroupAggregatedPorts OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Aggregated member ports of the aggregation Group."
+    ::= { vtssAggrStatusGroupEntry 3 }
+
+vtssAggrStatusGroupSpeed OBJECT-TYPE
+    SYNTAX      VTSSPortStatusSpeed
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Speed of the Aggregation Group."
+    ::= { vtssAggrStatusGroupEntry 4 }
+
+vtssAggrStatusGroupAggrMode OBJECT-TYPE
+    SYNTAX      VTSSAggregationMode
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Aggregation group mode."
+    ::= { vtssAggrStatusGroupEntry 5 }
+
+vtssAggrStatusGroupType OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Type of the Aggregation Group."
+    ::= { vtssAggrStatusGroupEntry 6 }
+
+vtssAggrMibConformance OBJECT IDENTIFIER
+    ::= { vtssAggrMib 2 }
+
+vtssAggrMibCompliances OBJECT IDENTIFIER
+    ::= { vtssAggrMibConformance 1 }
+
+vtssAggrMibGroups OBJECT IDENTIFIER
+    ::= { vtssAggrMibConformance 2 }
+
+vtssAggrConfigModeGlobalsInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssAggrConfigModeGlobalsSmacAddr,
+                  vtssAggrConfigModeGlobalsDmacAddr,
+                  vtssAggrConfigModeGlobalsSourceAndDestinationIpAddr,
+                  vtssAggrConfigModeGlobalsTcpOrUdpSportAndDportNo }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssAggrMibGroups 1 }
+
+vtssAggrConfigGroupTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssAggrConfigGroupAggrIndexNo,
+                  vtssAggrConfigGroupPortMembers,
+                  vtssAggrConfigGroupAggrMode }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssAggrMibGroups 2 }
+
+vtssAggrStatusGroupTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssAggrStatusGroupAggrIndexNo,
+                  vtssAggrStatusGroupConfiguredPorts,
+                  vtssAggrStatusGroupAggregatedPorts,
+                  vtssAggrStatusGroupSpeed,
+                  vtssAggrStatusGroupAggrMode,
+                  vtssAggrStatusGroupType }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssAggrMibGroups 3 }
+
+vtssAggrMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssAggrConfigModeGlobalsInfoGroup,
+                       vtssAggrConfigGroupTableInfoGroup,
+                       vtssAggrStatusGroupTableInfoGroup }
+
+    ::= { vtssAggrMibCompliances 1 }
+
+END

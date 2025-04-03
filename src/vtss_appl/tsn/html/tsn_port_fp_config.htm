@@ -1,0 +1,252 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Frame Preemption Configuration</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="tsn_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_tsn_port_fp_config.htm";
+
+var myDynamicTable, myPortInfo;
+var oTPort = Array(), oVPort = Array();
+
+function addHeader(table_rows)
+{
+    var row;
+
+    row = {fields:[
+            {type:"disp_hdr", params:["Port", 1, 2]},
+            {type:"disp_hdr", params:["Frame Preemption TX", 1, 2]},
+            {type:"disp_hdr", params:["Start without LLDP", 1, 2]},
+            {type:"disp_hdr", params:["Verify Disable TX", 1, 2]},
+            {type:"disp_hdr", params:["Preemptable Queues TX", 8]}
+            ]
+        };
+    table_rows.push(row);
+
+    // 2nd row
+    row = {fields:[
+                {type:"disp_hdr", params:["Q0"]},
+                {type:"disp_hdr", params:["Q1"]},
+                {type:"disp_hdr", params:["Q2"]},
+                {type:"disp_hdr", params:["Q3"]},
+                {type:"disp_hdr", params:["Q4"]},
+                {type:"disp_hdr", params:["Q5"]},
+                {type:"disp_hdr", params:["Q6"]},
+                {type:"disp_hdr", params:["Q7"]}
+            ]
+    };
+    table_rows.push(row);
+}
+
+function addRow(key, val)
+{
+    var row = {
+        fields:[
+                {type:"text",    params:[oTPort[oVPort.indexOf(key)], "cr"]},
+                {type:"chkbox",  params:[val.EnableTx,        "c", "EnableTx_" + key]},
+                {type:"chkbox",  params:[val.IgnoreLldpTx,    "c", "IgnoreLldpTx_" + key]},
+                {type:"chkbox",  params:[val.VerifyDisableTx, "c", "VerifyDisableTx_" + key]},
+                {type:"chkbox",  params:[val.AdminQ0,         "c", "AdminQ0_" + key]},
+                {type:"chkbox",  params:[val.AdminQ1,         "c", "AdminQ1_" + key]},
+                {type:"chkbox",  params:[val.AdminQ2,         "c", "AdminQ2_" + key]},
+                {type:"chkbox",  params:[val.AdminQ3,         "c", "AdminQ3_" + key]},
+                {type:"chkbox",  params:[val.AdminQ4,         "c", "AdminQ4_" + key]},
+                {type:"chkbox",  params:[val.AdminQ5,         "c", "AdminQ5_" + key]},
+                {type:"chkbox",  params:[val.AdminQ6,         "c", "AdminQ6_" + key]},
+                {type:"chkbox",  params:[val.AdminQ7,         "c", "AdminQ7_" + key]}
+                ]
+              };
+
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var table_rows = new Array();
+
+    addHeader(table_rows);
+
+    Object.each(recv_json, function(record) {
+        table_rows.push(addRow(record.key, record.val));
+    });
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson("config", recv_json);
+
+    // Add table rows
+    myDynamicTable.addRows(addRows(recv_json));
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+                                    { text: "*", className: "c" },
+                                    { name: "EnableTx_" },
+                                    { name: "IgnoreLldpTx_" },
+                                    { name: "VerifyDisableTx_" },
+                                    { name: "AdminQ0_" },
+                                    { name: "AdminQ1_" },
+                                    { name: "AdminQ2_" },
+                                    { name: "AdminQ3_" },
+                                    { name: "AdminQ4_" },
+                                    { name: "AdminQ5_" },
+                                    { name: "AdminQ6_" },
+                                    { name: "AdminQ7_" }
+                                    ]);
+
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("tsn.config.interface.fp.get", null, processUpdate, "config");
+}
+
+function clickCancel()
+{
+    document.location.href="tsn_port_fp_config.htm";
+}
+
+function resetForms()
+{
+    myDynamicTable.resetEvent();
+}
+
+function submitForms()
+{
+    var recv_json = myDynamicTable.getRecvJson("config");
+    var json_obj = {"EnableTx":false,"IgnoreLldpTx":false,"VerifyDisableTx":true,"VerifyTime":10,
+                    "AdminQ0":false,"AdminQ1":false,"AdminQ2":false,"AdminQ3":false,"AdminQ4":false,"AdminQ5":false,"AdminQ6":false,"AdminQ7":false};
+
+    resetPending();
+    Object.each(recv_json, function(record) {
+        var port = record.key;
+        json_obj["EnableTx"]        = $("EnableTx_"      + port).checked ? true : false;
+        json_obj["IgnoreLldpTx"]    = $("IgnoreLldpTx_"  + port).checked ? true : false;
+        json_obj["VerifyDisableTx"] = $("VerifyDisableTx_" + port).checked ? true : false;
+        json_obj["AdminQ0"]         = $("AdminQ0_"       + port).checked ? true : false;
+        json_obj["AdminQ1"]         = $("AdminQ1_"       + port).checked ? true : false;
+        json_obj["AdminQ2"]         = $("AdminQ2_"       + port).checked ? true : false;
+        json_obj["AdminQ3"]         = $("AdminQ3_"       + port).checked ? true : false;
+        json_obj["AdminQ4"]         = $("AdminQ4_"       + port).checked ? true : false;
+        json_obj["AdminQ5"]         = $("AdminQ5_"       + port).checked ? true : false;
+        json_obj["AdminQ6"]         = $("AdminQ6_"       + port).checked ? true : false;
+        json_obj["AdminQ7"]         = $("AdminQ7_"       + port).checked ? true : false;
+
+        // Only submit tsn.config.interface.fp.set if there are changes. 
+        // record.val is the value retrieved by the latest get command
+        // json_obj is calculated based on the values on Web page
+        if (JSON.stringify(record.val) != JSON.stringify(json_obj)) {
+            var submit_json = [record.key, json_obj];
+            incrementPending();
+            requestJsonDoc("tsn.config.interface.fp.set", submit_json, decrementPending);
+        }
+    });
+    requestUpdateWhenDone(500);
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myPortInfo) {
+        requestUpdate();
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+});
+ </script>
+</head>
+
+<body class="content">
+
+<h1>Frame Preemption Configuration</h1>
+
+<div class="refreshbar">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+<p>
+<input type="button" value="Save" onclick="submitForms();">
+<input type="button" value="Reset" onclick="resetForms();">
+<input type="button" value="Cancel" onclick="clickCancel();">
+</p>
+
+</body>
+</html>

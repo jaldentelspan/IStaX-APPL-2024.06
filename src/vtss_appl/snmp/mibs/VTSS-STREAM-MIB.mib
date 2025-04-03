@@ -1,0 +1,1753 @@
+-- *****************************************************************
+-- STREAM-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-STREAM-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    InetAddressIPv6 FROM INET-ADDRESS-MIB
+    IpAddress FROM SNMPv2-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    MacAddress FROM SNMPv2-TC
+    TruthValue FROM SNMPv2-TC
+    VTSSBitType FROM VTSS-TC
+    VTSSEtherType FROM VTSS-TC
+    VTSSPortList FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    ;
+
+vtssStreamMib MODULE-IDENTITY
+    LAST-UPDATED "202401290000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "Private MIB for Stream matching."
+    REVISION    "202401290000Z"
+    DESCRIPTION
+        "Added stream collection support"
+    REVISION    "202311230000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 166 }
+
+
+VTSSStreamDmacMatchType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "DMAC match type"
+    SYNTAX      INTEGER { any(0), multicast(1), broadcast(2),
+                          unicast(3), notBroadcast(4), notUnicast(5),
+                          valueMask(6) }
+
+VTSSStreamIpProtocolType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "IP protocol type"
+    SYNTAX      INTEGER { any(0), custom(1), tcp(2), udp(3) }
+
+VTSSStreamProtocolType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Protocol type"
+    SYNTAX      INTEGER { any(0), etype(1), llc(2), snap(3), ipv4(4),
+                          ipv6(5) }
+
+VTSSStreamRangeMatchType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Range match type"
+    SYNTAX      INTEGER { any(0), value(1), range(2) }
+
+VTSSStreamSnapOuiType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "SNAP OUI type"
+    SYNTAX      INTEGER { rfc1042(0), dot1h(1), custom(2) }
+
+VTSSStreamVlanTagType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "VLAN Tag type"
+    SYNTAX      INTEGER { any(0), cTagged(1), sTagged(2) }
+
+VTSSStreamlanTagMatchType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "VLAN Tag match type"
+    SYNTAX      INTEGER { both(0), untagged(1), tagged(2) }
+
+vtssStreamMibObjects OBJECT IDENTIFIER
+    ::= { vtssStreamMib 1 }
+
+vtssStreamCapabilities OBJECT IDENTIFIER
+    ::= { vtssStreamMibObjects 1 }
+
+vtssStreamCapabilitiesList OBJECT IDENTIFIER
+    ::= { vtssStreamCapabilities 1 }
+
+vtssStreamCapabilitiesListInstanceMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of creatable stream instances, numbered [1; max]."
+    ::= { vtssStreamCapabilitiesList 2 }
+
+vtssStreamCapabilitiesCollection OBJECT IDENTIFIER
+    ::= { vtssStreamCapabilities 2 }
+
+vtssStreamCapabilitiesCollectionInstanceMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of creatable stream collection instances, numbered [1;
+         max]."
+    ::= { vtssStreamCapabilitiesCollection 2 }
+
+vtssStreamCapabilitiesCollectionStreamsPerCollectionMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of streams per collection."
+    ::= { vtssStreamCapabilitiesCollection 3 }
+
+vtssStreamConfig OBJECT IDENTIFIER
+    ::= { vtssStreamMibObjects 2 }
+
+vtssStreamConfigTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSStreamConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Stream configuration table."
+    ::= { vtssStreamConfig 1 }
+
+vtssStreamConfigEntry OBJECT-TYPE
+    SYNTAX      VTSSStreamConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a stream used for traffic
+         filtering."
+    INDEX       { vtssStreamConfigStreamId }
+    ::= { vtssStreamConfigTable 1 }
+
+VTSSStreamConfigEntry ::= SEQUENCE {
+    vtssStreamConfigStreamId            Unsigned32,
+    vtssStreamConfigDmacMatchType       VTSSStreamDmacMatchType,
+    vtssStreamConfigDmac                MacAddress,
+    vtssStreamConfigDmacMask            MacAddress,
+    vtssStreamConfigSmac                MacAddress,
+    vtssStreamConfigSmacMask            MacAddress,
+    vtssStreamConfigOuterTag            VTSSStreamlanTagMatchType,
+    vtssStreamConfigOuterTagTagType     VTSSStreamVlanTagType,
+    vtssStreamConfigOuterTagVidValue    VTSSUnsigned16,
+    vtssStreamConfigOuterTagVidMask     VTSSUnsigned16,
+    vtssStreamConfigOuterTagPcpValue    VTSSUnsigned8,
+    vtssStreamConfigOuterTagPcpMask     VTSSUnsigned8,
+    vtssStreamConfigOuterTagDei         VTSSBitType,
+    vtssStreamConfigInnerTag            VTSSStreamlanTagMatchType,
+    vtssStreamConfigInnerTagTagType     VTSSStreamVlanTagType,
+    vtssStreamConfigInnerTagVidValue    VTSSUnsigned16,
+    vtssStreamConfigInnerTagVidMask     VTSSUnsigned16,
+    vtssStreamConfigInnerTagPcpValue    VTSSUnsigned8,
+    vtssStreamConfigInnerTagPcpMask     VTSSUnsigned8,
+    vtssStreamConfigInnerTagDei         VTSSBitType,
+    vtssStreamConfigProtocolType        VTSSStreamProtocolType,
+    vtssStreamConfigEtherType           VTSSEtherType,
+    vtssStreamConfigLlcDsap             VTSSUnsigned8,
+    vtssStreamConfigLlcSsap             VTSSUnsigned8,
+    vtssStreamConfigSnapOuiType         VTSSStreamSnapOuiType,
+    vtssStreamConfigSnapOui             OCTET STRING,
+    vtssStreamConfigSnapPid             VTSSUnsigned16,
+    vtssStreamConfigIpv4SipAddress      IpAddress,
+    vtssStreamConfigIpv4SipPrefixSize   Unsigned32,
+    vtssStreamConfigIpv4DipAddress      IpAddress,
+    vtssStreamConfigIpv4DipPrefixSize   Unsigned32,
+    vtssStreamConfigIpv4DscpMatchType   VTSSStreamRangeMatchType,
+    vtssStreamConfigIpv4DscpLow         VTSSUnsigned16,
+    vtssStreamConfigIpv4DscpHigh        VTSSUnsigned16,
+    vtssStreamConfigIpv4Fragment        VTSSBitType,
+    vtssStreamConfigIpv4ProtoType       VTSSStreamIpProtocolType,
+    vtssStreamConfigIpv4ProtoValue      VTSSUnsigned8,
+    vtssStreamConfigIpv4DportMatchType  VTSSStreamRangeMatchType,
+    vtssStreamConfigIpv4DportLow        VTSSUnsigned16,
+    vtssStreamConfigIpv4DportHigh       VTSSUnsigned16,
+    vtssStreamConfigIpv6SipAddress      InetAddressIPv6,
+    vtssStreamConfigIpv6SipPrefixSize   Unsigned32,
+    vtssStreamConfigIpv6DipAddress      InetAddressIPv6,
+    vtssStreamConfigIpv6DipPrefixSize   Unsigned32,
+    vtssStreamConfigIpv6DscpMatchType   VTSSStreamRangeMatchType,
+    vtssStreamConfigIpv6DscpLow         VTSSUnsigned16,
+    vtssStreamConfigIpv6DscpHigh        VTSSUnsigned16,
+    vtssStreamConfigIpv6ProtoType       VTSSStreamIpProtocolType,
+    vtssStreamConfigIpv6ProtoValue      VTSSUnsigned8,
+    vtssStreamConfigIpv6DportMatchType  VTSSStreamRangeMatchType,
+    vtssStreamConfigIpv6DportLow        VTSSUnsigned16,
+    vtssStreamConfigIpv6DportHigh       VTSSUnsigned16,
+    vtssStreamConfigPortList            VTSSPortList,
+    vtssStreamConfigAction              VTSSRowEditorState
+}
+
+vtssStreamConfigStreamId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Stream ID."
+    ::= { vtssStreamConfigEntry 1 }
+
+vtssStreamConfigDmacMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamDmacMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates which destination MAC address type to match on"
+    ::= { vtssStreamConfigEntry 2 }
+
+vtssStreamConfigDmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination MAC Address"
+    ::= { vtssStreamConfigEntry 3 }
+
+vtssStreamConfigDmacMask OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination MAC mask"
+    ::= { vtssStreamConfigEntry 4 }
+
+vtssStreamConfigSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "source MAC address"
+    ::= { vtssStreamConfigEntry 5 }
+
+vtssStreamConfigSmacMask OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "source MAC mask"
+    ::= { vtssStreamConfigEntry 6 }
+
+vtssStreamConfigOuterTag OBJECT-TYPE
+    SYNTAX      VTSSStreamlanTagMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on a VLAN tag, untagged, or both. Only if
+         matching on a VLAN tag is the remaining outerTagXXX options used."
+    ::= { vtssStreamConfigEntry 7 }
+
+vtssStreamConfigOuterTagTagType OBJECT-TYPE
+    SYNTAX      VTSSStreamVlanTagType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on both C-, S-, and S-custom tagged frames or
+         only C-tagged or only S- and S-custom tagged."
+    ::= { vtssStreamConfigEntry 8 }
+
+vtssStreamConfigOuterTagVidValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidMask together to form the VLAN ID(s) to match on."
+    ::= { vtssStreamConfigEntry 9 }
+
+vtssStreamConfigOuterTagVidMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidValue together to form the VLAN ID(s) to match on. Set
+         to all zeros in order not to match on any particular VLAN ID(s)."
+    ::= { vtssStreamConfigEntry 10 }
+
+vtssStreamConfigOuterTagPcpValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpMask together to form the PCP value(s) to match on."
+    ::= { vtssStreamConfigEntry 11 }
+
+vtssStreamConfigOuterTagPcpMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpValue together to form the PCP value(s) to match on.
+         Set to all zeros in order not to match on any particular PCP value(s)."
+    ::= { vtssStreamConfigEntry 12 }
+
+vtssStreamConfigOuterTagDei OBJECT-TYPE
+    SYNTAX      VTSSBitType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match any DEI, DEI value 0 or DEI value 1."
+    ::= { vtssStreamConfigEntry 13 }
+
+vtssStreamConfigInnerTag OBJECT-TYPE
+    SYNTAX      VTSSStreamlanTagMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on a VLAN tag, untagged, or both. Only if
+         matching on a VLAN tag is the remaining innerTagXXX options used."
+    ::= { vtssStreamConfigEntry 14 }
+
+vtssStreamConfigInnerTagTagType OBJECT-TYPE
+    SYNTAX      VTSSStreamVlanTagType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on both C-, S-, and S-custom tagged frames or
+         only C-tagged or only S- and S-custom tagged."
+    ::= { vtssStreamConfigEntry 15 }
+
+vtssStreamConfigInnerTagVidValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidMask together to form the VLAN ID(s) to match on."
+    ::= { vtssStreamConfigEntry 16 }
+
+vtssStreamConfigInnerTagVidMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidValue together to form the VLAN ID(s) to match on. Set
+         to all zeros in order not to match on any particular VLAN ID(s)."
+    ::= { vtssStreamConfigEntry 17 }
+
+vtssStreamConfigInnerTagPcpValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpMask together to form the PCP value(s) to match on."
+    ::= { vtssStreamConfigEntry 18 }
+
+vtssStreamConfigInnerTagPcpMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpValue together to form the PCP value(s) to match on.
+         Set to all zeros in order not to match on any particular PCP value(s)."
+    ::= { vtssStreamConfigEntry 19 }
+
+vtssStreamConfigInnerTagDei OBJECT-TYPE
+    SYNTAX      VTSSBitType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match any DEI, DEI value 0 or DEI value 1."
+    ::= { vtssStreamConfigEntry 20 }
+
+vtssStreamConfigProtocolType OBJECT-TYPE
+    SYNTAX      VTSSStreamProtocolType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Protocol type"
+    ::= { vtssStreamConfigEntry 21 }
+
+vtssStreamConfigEtherType OBJECT-TYPE
+    SYNTAX      VTSSEtherType (1536..65535)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "EtherType used when the selected protocol type is 'etype'. Must be in
+         range 0x600-0xffff"
+    ::= { vtssStreamConfigEntry 22 }
+
+vtssStreamConfigLlcDsap OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination Service Access Point. Used when the selected protocol type
+         is 'llc'"
+    ::= { vtssStreamConfigEntry 23 }
+
+vtssStreamConfigLlcSsap OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source Service Access Point. Used when the selected protocol type is
+         'llc'"
+    ::= { vtssStreamConfigEntry 24 }
+
+vtssStreamConfigSnapOuiType OBJECT-TYPE
+    SYNTAX      VTSSStreamSnapOuiType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "SNAP OUI type. Used when the selected protocol type is 'snap'"
+    ::= { vtssStreamConfigEntry 25 }
+
+vtssStreamConfigSnapOui OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE(3))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "SNAP OUI. Used when the selected protocol is 'snap' and the snapOuiType
+         is 'custom'"
+    ::= { vtssStreamConfigEntry 26 }
+
+vtssStreamConfigSnapPid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "SNAP Protocol ID. Used when the selected protocol type is 'snap'"
+    ::= { vtssStreamConfigEntry 27 }
+
+vtssStreamConfigIpv4SipAddress OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source IPv4 address to match on"
+    ::= { vtssStreamConfigEntry 28 }
+
+vtssStreamConfigIpv4SipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 source address' prefix size (0-32)"
+    ::= { vtssStreamConfigEntry 29 }
+
+vtssStreamConfigIpv4DipAddress OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination IPv4 address to match on"
+    ::= { vtssStreamConfigEntry 30 }
+
+vtssStreamConfigIpv4DipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 destination address' prefix size (0-32)"
+    ::= { vtssStreamConfigEntry 31 }
+
+vtssStreamConfigIpv4DscpMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any DSCP value, a particular DSCP value or
+         a range of DSCP values"
+    ::= { vtssStreamConfigEntry 32 }
+
+vtssStreamConfigIpv4DscpLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DscpMatchType is value or range, this indicates the low value
+         in the DSCP range"
+    ::= { vtssStreamConfigEntry 33 }
+
+vtssStreamConfigIpv4DscpHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DscpMatchType is range, this indicates the high value in the
+         DSCP range"
+    ::= { vtssStreamConfigEntry 34 }
+
+vtssStreamConfigIpv4Fragment OBJECT-TYPE
+    SYNTAX      VTSSBitType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Match on whether IPv4 header's MF is set or Fragment Offset > 0"
+    ::= { vtssStreamConfigEntry 35 }
+
+vtssStreamConfigIpv4ProtoType OBJECT-TYPE
+    SYNTAX      VTSSStreamIpProtocolType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on IPv4 header's protocol type, and if so,
+         which value"
+    ::= { vtssStreamConfigEntry 36 }
+
+vtssStreamConfigIpv4ProtoValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If ipv4ProtoType is Custom, this indicates the protocol value to match
+         on in IPv4 header"
+    ::= { vtssStreamConfigEntry 37 }
+
+vtssStreamConfigIpv4DportMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any TCP/UDP destination port value, a
+         particular value or a range of values"
+    ::= { vtssStreamConfigEntry 38 }
+
+vtssStreamConfigIpv4DportLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DportMatchType is value or range, this indicates the low value
+         in the UDP/TCP destination port range"
+    ::= { vtssStreamConfigEntry 39 }
+
+vtssStreamConfigIpv4DportHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DportMatchType is range, this indicates the high value in the
+         UDP/TCP destination poort range"
+    ::= { vtssStreamConfigEntry 40 }
+
+vtssStreamConfigIpv6SipAddress OBJECT-TYPE
+    SYNTAX      InetAddressIPv6
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source IPv6 address to match on"
+    ::= { vtssStreamConfigEntry 41 }
+
+vtssStreamConfigIpv6SipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv6 source address' prefix size (0-128)"
+    ::= { vtssStreamConfigEntry 42 }
+
+vtssStreamConfigIpv6DipAddress OBJECT-TYPE
+    SYNTAX      InetAddressIPv6
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination IPv6 address to match on"
+    ::= { vtssStreamConfigEntry 43 }
+
+vtssStreamConfigIpv6DipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv6 destination address' prefix size (0-128)"
+    ::= { vtssStreamConfigEntry 44 }
+
+vtssStreamConfigIpv6DscpMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any DSCP value, a particular DSCP value or
+         a range of DSCP values"
+    ::= { vtssStreamConfigEntry 45 }
+
+vtssStreamConfigIpv6DscpLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DscpMatchType is value or range, this indicates the low value
+         in the DSCP range"
+    ::= { vtssStreamConfigEntry 46 }
+
+vtssStreamConfigIpv6DscpHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DscpMatchType is range, this indicates the high value in the
+         DSCP range"
+    ::= { vtssStreamConfigEntry 47 }
+
+vtssStreamConfigIpv6ProtoType OBJECT-TYPE
+    SYNTAX      VTSSStreamIpProtocolType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on IPv6 header's protocol type, and if so,
+         which value"
+    ::= { vtssStreamConfigEntry 48 }
+
+vtssStreamConfigIpv6ProtoValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If ipv6ProtoType is Custom, this indicates the protocol value to match
+         on in IPv6 header"
+    ::= { vtssStreamConfigEntry 49 }
+
+vtssStreamConfigIpv6DportMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any TCP/UDP destination port value, a
+         particular value or a range of values"
+    ::= { vtssStreamConfigEntry 50 }
+
+vtssStreamConfigIpv6DportLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DportMatchType is value or range, this indicates the low value
+         in the UDP/TCP destination port range"
+    ::= { vtssStreamConfigEntry 51 }
+
+vtssStreamConfigIpv6DportHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DportMatchType is range, this indicates the high value in the
+         UDP/TCP destination poort range"
+    ::= { vtssStreamConfigEntry 52 }
+
+vtssStreamConfigPortList OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Ports on which this stream are installed."
+    ::= { vtssStreamConfigEntry 53 }
+
+vtssStreamConfigAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssStreamConfigEntry 100 }
+
+vtssStreamConfigRowEditor OBJECT IDENTIFIER
+    ::= { vtssStreamConfig 2 }
+
+vtssStreamConfigRowEditorStreamId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID."
+    ::= { vtssStreamConfigRowEditor 1 }
+
+vtssStreamConfigRowEditorDmacMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamDmacMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates which destination MAC address type to match on"
+    ::= { vtssStreamConfigRowEditor 2 }
+
+vtssStreamConfigRowEditorDmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination MAC Address"
+    ::= { vtssStreamConfigRowEditor 3 }
+
+vtssStreamConfigRowEditorDmacMask OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination MAC mask"
+    ::= { vtssStreamConfigRowEditor 4 }
+
+vtssStreamConfigRowEditorSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "source MAC address"
+    ::= { vtssStreamConfigRowEditor 5 }
+
+vtssStreamConfigRowEditorSmacMask OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "source MAC mask"
+    ::= { vtssStreamConfigRowEditor 6 }
+
+vtssStreamConfigRowEditorOuterTag OBJECT-TYPE
+    SYNTAX      VTSSStreamlanTagMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on a VLAN tag, untagged, or both. Only if
+         matching on a VLAN tag is the remaining outerTagXXX options used."
+    ::= { vtssStreamConfigRowEditor 7 }
+
+vtssStreamConfigRowEditorOuterTagTagType OBJECT-TYPE
+    SYNTAX      VTSSStreamVlanTagType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on both C-, S-, and S-custom tagged frames or
+         only C-tagged or only S- and S-custom tagged."
+    ::= { vtssStreamConfigRowEditor 8 }
+
+vtssStreamConfigRowEditorOuterTagVidValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidMask together to form the VLAN ID(s) to match on."
+    ::= { vtssStreamConfigRowEditor 9 }
+
+vtssStreamConfigRowEditorOuterTagVidMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidValue together to form the VLAN ID(s) to match on. Set
+         to all zeros in order not to match on any particular VLAN ID(s)."
+    ::= { vtssStreamConfigRowEditor 10 }
+
+vtssStreamConfigRowEditorOuterTagPcpValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpMask together to form the PCP value(s) to match on."
+    ::= { vtssStreamConfigRowEditor 11 }
+
+vtssStreamConfigRowEditorOuterTagPcpMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpValue together to form the PCP value(s) to match on.
+         Set to all zeros in order not to match on any particular PCP value(s)."
+    ::= { vtssStreamConfigRowEditor 12 }
+
+vtssStreamConfigRowEditorOuterTagDei OBJECT-TYPE
+    SYNTAX      VTSSBitType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match any DEI, DEI value 0 or DEI value 1."
+    ::= { vtssStreamConfigRowEditor 13 }
+
+vtssStreamConfigRowEditorInnerTag OBJECT-TYPE
+    SYNTAX      VTSSStreamlanTagMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on a VLAN tag, untagged, or both. Only if
+         matching on a VLAN tag is the remaining innerTagXXX options used."
+    ::= { vtssStreamConfigRowEditor 14 }
+
+vtssStreamConfigRowEditorInnerTagTagType OBJECT-TYPE
+    SYNTAX      VTSSStreamVlanTagType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on both C-, S-, and S-custom tagged frames or
+         only C-tagged or only S- and S-custom tagged."
+    ::= { vtssStreamConfigRowEditor 15 }
+
+vtssStreamConfigRowEditorInnerTagVidValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidMask together to form the VLAN ID(s) to match on."
+    ::= { vtssStreamConfigRowEditor 16 }
+
+vtssStreamConfigRowEditorInnerTagVidMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and VidValue together to form the VLAN ID(s) to match on. Set
+         to all zeros in order not to match on any particular VLAN ID(s)."
+    ::= { vtssStreamConfigRowEditor 17 }
+
+vtssStreamConfigRowEditorInnerTagPcpValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpMask together to form the PCP value(s) to match on."
+    ::= { vtssStreamConfigRowEditor 18 }
+
+vtssStreamConfigRowEditorInnerTagPcpMask OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Use this and PcpValue together to form the PCP value(s) to match on.
+         Set to all zeros in order not to match on any particular PCP value(s)."
+    ::= { vtssStreamConfigRowEditor 19 }
+
+vtssStreamConfigRowEditorInnerTagDei OBJECT-TYPE
+    SYNTAX      VTSSBitType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match any DEI, DEI value 0 or DEI value 1."
+    ::= { vtssStreamConfigRowEditor 20 }
+
+vtssStreamConfigRowEditorProtocolType OBJECT-TYPE
+    SYNTAX      VTSSStreamProtocolType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Protocol type"
+    ::= { vtssStreamConfigRowEditor 21 }
+
+vtssStreamConfigRowEditorEtherType OBJECT-TYPE
+    SYNTAX      VTSSEtherType (1536..65535)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "EtherType used when the selected protocol type is 'etype'. Must be in
+         range 0x600-0xffff"
+    ::= { vtssStreamConfigRowEditor 22 }
+
+vtssStreamConfigRowEditorLlcDsap OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination Service Access Point. Used when the selected protocol type
+         is 'llc'"
+    ::= { vtssStreamConfigRowEditor 23 }
+
+vtssStreamConfigRowEditorLlcSsap OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source Service Access Point. Used when the selected protocol type is
+         'llc'"
+    ::= { vtssStreamConfigRowEditor 24 }
+
+vtssStreamConfigRowEditorSnapOuiType OBJECT-TYPE
+    SYNTAX      VTSSStreamSnapOuiType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "SNAP OUI type. Used when the selected protocol type is 'snap'"
+    ::= { vtssStreamConfigRowEditor 25 }
+
+vtssStreamConfigRowEditorSnapOui OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE(3))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "SNAP OUI. Used when the selected protocol is 'snap' and the snapOuiType
+         is 'custom'"
+    ::= { vtssStreamConfigRowEditor 26 }
+
+vtssStreamConfigRowEditorSnapPid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "SNAP Protocol ID. Used when the selected protocol type is 'snap'"
+    ::= { vtssStreamConfigRowEditor 27 }
+
+vtssStreamConfigRowEditorIpv4SipAddress OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source IPv4 address to match on"
+    ::= { vtssStreamConfigRowEditor 28 }
+
+vtssStreamConfigRowEditorIpv4SipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 source address' prefix size (0-32)"
+    ::= { vtssStreamConfigRowEditor 29 }
+
+vtssStreamConfigRowEditorIpv4DipAddress OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination IPv4 address to match on"
+    ::= { vtssStreamConfigRowEditor 30 }
+
+vtssStreamConfigRowEditorIpv4DipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 destination address' prefix size (0-32)"
+    ::= { vtssStreamConfigRowEditor 31 }
+
+vtssStreamConfigRowEditorIpv4DscpMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any DSCP value, a particular DSCP value or
+         a range of DSCP values"
+    ::= { vtssStreamConfigRowEditor 32 }
+
+vtssStreamConfigRowEditorIpv4DscpLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DscpMatchType is value or range, this indicates the low value
+         in the DSCP range"
+    ::= { vtssStreamConfigRowEditor 33 }
+
+vtssStreamConfigRowEditorIpv4DscpHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DscpMatchType is range, this indicates the high value in the
+         DSCP range"
+    ::= { vtssStreamConfigRowEditor 34 }
+
+vtssStreamConfigRowEditorIpv4Fragment OBJECT-TYPE
+    SYNTAX      VTSSBitType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Match on whether IPv4 header's MF is set or Fragment Offset > 0"
+    ::= { vtssStreamConfigRowEditor 35 }
+
+vtssStreamConfigRowEditorIpv4ProtoType OBJECT-TYPE
+    SYNTAX      VTSSStreamIpProtocolType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on IPv4 header's protocol type, and if so,
+         which value"
+    ::= { vtssStreamConfigRowEditor 36 }
+
+vtssStreamConfigRowEditorIpv4ProtoValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If ipv4ProtoType is Custom, this indicates the protocol value to match
+         on in IPv4 header"
+    ::= { vtssStreamConfigRowEditor 37 }
+
+vtssStreamConfigRowEditorIpv4DportMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any TCP/UDP destination port value, a
+         particular value or a range of values"
+    ::= { vtssStreamConfigRowEditor 38 }
+
+vtssStreamConfigRowEditorIpv4DportLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DportMatchType is value or range, this indicates the low value
+         in the UDP/TCP destination port range"
+    ::= { vtssStreamConfigRowEditor 39 }
+
+vtssStreamConfigRowEditorIpv4DportHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv4DportMatchType is range, this indicates the high value in the
+         UDP/TCP destination poort range"
+    ::= { vtssStreamConfigRowEditor 40 }
+
+vtssStreamConfigRowEditorIpv6SipAddress OBJECT-TYPE
+    SYNTAX      InetAddressIPv6
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source IPv6 address to match on"
+    ::= { vtssStreamConfigRowEditor 41 }
+
+vtssStreamConfigRowEditorIpv6SipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv6 source address' prefix size (0-128)"
+    ::= { vtssStreamConfigRowEditor 42 }
+
+vtssStreamConfigRowEditorIpv6DipAddress OBJECT-TYPE
+    SYNTAX      InetAddressIPv6
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Destination IPv6 address to match on"
+    ::= { vtssStreamConfigRowEditor 43 }
+
+vtssStreamConfigRowEditorIpv6DipPrefixSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv6 destination address' prefix size (0-128)"
+    ::= { vtssStreamConfigRowEditor 44 }
+
+vtssStreamConfigRowEditorIpv6DscpMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any DSCP value, a particular DSCP value or
+         a range of DSCP values"
+    ::= { vtssStreamConfigRowEditor 45 }
+
+vtssStreamConfigRowEditorIpv6DscpLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DscpMatchType is value or range, this indicates the low value
+         in the DSCP range"
+    ::= { vtssStreamConfigRowEditor 46 }
+
+vtssStreamConfigRowEditorIpv6DscpHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DscpMatchType is range, this indicates the high value in the
+         DSCP range"
+    ::= { vtssStreamConfigRowEditor 47 }
+
+vtssStreamConfigRowEditorIpv6ProtoType OBJECT-TYPE
+    SYNTAX      VTSSStreamIpProtocolType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select whether to match on IPv6 header's protocol type, and if so,
+         which value"
+    ::= { vtssStreamConfigRowEditor 48 }
+
+vtssStreamConfigRowEditorIpv6ProtoValue OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If ipv6ProtoType is Custom, this indicates the protocol value to match
+         on in IPv6 header"
+    ::= { vtssStreamConfigRowEditor 49 }
+
+vtssStreamConfigRowEditorIpv6DportMatchType OBJECT-TYPE
+    SYNTAX      VTSSStreamRangeMatchType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether to match on any TCP/UDP destination port value, a
+         particular value or a range of values"
+    ::= { vtssStreamConfigRowEditor 50 }
+
+vtssStreamConfigRowEditorIpv6DportLow OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DportMatchType is value or range, this indicates the low value
+         in the UDP/TCP destination port range"
+    ::= { vtssStreamConfigRowEditor 51 }
+
+vtssStreamConfigRowEditorIpv6DportHigh OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When ipv6DportMatchType is range, this indicates the high value in the
+         UDP/TCP destination poort range"
+    ::= { vtssStreamConfigRowEditor 52 }
+
+vtssStreamConfigRowEditorPortList OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Ports on which this stream are installed."
+    ::= { vtssStreamConfigRowEditor 53 }
+
+vtssStreamConfigRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssStreamConfigRowEditor 100 }
+
+vtssStreamConfigCollectionTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSStreamConfigCollectionEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Stream collection configuration table."
+    ::= { vtssStreamConfig 3 }
+
+vtssStreamConfigCollectionEntry OBJECT-TYPE
+    SYNTAX      VTSSStreamConfigCollectionEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a stream collection used to gather
+         streams for traffic filtering."
+    INDEX       { vtssStreamConfigCollectionStreamCollectionId }
+    ::= { vtssStreamConfigCollectionTable 1 }
+
+VTSSStreamConfigCollectionEntry ::= SEQUENCE {
+    vtssStreamConfigCollectionStreamCollectionId  Unsigned32,
+    vtssStreamConfigCollectionStreamId0           Unsigned32,
+    vtssStreamConfigCollectionStreamId1           Unsigned32,
+    vtssStreamConfigCollectionStreamId2           Unsigned32,
+    vtssStreamConfigCollectionStreamId3           Unsigned32,
+    vtssStreamConfigCollectionStreamId4           Unsigned32,
+    vtssStreamConfigCollectionStreamId5           Unsigned32,
+    vtssStreamConfigCollectionStreamId6           Unsigned32,
+    vtssStreamConfigCollectionStreamId7           Unsigned32,
+    vtssStreamConfigCollectionAction              VTSSRowEditorState
+}
+
+vtssStreamConfigCollectionStreamCollectionId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Stream collection ID."
+    ::= { vtssStreamConfigCollectionEntry 1 }
+
+vtssStreamConfigCollectionStreamId0 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 0"
+    ::= { vtssStreamConfigCollectionEntry 2 }
+
+vtssStreamConfigCollectionStreamId1 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 1"
+    ::= { vtssStreamConfigCollectionEntry 3 }
+
+vtssStreamConfigCollectionStreamId2 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 2"
+    ::= { vtssStreamConfigCollectionEntry 4 }
+
+vtssStreamConfigCollectionStreamId3 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 3"
+    ::= { vtssStreamConfigCollectionEntry 5 }
+
+vtssStreamConfigCollectionStreamId4 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 4"
+    ::= { vtssStreamConfigCollectionEntry 6 }
+
+vtssStreamConfigCollectionStreamId5 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 5"
+    ::= { vtssStreamConfigCollectionEntry 7 }
+
+vtssStreamConfigCollectionStreamId6 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 6"
+    ::= { vtssStreamConfigCollectionEntry 8 }
+
+vtssStreamConfigCollectionStreamId7 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 7"
+    ::= { vtssStreamConfigCollectionEntry 9 }
+
+vtssStreamConfigCollectionAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssStreamConfigCollectionEntry 100 }
+
+vtssStreamConfigCollectionRowEditor OBJECT IDENTIFIER
+    ::= { vtssStreamConfig 4 }
+
+vtssStreamConfigCollectionRowEditorStreamCollectionId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream collection ID."
+    ::= { vtssStreamConfigCollectionRowEditor 1 }
+
+vtssStreamConfigCollectionRowEditorStreamId0 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 0"
+    ::= { vtssStreamConfigCollectionRowEditor 2 }
+
+vtssStreamConfigCollectionRowEditorStreamId1 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 1"
+    ::= { vtssStreamConfigCollectionRowEditor 3 }
+
+vtssStreamConfigCollectionRowEditorStreamId2 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 2"
+    ::= { vtssStreamConfigCollectionRowEditor 4 }
+
+vtssStreamConfigCollectionRowEditorStreamId3 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 3"
+    ::= { vtssStreamConfigCollectionRowEditor 5 }
+
+vtssStreamConfigCollectionRowEditorStreamId4 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 4"
+    ::= { vtssStreamConfigCollectionRowEditor 6 }
+
+vtssStreamConfigCollectionRowEditorStreamId5 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 5"
+    ::= { vtssStreamConfigCollectionRowEditor 7 }
+
+vtssStreamConfigCollectionRowEditorStreamId6 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 6"
+    ::= { vtssStreamConfigCollectionRowEditor 8 }
+
+vtssStreamConfigCollectionRowEditorStreamId7 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream ID list element 7"
+    ::= { vtssStreamConfigCollectionRowEditor 9 }
+
+vtssStreamConfigCollectionRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssStreamConfigCollectionRowEditor 100 }
+
+vtssStreamStatus OBJECT IDENTIFIER
+    ::= { vtssStreamMibObjects 3 }
+
+vtssStreamStatusTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSStreamStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Contains status per stream
+         
+         "
+    ::= { vtssStreamStatus 1 }
+
+vtssStreamStatusEntry OBJECT-TYPE
+    SYNTAX      VTSSStreamStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Stream ID
+         
+         "
+    INDEX       { vtssStreamStatusStreamId }
+    ::= { vtssStreamStatusTable 1 }
+
+VTSSStreamStatusEntry ::= SEQUENCE {
+    vtssStreamStatusStreamId                      Unsigned32,
+    vtssStreamStatusStreamCollectionId            Unsigned32,
+    vtssStreamStatusWarningNone                   TruthValue,
+    vtssStreamStatusWarningNotInstalledOnAnyPort  TruthValue,
+    vtssStreamStatusWarningNoClientsAttached      TruthValue,
+    vtssStreamStatusPsfpClientAttached            TruthValue,
+    vtssStreamStatusPsfpClientId                  Unsigned32,
+    vtssStreamStatusFrerClientAttached            TruthValue,
+    vtssStreamStatusFrerClientId                  Unsigned32
+}
+
+vtssStreamStatusStreamId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Stream ID."
+    ::= { vtssStreamStatusEntry 1 }
+
+vtssStreamStatusStreamCollectionId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "If non-zero, indicates the stream collection this stream is part of."
+    ::= { vtssStreamStatusEntry 2 }
+
+vtssStreamStatusWarningNone OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "No configurational warnings found."
+    ::= { vtssStreamStatusEntry 3 }
+
+vtssStreamStatusWarningNotInstalledOnAnyPort OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The stream does not have any member ports"
+    ::= { vtssStreamStatusEntry 4 }
+
+vtssStreamStatusWarningNoClientsAttached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      obsolete
+    DESCRIPTION
+        "Obsolete. Will always be false"
+    ::= { vtssStreamStatusEntry 5 }
+
+vtssStreamStatusPsfpClientAttached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether psfp is attached to this stream"
+    ::= { vtssStreamStatusEntry 6 }
+
+vtssStreamStatusPsfpClientId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "If psfp is attached to this stream, this indicates its internal
+         reference."
+    ::= { vtssStreamStatusEntry 7 }
+
+vtssStreamStatusFrerClientAttached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether frer is attached to this stream"
+    ::= { vtssStreamStatusEntry 8 }
+
+vtssStreamStatusFrerClientId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "If frer is attached to this stream, this indicates its internal
+         reference."
+    ::= { vtssStreamStatusEntry 9 }
+
+vtssStreamStatusCollectionTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSStreamStatusCollectionEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Contains status per stream collection
+         
+         "
+    ::= { vtssStreamStatus 2 }
+
+vtssStreamStatusCollectionEntry OBJECT-TYPE
+    SYNTAX      VTSSStreamStatusCollectionEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Stream Collection ID
+         
+         "
+    INDEX       { vtssStreamStatusCollectionStreamCollectionId }
+    ::= { vtssStreamStatusCollectionTable 1 }
+
+VTSSStreamStatusCollectionEntry ::= SEQUENCE {
+    vtssStreamStatusCollectionStreamCollectionId                  Unsigned32,
+    vtssStreamStatusCollectionWarningNone                         TruthValue,
+    vtssStreamStatusCollectionWarningNoStreamsAttached            TruthValue,
+    vtssStreamStatusCollectionWarningNoClientsAttached            TruthValue,
+    vtssStreamStatusCollectionWarningAtLeastOneStreamHasOperWarn  TruthValue,
+    vtssStreamStatusCollectionPsfpClientAttached                  TruthValue,
+    vtssStreamStatusCollectionPsfpClientId                        Unsigned32,
+    vtssStreamStatusCollectionFrerClientAttached                  TruthValue,
+    vtssStreamStatusCollectionFrerClientId                        Unsigned32
+}
+
+vtssStreamStatusCollectionStreamCollectionId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Stream collection ID."
+    ::= { vtssStreamStatusCollectionEntry 1 }
+
+vtssStreamStatusCollectionWarningNone OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "No configurational warnings found."
+    ::= { vtssStreamStatusCollectionEntry 2 }
+
+vtssStreamStatusCollectionWarningNoStreamsAttached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "No streams attached"
+    ::= { vtssStreamStatusCollectionEntry 3 }
+
+vtssStreamStatusCollectionWarningNoClientsAttached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "No clients attached"
+    ::= { vtssStreamStatusCollectionEntry 4 }
+
+vtssStreamStatusCollectionWarningAtLeastOneStreamHasOperWarn OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the attached streams has configurational warnings"
+    ::= { vtssStreamStatusCollectionEntry 5 }
+
+vtssStreamStatusCollectionPsfpClientAttached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether psfp is attached to this stream collection"
+    ::= { vtssStreamStatusCollectionEntry 6 }
+
+vtssStreamStatusCollectionPsfpClientId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "If psfp is attached to this stream collection, this indicates its
+         internal reference."
+    ::= { vtssStreamStatusCollectionEntry 7 }
+
+vtssStreamStatusCollectionFrerClientAttached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether frer is attached to this stream collection"
+    ::= { vtssStreamStatusCollectionEntry 8 }
+
+vtssStreamStatusCollectionFrerClientId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "If frer is attached to this stream collection, this indicates its
+         internal reference."
+    ::= { vtssStreamStatusCollectionEntry 9 }
+
+vtssStreamMibConformance OBJECT IDENTIFIER
+    ::= { vtssStreamMib 2 }
+
+vtssStreamMibCompliances OBJECT IDENTIFIER
+    ::= { vtssStreamMibConformance 1 }
+
+vtssStreamMibGroups OBJECT IDENTIFIER
+    ::= { vtssStreamMibConformance 2 }
+
+vtssStreamCapabilitiesListInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssStreamCapabilitiesListInstanceMax }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 1 }
+
+vtssStreamCapabilitiesCollectionInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssStreamCapabilitiesCollectionInstanceMax,
+                  vtssStreamCapabilitiesCollectionStreamsPerCollectionMax }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 2 }
+
+vtssStreamConfigTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssStreamConfigStreamId,
+                  vtssStreamConfigDmacMatchType, vtssStreamConfigDmac,
+                  vtssStreamConfigDmacMask, vtssStreamConfigSmac,
+                  vtssStreamConfigSmacMask, vtssStreamConfigOuterTag,
+                  vtssStreamConfigOuterTagTagType,
+                  vtssStreamConfigOuterTagVidValue,
+                  vtssStreamConfigOuterTagVidMask,
+                  vtssStreamConfigOuterTagPcpValue,
+                  vtssStreamConfigOuterTagPcpMask,
+                  vtssStreamConfigOuterTagDei,
+                  vtssStreamConfigInnerTag,
+                  vtssStreamConfigInnerTagTagType,
+                  vtssStreamConfigInnerTagVidValue,
+                  vtssStreamConfigInnerTagVidMask,
+                  vtssStreamConfigInnerTagPcpValue,
+                  vtssStreamConfigInnerTagPcpMask,
+                  vtssStreamConfigInnerTagDei,
+                  vtssStreamConfigProtocolType,
+                  vtssStreamConfigEtherType, vtssStreamConfigLlcDsap,
+                  vtssStreamConfigLlcSsap,
+                  vtssStreamConfigSnapOuiType,
+                  vtssStreamConfigSnapOui, vtssStreamConfigSnapPid,
+                  vtssStreamConfigIpv4SipAddress,
+                  vtssStreamConfigIpv4SipPrefixSize,
+                  vtssStreamConfigIpv4DipAddress,
+                  vtssStreamConfigIpv4DipPrefixSize,
+                  vtssStreamConfigIpv4DscpMatchType,
+                  vtssStreamConfigIpv4DscpLow,
+                  vtssStreamConfigIpv4DscpHigh,
+                  vtssStreamConfigIpv4Fragment,
+                  vtssStreamConfigIpv4ProtoType,
+                  vtssStreamConfigIpv4ProtoValue,
+                  vtssStreamConfigIpv4DportMatchType,
+                  vtssStreamConfigIpv4DportLow,
+                  vtssStreamConfigIpv4DportHigh,
+                  vtssStreamConfigIpv6SipAddress,
+                  vtssStreamConfigIpv6SipPrefixSize,
+                  vtssStreamConfigIpv6DipAddress,
+                  vtssStreamConfigIpv6DipPrefixSize,
+                  vtssStreamConfigIpv6DscpMatchType,
+                  vtssStreamConfigIpv6DscpLow,
+                  vtssStreamConfigIpv6DscpHigh,
+                  vtssStreamConfigIpv6ProtoType,
+                  vtssStreamConfigIpv6ProtoValue,
+                  vtssStreamConfigIpv6DportMatchType,
+                  vtssStreamConfigIpv6DportLow,
+                  vtssStreamConfigIpv6DportHigh,
+                  vtssStreamConfigPortList, vtssStreamConfigAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 3 }
+
+vtssStreamConfigRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssStreamConfigRowEditorStreamId,
+                  vtssStreamConfigRowEditorDmacMatchType,
+                  vtssStreamConfigRowEditorDmac,
+                  vtssStreamConfigRowEditorDmacMask,
+                  vtssStreamConfigRowEditorSmac,
+                  vtssStreamConfigRowEditorSmacMask,
+                  vtssStreamConfigRowEditorOuterTag,
+                  vtssStreamConfigRowEditorOuterTagTagType,
+                  vtssStreamConfigRowEditorOuterTagVidValue,
+                  vtssStreamConfigRowEditorOuterTagVidMask,
+                  vtssStreamConfigRowEditorOuterTagPcpValue,
+                  vtssStreamConfigRowEditorOuterTagPcpMask,
+                  vtssStreamConfigRowEditorOuterTagDei,
+                  vtssStreamConfigRowEditorInnerTag,
+                  vtssStreamConfigRowEditorInnerTagTagType,
+                  vtssStreamConfigRowEditorInnerTagVidValue,
+                  vtssStreamConfigRowEditorInnerTagVidMask,
+                  vtssStreamConfigRowEditorInnerTagPcpValue,
+                  vtssStreamConfigRowEditorInnerTagPcpMask,
+                  vtssStreamConfigRowEditorInnerTagDei,
+                  vtssStreamConfigRowEditorProtocolType,
+                  vtssStreamConfigRowEditorEtherType,
+                  vtssStreamConfigRowEditorLlcDsap,
+                  vtssStreamConfigRowEditorLlcSsap,
+                  vtssStreamConfigRowEditorSnapOuiType,
+                  vtssStreamConfigRowEditorSnapOui,
+                  vtssStreamConfigRowEditorSnapPid,
+                  vtssStreamConfigRowEditorIpv4SipAddress,
+                  vtssStreamConfigRowEditorIpv4SipPrefixSize,
+                  vtssStreamConfigRowEditorIpv4DipAddress,
+                  vtssStreamConfigRowEditorIpv4DipPrefixSize,
+                  vtssStreamConfigRowEditorIpv4DscpMatchType,
+                  vtssStreamConfigRowEditorIpv4DscpLow,
+                  vtssStreamConfigRowEditorIpv4DscpHigh,
+                  vtssStreamConfigRowEditorIpv4Fragment,
+                  vtssStreamConfigRowEditorIpv4ProtoType,
+                  vtssStreamConfigRowEditorIpv4ProtoValue,
+                  vtssStreamConfigRowEditorIpv4DportMatchType,
+                  vtssStreamConfigRowEditorIpv4DportLow,
+                  vtssStreamConfigRowEditorIpv4DportHigh,
+                  vtssStreamConfigRowEditorIpv6SipAddress,
+                  vtssStreamConfigRowEditorIpv6SipPrefixSize,
+                  vtssStreamConfigRowEditorIpv6DipAddress,
+                  vtssStreamConfigRowEditorIpv6DipPrefixSize,
+                  vtssStreamConfigRowEditorIpv6DscpMatchType,
+                  vtssStreamConfigRowEditorIpv6DscpLow,
+                  vtssStreamConfigRowEditorIpv6DscpHigh,
+                  vtssStreamConfigRowEditorIpv6ProtoType,
+                  vtssStreamConfigRowEditorIpv6ProtoValue,
+                  vtssStreamConfigRowEditorIpv6DportMatchType,
+                  vtssStreamConfigRowEditorIpv6DportLow,
+                  vtssStreamConfigRowEditorIpv6DportHigh,
+                  vtssStreamConfigRowEditorPortList,
+                  vtssStreamConfigRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 4 }
+
+vtssStreamConfigCollectionTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssStreamConfigCollectionStreamCollectionId,
+                  vtssStreamConfigCollectionStreamId0,
+                  vtssStreamConfigCollectionStreamId1,
+                  vtssStreamConfigCollectionStreamId2,
+                  vtssStreamConfigCollectionStreamId3,
+                  vtssStreamConfigCollectionStreamId4,
+                  vtssStreamConfigCollectionStreamId5,
+                  vtssStreamConfigCollectionStreamId6,
+                  vtssStreamConfigCollectionStreamId7,
+                  vtssStreamConfigCollectionAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 5 }
+
+vtssStreamConfigCollectionRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     {                   vtssStreamConfigCollectionRowEditorStreamCollectionId,
+                  vtssStreamConfigCollectionRowEditorStreamId0,
+                  vtssStreamConfigCollectionRowEditorStreamId1,
+                  vtssStreamConfigCollectionRowEditorStreamId2,
+                  vtssStreamConfigCollectionRowEditorStreamId3,
+                  vtssStreamConfigCollectionRowEditorStreamId4,
+                  vtssStreamConfigCollectionRowEditorStreamId5,
+                  vtssStreamConfigCollectionRowEditorStreamId6,
+                  vtssStreamConfigCollectionRowEditorStreamId7,
+                  vtssStreamConfigCollectionRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 6 }
+
+vtssStreamStatusTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssStreamStatusStreamId,
+                  vtssStreamStatusStreamCollectionId,
+                  vtssStreamStatusWarningNone,
+                  vtssStreamStatusWarningNotInstalledOnAnyPort,
+                  vtssStreamStatusPsfpClientAttached,
+                  vtssStreamStatusPsfpClientId,
+                  vtssStreamStatusFrerClientAttached,
+                  vtssStreamStatusFrerClientId }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 7 }
+
+vtssStreamStatusCollectionTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssStreamStatusCollectionStreamCollectionId,
+                  vtssStreamStatusCollectionWarningNone,
+                  vtssStreamStatusCollectionWarningNoStreamsAttached,
+                  vtssStreamStatusCollectionWarningNoClientsAttached,
+                  vtssStreamStatusCollectionWarningAtLeastOneStreamHasOperWarn,
+                  vtssStreamStatusCollectionPsfpClientAttached,
+                  vtssStreamStatusCollectionPsfpClientId,
+                  vtssStreamStatusCollectionFrerClientAttached,
+                  vtssStreamStatusCollectionFrerClientId }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssStreamMibGroups 8 }
+
+vtssStreamMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssStreamCapabilitiesListInfoGroup,
+                       vtssStreamCapabilitiesCollectionInfoGroup,
+                       vtssStreamConfigTableInfoGroup,
+                       vtssStreamConfigRowEditorInfoGroup,
+                       vtssStreamConfigCollectionTableInfoGroup,
+                       vtssStreamConfigCollectionRowEditorInfoGroup,
+                       vtssStreamStatusTableInfoGroup,
+                       vtssStreamStatusCollectionTableInfoGroup }
+
+    ::= { vtssStreamMibCompliances 1 }
+
+END

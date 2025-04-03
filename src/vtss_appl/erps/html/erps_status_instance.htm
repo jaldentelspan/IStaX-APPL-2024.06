@@ -1,0 +1,745 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>ERPS Detailed Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="erps_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_erps_status_instance.htm";
+
+var timerID;
+
+// Page Argument
+var pageArgs = searchArgs(window.location.search);
+
+var pageErpsId = 0;
+if (pageArgs["erpsid"]) {
+    pageErpsId = parseInt(pageArgs["erpsid"], 10);
+}
+
+var sourceLink = "erps_status.htm";
+
+if (pageArgs["source"]) { 
+    if ( pageArgs["source"] == "status" ) {
+        sourceLink = "erps_status.htm";
+    } else if (pageArgs["source"] == "config" ) {
+        sourceLink = "erps_ctrl.htm";
+    }
+}
+
+// Global variables
+var configDynamicTable, commandDynamicTable, statusDynamicTable, statusPortsDynamicTable, statisDynamicTable, myCapabilities, myPortInfo;
+var oTPort = Array(), oVPort = Array();
+
+function redirectPage(recv_json)
+{
+    document.location.href = sourceLink;
+}
+
+
+function addStatusPortsHeader(table_rows)
+{
+    var row;
+    row = {fields:[
+        {type:"disp_hdr",  params:["Parameter"]},
+        {type:"disp_hdr",  params:["Port0"]},
+        {type:"disp_hdr",  params:["Port1"]}
+    ]
+    };
+    table_rows.push(row);
+}
+
+function addStatusPortRowsBuild(key, val, table_rows)
+{
+
+    var row = {fields:[
+    {type:"conf_hdr",   params:["Blocked"]},
+    {type:"image",      params:["c", val.Port0StatusBlocked ? "images/yes.gif" : "images/no.gif"]},
+    {type:"image",      params:["c", val.Port1StatusBlocked ? "images/yes.gif" : "images/no.gif"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Signal Fail"]},
+    {type:"image",      params:["c", val.Port0StatusSf ? "images/yes.gif" : "images/no.gif"]},
+    {type:"image",      params:["c", val.Port1StatusSf ? "images/yes.gif" : "images/no.gif"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Failure of Protocol - Provisioning Mismatch"]},
+    {type:"image",      params:["c", val.Port0StatusFopPm ? "images/yes.gif" : "images/no.gif"]},
+    {type:"image",      params:["c", val.Port1StatusFopPm ? "images/yes.gif" : "images/no.gif"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["UpdateTimeSecs"]},
+    {type:"text",       params:[val.Port0StatusUpdateTimeSecs, "c"]},
+    {type:"text",       params:[val.Port1StatusUpdateTimeSecs, "c"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Request state"]},
+    {type:"text",       params:[oTRequest[oVRequest.indexOf(val.Port0StatusRequest)], "c"]},
+    {type:"text",       params:[oTRequest[oVRequest.indexOf(val.Port1StatusRequest)], "c"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Version of received R-APS. 0 means v1 etc"]},
+    {type:"text",       params:[val.Port0StatusVersion, "c"]},
+    {type:"text",       params:[val.Port1StatusVersion, "c"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["RPL blocked bit of R-APS info"]},
+    {type:"image",      params:["c", val.Port0StatusRb ? "images/yes.gif" : "images/no.gif"]},
+    {type:"image",      params:["c", val.Port1StatusRb ? "images/yes.gif" : "images/no.gif"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Do Not Flush bit of R-APS info"]},
+    {type:"image",      params:["c", val.Port0StatusDnf ? "images/yes.gif" : "images/no.gif"]},
+    {type:"image",      params:["c", val.Port1StatusDnf ? "images/yes.gif" : "images/no.gif"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Blocked Port Reference of R-APS info"]},
+    {type:"text",       params:[oTRingPort[oVRingPort.indexOf(val.Port0StatusBpr)], "c"]},
+    {type:"text",       params:[oTRingPort[oVRingPort.indexOf(val.Port1StatusBpr)], "c"]}
+    ]
+    };              
+
+    table_rows.push(row);
+    row = {fields:[
+    {type:"conf_hdr",   params:["Node ID of this request"]},
+    {type:"text",       params:[val.Port0StatusNodeId, "c"]},
+    {type:"text",       params:[val.Port1StatusNodeId, "c"]}
+    ]
+    };              
+
+    table_rows.push(row);
+    row = {fields:[
+    {type:"conf_hdr",   params:["Source MAC address used in the request/state"]},
+    {type:"text",       params:[val.Port0StatusSmac, "c"]},
+    {type:"text",       params:[val.Port1StatusSmac, "c"]}
+    ]
+    };              
+    table_rows.push(row);
+
+    return;
+}
+
+function addStatusHeader(table_rows)
+{
+    var row = {
+        fields:[
+            {type:"disp_hdr",   params:["Oper", 1, 2]},
+            {type:"disp_hdr",   params:["Warning", 1, 2]},
+            {type:"disp_hdr",   params:["State", 1, 2]},
+            {type:"disp_hdr",   params:["TxRapsActive", 1, 2]},
+            {type:"disp_hdr",   params:["cFOPTo", 1, 2]},
+            {type:"disp_hdr",   params:["Tx Info", 8]}
+        ]
+    };
+    table_rows.push(row);
+
+    row = {
+        fields:[
+            {type:"disp_hdr",   params:["UpdateTimeSecs"]},
+            {type:"disp_hdr",   params:["Request"]},
+            {type:"disp_hdr",   params:["Version"]},
+            {type:"disp_hdr",   params:["Rb"]},
+            {type:"disp_hdr",   params:["Dnf"]},
+            {type:"disp_hdr",   params:["Bpr"]},
+            {type:"disp_hdr",   params:["Node Id"]},
+            {type:"disp_hdr",   params:["SMAC"]}
+        ]
+    };
+    table_rows.push(row);
+}
+
+function addStatusRow(key, val)
+{
+    var operState = val.OperState == "active" ? true : false;
+    var operWarning = val.OperWarning == "none" ? true : false;
+
+    var row = {
+        "key":key,
+        fields:[
+            {type:"image",  params:["c", operState ? "images/led-up.gif" : "images/led-down.gif"]},
+            {type:"image",  params:["c", operWarning ? "images/led-off.gif" : "images/led-yellow.gif", operWarning ? "" : oTOperWarning[oVOperWarning.indexOf(val.OperWarning)]]},
+            {type:"text",   params:[oTNodeState[oVNodeState.indexOf(val.NodeState)], "c"]},
+            {type:"image",  params:["c", val.TxRapsActive ? "images/yes.gif" : "images/no.gif"]},
+            {type:"image",  params:["c", val.cFOPTo ? "images/yes.gif" : "images/no.gif"]},
+            {type:"text",   params:[val.TxInfoUpdateTimeSecs, "c"]},
+            {type:"text",   params:[oTRequest[oVRequest.indexOf(val.TxInfoRequest)], "c"]},
+            {type:"text",   params:[val.TxInfoVersion, "c"]},
+            {type:"image",  params:["c", val.InfoRb ? "images/yes.gif" : "images/no.gif"]},
+            {type:"image",  params:["c", val.TxInfoDnf ? "images/yes.gif" : "images/no.gif"]},
+            {type:"text",   params:[oTRingPort[oVRingPort.indexOf(val.TxInfoBpr)], "c"]},
+            {type:"text",   params:[val.TxInfoNodeId, "c"]},
+            {type:"text",   params:[val.TxInfoSmac, "c"]}
+        ]
+    };
+    return row;
+}
+
+
+function addConfigHeader(table_rows)
+{
+    var row;
+    row = {fields:[
+            {type:"disp_hdr", params:["ERPS #", 1, 2]},
+            {type:"disp_hdr", params:["Ver", 1, 2]},
+            {type:"disp_hdr", params:["Type", 1, 2]},
+            {type:"disp_hdr", params:["VC", 1, 2]},
+            {type:"disp_hdr", params:["Prop", 1, 2]},
+            {type:"disp_hdr", params:["Port0", 1, 2]},
+            {type:"disp_hdr", params:["Port1", 1, 2]},
+            {type:"disp_hdr", params:["Ring Id", 1, 2]},
+            {type:"disp_hdr", params:["Node Id", 1, 2]},
+            {type:"disp_hdr", params:["Level", 1, 2]},
+            {type:"disp_hdr", params:["VLAN", 1, 2]},
+            {type:"disp_hdr", params:["PCP", 1, 2]},
+            {type:"disp_hdr", params:["Rev", 1, 2]},
+            {type:"disp_hdr", params:["Guard", 1, 2]},
+            {type:"disp_hdr", params:["WTR", 1, 2]},
+            {type:"disp_hdr", params:["HoldOff", 1, 2]},
+            {type:"disp_hdr", params:["Enable", 1, 2]}
+        ]
+    };
+    table_rows.push(row);
+}
+
+function addConfigRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"digit",  params:[key, "cr"]},
+            {type:"text",   params:[oTVersion[oVVersion.indexOf(val.Version)], "c"]},
+            {type:"text",   params:[oTRingType[oVRingType.indexOf(val.RingType)], "c"]},
+            {type:"image",  params:["c", val.VirtualChannel ? "images/yes.gif" : "images/no.gif"]},
+            {type:"image",  params:["c", val.ConnectedRingPropagate ? "images/yes.gif" : "images/no.gif"]},
+            {type:"text",   params:[oTPort[oVPort.indexOf(val.Port0If)], "c"]},
+            {type:"text",   params:[oTPort[oVPort.indexOf(val.Port1If)], "c"]},
+            {type:"text",   params:[val.RingId, "cr"]},
+            {type:"text",   params:[val.NodeId, "cr"]},
+            {type:"text",   params:[val.Level, "c"]},            
+            {type:"text",   params:[val.ControlVlan, "cr"]},
+            {type:"text",   params:[val.Pcp, "c"]},
+            {type:"image",  params:["c", val.Revertive ? "images/yes.gif" : "images/no.gif"]},
+            {type:"text",   params:[val.GuardTime, "cr"]},
+            {type:"text",   params:[val.WaitToRestoreTime, "cr"]},
+            {type:"text",   params:[val.HoldOffTime, "cr"]},
+            {type:"image",  params:["c", val.AdminActive ? "images/yes.gif" : "images/no.gif"]}
+           ]
+    };
+    return row;
+}
+
+
+function addCommandHeader(table_rows)
+{
+    var row;
+    row = {fields:[
+                 {type:"disp_hdr", params:["Command"]}
+                ]
+              };
+    table_rows.push(row);
+}
+
+function addStatisHeader(table_rows)
+{
+    var row;
+    row = {fields:[
+        {type:"disp_hdr",  params:["Counter type"]},
+        {type:"disp_hdr",  params:["Port0"]},
+        {type:"disp_hdr",  params:["Port1"]}
+    ]
+    };
+    table_rows.push(row);
+}
+
+function addStatisRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"text",   params:[val.Port0RxErrorCnt, "c"]}
+        ]
+    };
+    return row;
+}
+
+function addStatisRowsBuild(key, val, table_rows)
+{
+
+    var row = {fields:[
+    {type:"conf_hdr",   params:["Received erroneous R-APS PDUs"]},
+    {type:"text",       params:[val.Port0RxErrorCnt, "c"]},
+    {type:"text",       params:[val.Port1RxErrorCnt, "c"]}
+    ]
+    };              
+    table_rows.push(row);
+
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received R-APS PDUs with our own node ID"]},
+    {type:"text",       params:[val.Port0RxOwnCnt, "c"]},
+    {type:"text",       params:[val.Port1RxOwnCnt, "c"]}
+    ]
+    };
+              
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received R-APS PDUs during guard timer"]},
+    {type:"text",       params:[val.Port0RxGuardCnt, "c"]},
+    {type:"text",       params:[val.Port1RxGuardCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received R-APS PDUs causing FOP-PM "]},
+    {type:"text",       params:[val.Port0RxFOPPmCnt, "c"]},
+    {type:"text",       params:[val.Port1RxFOPPmCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received NR R-APS PDUs"]},
+    {type:"text",       params:[val.Port0RxNrCnt, "c"]},
+    {type:"text",       params:[val.Port1RxNrCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received NR, RB R-APS PDUs"]},
+    {type:"text",       params:[val.Port0RxNrRbCnt, "c"]},
+    {type:"text",       params:[val.Port1RxNrRbCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received SF R-APS PDUs"]},
+    {type:"text",       params:[val.Port0RxSfCnt, "c"]},
+    {type:"text",       params:[val.Port1RxSfCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received FS R-APS PDUs"]},
+    {type:"text",       params:[val.Port0RxFxCnt, "c"]},
+    {type:"text",       params:[val.Port1RxFxCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received MS R-APS PDUs"]},
+    {type:"text",       params:[val.Port0RxMsCnt, "c"]},
+    {type:"text",       params:[val.Port1RxMsCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Received Event R-APS PDUs"]},
+    {type:"text",       params:[val.Port0RxEventCnt, "c"]},
+    {type:"text",       params:[val.Port1RxEventCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Transmitted NR R-APS PDUs"]},
+    {type:"text",       params:[val.Port0TxNrCnt, "c"]},
+    {type:"text",       params:[val.Port1TxNrCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Transmitted NR, RB R-APS PDUs"]},
+    {type:"text",       params:[val.Port0TxNrRbCnt, "c"]},
+    {type:"text",       params:[val.Port1TxNrRbCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Transmitted SF R-APS PDUs"]},
+    {type:"text",       params:[val.Port0TxSfCnt, "c"]},
+    {type:"text",       params:[val.Port1TxSfCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Transmitted FS R-APS PDUs"]},
+    {type:"text",       params:[val.Port0TxFsCnt, "c"]},
+    {type:"text",       params:[val.Port1TxFsCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Transmitted MS R-APS PDUs"]},
+    {type:"text",       params:[val.Port0TxMsCnt, "c"]},
+    {type:"text",       params:[val.Port1TxMsCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Transmitted Event R-APS PDUs"]},
+    {type:"text",       params:[val.Port0TxEventCnt, "c"]},
+    {type:"text",       params:[val.Port1TxEventCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Number of local signal fails"]},
+    {type:"text",       params:[val.Port0SfCn, "c"]},
+    {type:"text",       params:[val.Port1SfCn, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Number of FDB flushes"]},
+    {type:"text",       params:[val.Port0FlushCnt, "c"]},
+    {type:"text",       params:[val.Port1FlushCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    return row;
+}
+
+
+function addCommandRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"select", params:[oTCommand, oVCommand, val.Command, "c", "Command"]}
+           ]
+    };
+    return row;
+}
+
+function addConfigRows(recv_json)
+{
+    var table_rows = new Array();
+    addConfigHeader(table_rows);
+    table_rows.push(addConfigRow(recv_json.key, recv_json.val));
+    return table_rows;
+}
+
+function addStatusRows(recv_json)
+{
+    var table_rows = new Array();
+    addStatusHeader(table_rows);
+    table_rows.push(addStatusRow(recv_json.key, recv_json.val));
+    return table_rows;
+}
+
+function addStatusPortsRows(recv_json)
+{
+    var table_rows = new Array();
+    addStatusPortsHeader(table_rows);
+    addStatusPortRowsBuild(recv_json.key, recv_json.val, table_rows);
+    return table_rows;
+}
+
+function addStatisRows(recv_json)
+{
+    var table_rows = new Array();
+    addStatisHeader(table_rows);
+    addStatisRowsBuild(recv_json.key, recv_json.val, table_rows);
+    return table_rows;
+}
+
+function addCommandRows(recv_json)
+{
+    var table_rows = new Array();
+    addCommandHeader(table_rows);
+    table_rows.push(addCommandRow(recv_json.key, recv_json.val));
+    return table_rows;
+}
+
+function processUpdate(recv_json, name)
+{
+    var record = null;
+    var i;
+    var table_rows;
+
+    if (pageErpsId) {
+        for (i = 0; i < recv_json.length; i++) {
+            if (pageErpsId == recv_json[i].key) {
+                record = recv_json[i];
+                break;
+            }
+        }
+        // Redirect page if this ID doesn't exist.
+        if (!record) {
+            alert("ERPS #" + pageErpsId + " no data found");
+            redirectPage();
+            return;
+        }
+    } else {
+        // Redirect page if this ID doesn't exist.
+        alert("ERPS #" + pageErpsId + " does not exist.");
+        redirectPage();
+        return;
+    }
+
+    if (name == "config") {
+        table_rows = addConfigRows(record);
+        configDynamicTable.addRows(table_rows);
+        configDynamicTable.update();
+    } else if (name == "command") {
+        table_rows = addCommandRows(record);
+        commandDynamicTable.addRows(table_rows);
+        commandDynamicTable.update();
+    } else {
+        table_rows = addStatusRows(record);
+        statusDynamicTable.addRows(table_rows);
+        statusDynamicTable.update();
+
+        table_rows = addStatusPortsRows(record);
+        statusPortsDynamicTable.addRows(table_rows);
+        statusPortsDynamicTable.update();
+
+        table_rows = addStatisRows(record);
+        statisDynamicTable.addRows(table_rows);
+        statisDynamicTable.update();
+    }
+
+    var autorefresh = $('autorefresh');
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdateStatus()', settingsRefreshInterval());
+    }
+}
+
+function requestUpdateStatus(recv_json, name)
+{
+    // Restore status table content 
+    statusDynamicTable.restore();
+
+    requestJsonDoc("erps.status.get", null, processUpdate, "status");
+}
+
+function requestUpdate(recv_json, name)
+{
+    // Restore table content 
+    configDynamicTable.restore();
+    commandDynamicTable.restore();
+    statusDynamicTable.restore();
+    statisDynamicTable.restore();
+    statusPortsDynamicTable.restore();
+
+    // This table requires one JSON data.
+    requestJsonDoc("erps.config.get", null, processUpdate, "config");
+    requestJsonDoc("erps.control.command.get", null, processUpdate, "command");
+    requestJsonDoc("erps.status.get", null, processUpdate, "status");
+}
+
+function chkRefresh(fld)
+{
+  if (!fld.checked) {
+    if (timerID) {
+      clearTimeout(timerID);
+    }
+    timerID = null;
+  } else {
+    requestUpdate(null, "refresh");
+  }
+}
+
+function submitCommand()
+{
+    var trim_ids = Array();
+    var json_obj = html2Json(commandTableContent, trim_ids);
+
+    // if command is "Command":"noRequest" the do not send json command
+    if (json_obj.Command != "noRequest") {
+        // Submit data with JSON format
+        var key = pageErpsId;
+        var submit_json = [key, json_obj];
+        requestJsonDoc("erps.control.command.set", submit_json, requestUpdate);
+    }
+}
+
+function resetCounters()
+{
+    var val = true;
+    var submit_json = [pageErpsId, val ];
+    requestJsonDoc("erps.control.statisticsClear.set", submit_json, requestUpdateStatus);
+}
+
+function resetForms()
+{
+    commandDynamicTable.resetEvent();
+}
+
+function clickBack()
+{
+    document.location.href = sourceLink;
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = configDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myCapabilities && myPortInfo) {
+        requestUpdate();
+    }
+}
+
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    configDynamicTable = new DynamicTable("configTableContent", "display");
+    commandDynamicTable = new DynamicTable("commandTableContent", "config");
+    statusDynamicTable = new DynamicTable("statusTableContent", "display");
+    statisDynamicTable = new DynamicTable("statisTableContent", "display");
+    statusPortsDynamicTable = new DynamicTable("statusPortsTableContent", "display");
+
+    // This table requires two JSON data(capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requrested only one time.
+    requestJsonDoc("erps.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>ERPS Status</h1>
+
+
+<form id="myTablesForm" action="">
+
+<h2>Configuration</h2>
+<div id="configTableContent"></div>
+  
+    
+<h2>Status</h2>
+<div class="refreshbar">
+    <label for="autorefresh">Auto-refresh</label>
+    <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+    <input type="button" value="Refresh" onClick='requestUpdate(); this.blur();'>
+    <img id="update" alt="" src="images/updating.gif">
+</div>
+<div id="statusTableContent"></div>
+
+<h2>Status Ports</h2>
+<div id="statusPortsTableContent"></div>
+
+
+<h2>Counters</h2>
+<div id="statisTableContent"></div>
+
+<p>
+  <input type="button" value="Reset Counters" onclick="resetCounters();">
+</p>
+
+<h2>Command</h2>
+<div id="commandTableContent"></div>
+
+<p>
+  <input type="button" value="Save" onclick="submitCommand();">
+  <input type="button" value="Reset" onclick="resetForms();">
+  <input type="button" value="Back" onclick="clickBack();">
+</p>
+
+</form>
+
+
+</body>
+</html>

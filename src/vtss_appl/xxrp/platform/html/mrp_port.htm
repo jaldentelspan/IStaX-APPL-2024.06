@@ -1,0 +1,229 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>MRP Port Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript">
+
+
+// Help page macic
+var help_page = "/help/help_mrp_port.htm";
+
+var pageArgs = searchArgs(window.location.search);
+if (pageArgs.error_code && parseInt(pageArgs.error_code, 10) == 1) {
+    alert("Error(s) while configuring the MRP timers. One or more ports may not have been updated successfully.");
+}
+if (pageArgs.error_code && parseInt(pageArgs.error_code, 10) == 2) {
+    alert("Error(s) while configuring the MRP PeriodicTransmission. One or more ports may not have been updated successfully.");
+}
+
+var portCnt = 0; // The number of ports shown on the web page are determined at runtime
+
+function addHeader()
+{
+    var thead;
+    var frag = document.createDocumentFragment();
+    var tr   = CreateStyledElement("tr", "config_header");
+    addTextHeaderCell(tr, "Port");
+    addTextHeaderCell(tr, "Join Timeout");
+    addTextHeaderCell(tr, "Leave Timeout");
+    addTextHeaderCell(tr, "LeaveAll Timeout");
+    addTextHeaderCell(tr, "Periodic Transmission");
+    frag.appendChild(tr);
+    thead = document.getElementById('mrp_thead');
+    clearChildNodes(thead);
+    thead.appendChild(frag);
+}
+
+function addRow(index, frag, values) {
+    var pdata         = values.split("/");
+    var portno        = parseInt(pdata[0], 10);
+    var join_time     = parseInt(pdata[1], 10);
+    var leave_time    = parseInt(pdata[2], 10);
+    var leaveall_time = parseInt(pdata[3], 10);
+    var periodic      = parseInt(pdata[4], 10);
+    var tr;
+    
+    tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    addTextCell(tr, configPortName(pdata[0], 0), "cr");
+    addInputCell(tr, join_time, "cr", "join_time_" + index, 2, 2);
+    addInputCell(tr, leave_time, "cr", "leave_time_" + index, 3, 3);
+    addInputCell(tr, leaveall_time, "cr", "leaveall_time_" + index, 4, 4);
+    addCheckBoxCell(tr, periodic, "c", "periodic_" + index);
+    frag.appendChild(tr); // Add row to fragment
+}
+
+/* Format: 
+ * <port 1>,<port 2>,<port 3>,...<port n>
+ * 
+ * port x :== <port_no>/<JoinTime>/<LeaveTime>/<LeaveAllTime>/<PeriodicTransmission>
+ *   port_no              :== 1..max
+ *   JoinTime             :== 1..20 (cs)
+ *   LeaveTime            :== 60..300 (cs)
+ *   LeaveAllTime         :== 1000..5000 (cs)
+ *   PeriodicTransmission :== 0..1            // 0: Disabled (default), 1: Enabled
+ */
+function processUpdate(req, ref)
+{
+    if (redirectOnError(req)) {
+        return;
+    }
+
+    if (req.responseText) {
+        var values = req.responseText.split(",");
+        var frag   = document.createDocumentFragment();
+        var i;
+        var tbody;
+        var cBar;
+
+        portCnt = values.length;
+        addHeader();
+        for (i = 0; i < portCnt; i++) {
+            addRow(i, frag, values[i]);
+        }
+        tbody = document.getElementById(ref);
+        clearChildNodes(tbody);
+        tbody.appendChild(frag);
+        cBar = new HeaderControlBar([{text: "*", className: "cr"},
+                                     {name: "join_time_"},
+                                     {name: "leave_time_"},
+                                     {name: "leaveall_time_"},
+                                     {name: "periodic_"}]);
+        cBar.construct(ref);
+    } else {
+        SpomHandleError();
+    }
+}
+
+function requestUpdate() {
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    loadXMLDoc(SpomAddSidArg("/config/mrp_conf"), processUpdate, 'mrp_tbody');
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function checkForm(form)
+{
+    var i;
+
+    for (i = 0; i < portCnt; i++) {
+        if (!isWithinRange("join_time_" + i,
+                           configMrpJoinTimeMin,
+                           configMrpJoinTimeMax,
+                           "'Join Timeout'", " cs.")) {
+            return false;
+        }
+        if (!isWithinRange("leave_time_" + i,
+                           configMrpLeaveTimeMin,
+                           configMrpLeaveTimeMax,
+                           "'Leave Timeout'", " cs.")) {
+            return false;
+        }
+        if (!isWithinRange("leaveall_time_" + i,
+                           configMrpLeaveAllTimeMin,
+                           configMrpLeaveAllTimeMax,
+                           "'LeaveAll Timeout'", " cs.")) {
+            return false;
+        }
+    }
+	return true;
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    requestUpdate();            // Update page to reflect selector
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<div class="refreshbar">
+ <form action="#">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+  <input type="button"   value="Refresh"    id="refresh"     onclick="requestUpdate();    this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+ </form>
+</div>
+
+<div id="control_bar_tbl">
+
+<h1>MRP Overall Port Configuration <span id="display_sid"></span></h1>
+
+<form method="POST" action="/config/mrp_conf" onsubmit="return checkForm(this);"> 
+
+<table summary="MRP Port Configuration" class="config" cellspacing="0" cellpadding="3">
+ <thead id="mrp_thead">
+ </thead>
+ <tbody id="mrp_tbody">
+ </tbody>
+</table>
+
+<p>
+<input type="hidden" id="submit_sid" name="sid">    
+<input type="submit" value="Save">
+<input type="reset" value="Reset">
+</p>
+
+</form>
+
+</div>
+
+<!-- IE caching bug -->
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</body>
+</html>
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

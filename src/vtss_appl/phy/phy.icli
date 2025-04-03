@@ -1,0 +1,6092 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+# Microchip is aware that some terminology used in this technical document is
+# antiquated and inappropriate. As a result of the complex nature of software
+# where seemingly simple changes have unpredictable, and often far-reaching
+# negative results on the software's functionality (requiring extensive retesting
+# and revalidation) we are unable to make the desired changes in all legacy
+# systems without compromising our product or our clients' products.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_PHY)
+
+INCLUDE_BEGIN
+#include "control_api.h"
+#include "phy_api.h"
+#include "port_api.h"
+#include "icli_porting_util.h"
+#include "phy_icli_util.h"
+#include "misc_api.h"
+#include "msg_api.h"
+
+#ifdef VTSS_SW_OPTION_TOD
+#include "tod_api.h"
+#endif
+#define MISC_INST misc_phy_inst_get()
+INCLUDE_END
+
+FUNCTION_BEGIN
+static void phy_icli_req_init(phy_icli_req_t *req, u32 session_id)
+{
+    memset(req, 0, sizeof(*req));
+    req->session_id = session_id;
+    req->header = 1;
+}
+
+static bool phy_cap_10g(void)
+{
+    return port_phy_cap_check(MEPA_CAP_SPEED_MASK_10G);
+}
+
+static mesa_rc icli_cmd_phy_conf(u32 session_id, icli_stack_port_range_t *plist)
+{
+    port_iter_t             pit;
+    switch_iter_t           sit;
+    vtss_phy_conf_t         conf;
+    vtss_port_status_t      stat_1g;
+    vtss_phy_type_t         id1g;
+    BOOL                    phy10g=0;
+    BOOL                    link=0;
+    vtss_phy_10g_mode_t     mode;
+    vtss_phy_10g_status_t   stat_10g;
+    memset(&mode, 0, sizeof(vtss_phy_10g_mode_t));
+    memset(&conf, 0, sizeof(vtss_phy_conf_t));
+
+    /* show PHY module's configuration for all ports */
+
+    (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        if (!msg_switch_is_local(sit.isid)) {
+            // This function only works on the primary switch and can't display
+            // status of secondary switches
+            continue;
+        }
+
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, plist)) {
+            if (vtss_phy_id_get(PHY_INST, pit.iport, &id1g) == VTSS_RC_OK && (id1g.part_number != 0)) {
+                phy10g = 0;
+                if (vtss_phy_conf_get(PHY_INST, pit.iport, &conf) != VTSS_RC_OK) {
+                    ICLI_PRINTF("Could not perform vtss_phy_conf_get() operation");
+                    continue;
+                }
+                if  (vtss_phy_status_get(PHY_INST, pit.iport, &stat_1g)) {
+                    ICLI_PRINTF("Could not perform vtss_phy_status_get() operation");
+                    continue;
+                }
+                link = stat_1g.link;
+            }
+            else if (phy_cap_10g()) {
+                if (!vtss_phy_10G_is_valid(PHY_INST, pit.iport)) {
+                    continue;
+                }
+                phy10g = 1;
+                if (vtss_phy_10g_mode_get(PHY_INST, pit.iport, &mode) != VTSS_RC_OK) {
+                    ICLI_PRINTF("Could not perform vtss_phy_10g_mode_get() operation");
+                    continue;
+                }
+                if (vtss_phy_10g_status_get(PHY_INST, pit.iport, &stat_10g) != VTSS_RC_OK) {
+                    ICLI_PRINTF("Could not perform vtss_phy_10g_mode_get() operation");
+                    continue;
+                }
+                link = stat_10g.pma.rx_link && stat_10g.pcs.rx_link && stat_10g.xs.rx_link;
+            }
+            if (phy_cap_10g()) {
+                ICLI_PRINTF("%-6u %-10s %-10s %-10s %-10s %-10s %-10s\n",pit.uport,
+                            PHY_INST==NULL?"Default":"PHY",
+                            phy10g ? (mode.oper_mode == VTSS_PHY_WAN_MODE ? "WAN" : mode.oper_mode == VTSS_PHY_LAN_MODE ? "LAN" : "1G"):"1G",
+                            phy10g ? "-" : (conf.mode == VTSS_PHY_MODE_ANEG ? "ANEG" : conf.mode == VTSS_PHY_MODE_FORCED ? "FORCED" : "PD"),
+                            phy10g ? "-" : (stat_1g.fdx ? "FDX" : "HDX"),
+                            phy10g ? "-" : stat_1g.speed == VTSS_SPEED_10M ? "10M" : (stat_1g.speed == VTSS_SPEED_100M ? "100M" : "1G"),link?"Yes":"No");
+                        
+            } else {
+                ICLI_PRINTF("%-6u %-10s %-10s %-10s %-10s %-10s,%-10s\n",phy10g?0:pit.uport,
+                            PHY_INST==NULL?"Default":"PHY",
+                            "1G",(conf.mode == VTSS_PHY_MODE_FORCED ? "FORCED" : "PD"),
+                            (conf.mode != VTSS_PHY_MODE_ANEG ? (conf.forced.fdx ? "FDX":"HDX") : "-"),
+                            (conf.mode != VTSS_PHY_MODE_ANEG ? conf.forced.speed==VTSS_SPEED_10M ? "10M" :
+                             conf.forced.speed==VTSS_SPEED_100M ? "100M" : "1G" : "-"),link?"Yes":"No");
+            }
+        }
+    }
+    return VTSS_RC_OK;
+}
+
+static mesa_rc icli_cmd_phy_id(u32 session_id, icli_stack_port_range_t *plist)
+{
+    port_iter_t             pit;
+    switch_iter_t           sit;
+    mepa_phy_info_t         info = {};
+
+    /* Get and show phy id information of this board */
+    (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        if (!msg_switch_is_local(sit.isid)) {
+            // This function only works on the primary switch and can't display
+            // status of secondary switches
+            continue;
+        }
+
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, plist)) {
+            if (meba_phy_info_get(board_instance, pit.iport, &info) == MESA_RC_OK) {
+                ICLI_PRINTF("%-6u %-8s %-10d %-10x ", pit.uport,
+                            (info.cap & MEPA_CAP_SPEED_MASK_10G) ? "10g" : (info.cap & MEPA_CAP_SPEED_MASK_2G5) ? "2.5g" : "1g",
+                            info.part_number, info.revision);
+                if ((info.cap & MEPA_CAP_TS_MASK_GEN_1) || (info.cap & MEPA_CAP_TS_MASK_GEN_2) ||
+                    (info.cap & MEPA_CAP_TS_MASK_GEN_3)) {
+                    ICLI_PRINTF("%-11d\n", info.ts_base_port);
+                } else {
+                    ICLI_PRINTF("- \n");
+                }
+            }
+        }
+    }
+    return VTSS_RC_OK;
+}
+
+#ifdef VTSS_CHIP_10G_PHY_SAVE_OPERMODE_IN_CFG
+static char *mode_type2txt(const vtss_phy_10g_mode_t *api_mode) {
+    switch(api_mode->oper_mode){
+        case VTSS_PHY_LAN_MODE:
+            return "lan";
+        case VTSS_PHY_WAN_MODE:
+            return "wan";
+        case VTSS_PHY_1G_MODE:
+            return "1g";
+        case VTSS_PHY_REPEATER_MODE:
+            return "Repeater";
+        case VTSS_PHY_LAN_SYNCE_MODE:
+            return "LAN SyncE";
+        case VTSS_PHY_WAN_SYNCE_MODE:
+            return "WAN SyncE";
+        case VTSS_PHY_LAN_MIXED_SYNCE_MODE:
+            return "LAN SyncE for Venice , Mixed LAN mode for 8488";
+        case VTSS_PHY_WAN_MIXED_SYNCE_MODE:
+            return "WAN SyncE for Venice , Mixed WAN mode for 8488";
+     }
+   return "INVALID";
+}
+static mesa_rc icli_cmd_phy_oper_mode(u32 session_id, icli_stack_port_range_t *plist, BOOL has_lan,
+                                      BOOL has_wan, BOOL has_1g)
+{
+    port_iter_t                     pit;
+    switch_iter_t                   sit;
+    vtss_phy_10g_mode_t             api_mode;
+    vtss_phy_10g_id_t               chip_id;
+    mesa_rc                         rc = VTSS_RC_ERROR;
+    bool                            mepa_cap_phy_ts = false;
+
+
+    VTSS_RC(icli_switch_iter_init(&sit));
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        // Loop though the ports
+        VTSS_RC(icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL));
+        while (icli_port_iter_getnext(&pit, plist)) {
+            if (!vtss_phy_10G_is_valid(PHY_INST, pit.iport)) {
+                ICLI_PRINTF("%% Note: Feature  is only supported on 10G PHYs on port: %d\n", pit.uport);
+                continue;
+            }
+            if (VTSS_RC_OK != (rc = vtss_phy_10g_id_get(misc_phy_inst_get(),  pit.iport, &chip_id))) {
+                ICLI_PRINTF("Error in getting the chip_id of port %d (%s)\n",pit.uport, error_txt(rc));
+                continue;
+            }
+            
+            if (has_lan || has_wan || has_1g) {
+                if (VTSS_RC_OK != (rc = vtss_phy_10g_mode_get(PHY_INST,  pit.iport, &api_mode))) {
+                    ICLI_PRINTF("Error in getting the mode of port %d (%s)\n", pit.uport, error_txt(rc));
+                    continue;
+                }
+                if (has_lan) {
+                    api_mode.oper_mode = VTSS_PHY_LAN_MODE;
+                    api_mode.xaui_lane_flip = 0;
+                } else if (has_wan) {
+                    api_mode.oper_mode = VTSS_PHY_WAN_MODE;
+                    api_mode.xaui_lane_flip = 0;
+                } else if (has_1g) {
+                    api_mode.oper_mode = VTSS_PHY_1G_MODE;
+                    api_mode.xaui_lane_flip = 1;
+                }
+                if (VTSS_RC_OK != (rc = vtss_phy_10g_mode_set(PHY_INST,  pit.iport, &api_mode))) {
+                    ICLI_PRINTF("%% Error: in setting the mode for port %d (%s)\n", pit.uport, error_txt(rc));
+                    continue;
+                }
+#ifdef VTSS_SW_OPTION_TOD
+                mepa_cap_phy_ts = mepa_phy_ts_cap();
+#endif
+                if (mepa_cap_phy_ts) {
+                    if (chip_id.part_number == 0x8488 || chip_id.part_number == 0x8487) {
+                        if (VTSS_RC_OK != (rc = vtss_phy_ts_phy_oper_mode_change(PHY_INST,  pit.iport))) {
+                            ICLI_PRINTF("%% Error when changing the mode for %d (%s)\n", pit.uport, error_txt(rc));
+                                    continue;
+                        }
+                    }
+                }
+            } else {
+                if (VTSS_RC_OK != (rc = vtss_phy_10g_mode_get(PHY_INST, pit.iport, &api_mode))) {
+                   ICLI_PRINTF("Error in getting the mode for port %d (%s)\n", pit.uport, error_txt(rc));
+                   continue;
+                }
+                ICLI_PRINTF("Port : %u\tmode : %s\n", pit.uport, mode_type2txt(&api_mode));
+            }
+        }
+    }
+    return rc;
+}
+#endif
+
+static void _cfg_print(const char *string, i16 msb, i16 lsb, u8 *vec)
+{
+    u16 bit_idx;
+    u8  value = 0;
+
+    if ( lsb > 0 ) {
+        for ( bit_idx = lsb; bit_idx <= msb; ++bit_idx ) {
+            value += VTSS_BF_GET(vec, bit_idx) << (bit_idx - lsb);
+        }
+    } else {
+        value += VTSS_BF_GET(vec, msb);
+    }
+
+    ICLI_SELF_PRINTF("%s:0x%X\n", string, value);
+}
+
+#if defined(VTSS_CHIP_10G_PHY_SAVE_OPERMODE_IN_CFG)
+static BOOL phy_10g_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return icli_present_phy_cap(ask, runtime, MEPA_CAP_SPEED_MASK_10G);
+}
+#endif
+
+static mepa_rc phy_ts_mepa_test_conf(mepa_port_no_t port_no, mepa_ts_pkt_encap_t encap, mepa_ts_ptp_clock_mode_t clk_type, bool has_ipv6)
+{
+    mepa_phy_info_t info = {};
+    mepa_rc rc = MEPA_RC_OK;
+    uint16_t flow_id = 0, clk_id = 0;
+    mepa_ts_classifier_t class_conf = {};
+    mepa_ts_ptp_clock_conf_t clk_conf = {};
+    mepa_bool_t enable = (encap == MEPA_TS_ENCAP_NONE) ? FALSE : TRUE;
+
+    if (meba_phy_info_get(board_instance, port_no, &info) == MEPA_RC_OK) {
+        if ((info.cap & MEPA_CAP_TS_MASK_GEN_1) || (info.cap & MEPA_CAP_TS_MASK_GEN_2)) {
+            // vsc8574, vsc8584
+        // In vsc-phys like vsc8574, vsc8584, the timestamping block is shared between two ports.
+        // So, the base port uses flow-id '0', clock-id '0'. Alternate port uses flow-id '8', clock-id '2'.
+            if (info.ts_base_port != port_no) {
+                flow_id = 8;
+                clk_id = 2;
+            }
+        }
+    }
+
+    do {
+        // While deleting configuration, clock action must be deleted first before removing classifier configuration.
+        // While adding new configuration, clock action must be added after classifier configuration is done.
+        if (!enable) {
+            // Remove ingress clock action
+            rc = meba_phy_ts_rx_clock_conf_get(board_instance, port_no, clk_id, &clk_conf);
+            clk_conf.enable = FALSE;
+            clk_conf.clk_mode = MEPA_TS_PTP_CLOCK_MODE_NONE;
+            rc = meba_phy_ts_rx_clock_conf_set(board_instance, port_no, clk_id, &clk_conf);
+            if (rc != MEPA_RC_OK) {
+                break;
+            }
+
+            // Remove egress clock action
+            rc = meba_phy_ts_tx_clock_conf_get(board_instance, port_no, clk_id, &clk_conf);
+            clk_conf.enable = FALSE;
+            clk_conf.clk_mode = MEPA_TS_PTP_CLOCK_MODE_NONE;
+            rc = meba_phy_ts_tx_clock_conf_set(board_instance, port_no, clk_id, &clk_conf);
+            if (rc != MEPA_RC_OK) {
+                break;
+            }
+        }
+
+        // Classifier configuration need to be done before clock configuration.
+        // Configure ingress classifier
+        rc = meba_phy_ts_rx_classifier_conf_get(board_instance, port_no, flow_id, &class_conf);
+        class_conf.pkt_encap_type = encap;
+        class_conf.enable = enable;
+        class_conf.clock_id = clk_id;
+        class_conf.eth_class_conf.mac_match_select = MEPA_TS_ETH_MATCH_DEST_ADDR;
+        if (encap == MEPA_TS_ENCAP_ETH_IP_PTP) {
+            class_conf.eth_class_conf.vlan_conf.etype = has_ipv6 ? 0x86DD : 0x800;
+            class_conf.ip_class_conf.ip_ver = has_ipv6 ? MEPA_TS_IP_VER_6 : MEPA_TS_IP_VER_4;
+        } else if (encap == MEPA_TS_ENCAP_ETH_PTP) {
+            class_conf.eth_class_conf.vlan_conf.etype = 0x88f7;
+        }
+        rc = meba_phy_ts_rx_classifier_conf_set(board_instance, port_no, flow_id, &class_conf);
+        if (rc != MEPA_RC_OK) {
+            break;
+        }
+
+        // Configure egress classifier
+        rc = meba_phy_ts_tx_classifier_conf_get(board_instance, port_no, flow_id, &class_conf);
+        if (rc != MEPA_RC_OK) {
+            break;
+        }
+        class_conf.pkt_encap_type = encap;
+        class_conf.enable = enable;
+        class_conf.clock_id = clk_id;
+        class_conf.eth_class_conf.mac_match_select = MEPA_TS_ETH_MATCH_DEST_ADDR;
+        if (encap == MEPA_TS_ENCAP_ETH_IP_PTP) {
+            class_conf.eth_class_conf.vlan_conf.etype = has_ipv6 ? 0x86DD : 0x800;
+            class_conf.ip_class_conf.ip_ver = has_ipv6 ? MEPA_TS_IP_VER_6 : MEPA_TS_IP_VER_4;
+        } else if (encap == MEPA_TS_ENCAP_ETH_PTP) {
+            class_conf.eth_class_conf.vlan_conf.etype = 0x88f7;
+        }
+        rc = meba_phy_ts_tx_classifier_conf_set(board_instance, port_no, flow_id, &class_conf);
+        if (rc != MEPA_RC_OK) {
+            break;
+        }
+
+        // While adding new configuration, clock action must be added after classifier configuration is done.
+        // While deleting configuration, clock action must be deleted first before removing classifier configuration.
+        if (enable) {
+            // Configure ingress clock action
+            rc = meba_phy_ts_rx_clock_conf_get(board_instance, port_no, clk_id, &clk_conf);
+            if (rc != MEPA_RC_OK) {
+                break;
+            }
+            clk_conf.enable = TRUE;
+            clk_conf.clk_mode = clk_type;
+            clk_conf.delaym_type = MEPA_TS_PTP_DELAYM_E2E; //for peer to peer delay type, MEPA_TS_PTP_DELAYM_P2P need to be used.
+            clk_conf.ptp_class_conf.version.lower = 2;
+            clk_conf.ptp_class_conf.version.upper = 2;
+            clk_conf.ptp_class_conf.minor_version.lower = 0;
+            clk_conf.ptp_class_conf.minor_version.upper = 1;
+            rc = meba_phy_ts_rx_clock_conf_set(board_instance, port_no, clk_id, &clk_conf);
+            if (rc != MEPA_RC_OK) {
+                break;
+            }
+
+            // Configure egress clock action
+            rc = meba_phy_ts_tx_clock_conf_get(board_instance, port_no, clk_id, &clk_conf);
+            if (rc != MEPA_RC_OK) {
+                break;
+            }
+            clk_conf.enable = TRUE;
+            clk_conf.clk_mode = clk_type;
+            clk_conf.delaym_type = MEPA_TS_PTP_DELAYM_E2E; //for peer to peer delay type, MEPA_TS_PTP_DELAYM_P2P need to be used.
+            clk_conf.ptp_class_conf.version.lower = 2;
+            clk_conf.ptp_class_conf.version.upper = 2;
+            clk_conf.ptp_class_conf.minor_version.lower = 0;
+            clk_conf.ptp_class_conf.minor_version.upper = 1;
+            rc = meba_phy_ts_tx_clock_conf_set(board_instance, port_no, clk_id, &clk_conf);
+            if (rc != MEPA_RC_OK) {
+                break;
+            }
+        }
+
+        // mode_set API for enabling Timestamping.
+        rc = meba_phy_ts_mode_set(board_instance, port_no, enable);
+    } while(0);
+
+    return rc;
+}
+FUNCTION_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show platform phy [ interface <port_type_list> ]
+
+DOC_CMD_DESC    = Show PHY module's information for all or a given interface
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: show
+! 2: platform
+! 3: phy
+! 4: interface
+! 5: <port_type_list>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_interface
+CMD_VAR = v_port_type_list
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP = Platform specific information
+HELP = PHYs' information
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = interface : Option
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if(!has_interface)
+    {
+        v_port_type_list = NULL;
+    }
+    ICLI_PRINTF("%-6s %-10s %-10s %-10s %-10s %-10s %-10s\n","Port","API Inst","WAN/LAN/1G","Mode","Duplex","Speed","Link");
+    ICLI_PRINTF("%-6s %-10s %-10s %-10s %-10s %-10s %-10s\n","----","---------","---------","----","------","-----","----");
+    if(icli_cmd_phy_conf(session_id, v_port_type_list) != VTSS_RC_OK)
+    {
+        ICLI_PRINTF("Could not show phy configuration for given list of interfaces");
+    }
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show platform phy id [interface <port_type_list>]
+
+DOC_CMD_DESC    = Platform PHY IDs
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show platform id interface giga 1/1 or show platform id
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: show
+! 2: platform
+! 3: phy
+! 4: id
+! 5: interface
+! 6: <port_type_list>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_interface
+CMD_VAR = v_port_type_list
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = interface : Option
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_interface) {
+        v_port_type_list = NULL;
+    }
+
+    ICLI_PRINTF("%-6s %-8s %-10s %-10s %-11s\n","Port","Type","Phy Id","Phy Rev.", "Ts base no");
+    ICLI_PRINTF("%-6s %-8s %-10s %-10s %-11s\n","----","----","------","--------", "----------");
+
+    if (icli_cmd_phy_id(session_id, v_port_type_list) != VTSS_RC_OK) {
+        ICLI_PRINTF("Could not show phy id\n");
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy read  <0~31>  [ <0-0xffff> ] [ addr-sort ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = PHY register access
+BYWORD  =
+
+! read
+CMD_VAR =
+RUNTIME =
+HELP    = Read PHY registers
+BYWORD  =
+
+! <0~31>
+CMD_VAR = addr_list
+RUNTIME =
+HELP    = PHY address list
+BYWORD  = <AddrList : 0~31>
+
+! <0-0xffff>
+CMD_VAR = page
+RUNTIME =
+HELP    = PHY address page
+BYWORD  = <Page: 0-0xffff>
+
+! addr-sort
+CMD_VAR = has_addr_sort
+RUNTIME =
+HELP    = Enable (address, port) output sorting
+BYWORD  = addr-sort : Option
+
+VARIABLE_BEGIN
+    phy_icli_req_t req;
+VARIABLE_END
+
+CODE_BEGIN
+    phy_icli_req_init(&req, session_id);
+    req.port_list = plist;
+    req.addr_list = addr_list;
+    req.page = page;
+    req.addr_sort = has_addr_sort;
+    phy_icli_debug_phy(&req);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy write  <0~31>  <0-0xffff> [ <0-0xffff> ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = PHY register access
+BYWORD  =
+
+! write
+CMD_VAR =
+RUNTIME =
+HELP    = Write PHY registers
+BYWORD  =
+
+! <0~31>
+CMD_VAR = addr_list
+RUNTIME =
+HELP    = PHY address list
+BYWORD  = <AddrList : 0~31>
+
+! <0-0xffff>
+CMD_VAR = value
+RUNTIME =
+HELP    = PHY register value
+BYWORD  = <Value : 0-0xffff>
+
+! <0-0xffff>
+CMD_VAR = page
+RUNTIME =
+HELP    = PHY address page
+BYWORD  = <Page: 0-0xffff>
+
+VARIABLE_BEGIN
+    phy_icli_req_t req;
+VARIABLE_END
+
+CODE_BEGIN
+    phy_icli_req_init(&req, session_id);
+    req.port_list = plist;
+    req.addr_list = addr_list;
+    req.value = value;
+    req.page = page;
+    req.write = 1;
+    phy_icli_debug_phy(&req);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy mode-set [ media-if <0-9> ] [conf-mode <0-2> ] [ speed {1G | 100M | 10M} ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! mode-set
+CMD_VAR =
+RUNTIME =
+HELP    = Set the media interface type and operating mode for 1G PHY
+BYWORD  =
+
+! media_if
+CMD_VAR = has_media_if
+CMD_VAR = v_0_9
+RUNTIME =
+HELP    = Set PHY Media If 
+HELP    = 0:CU 1:PASSTHRU 2:FI_1000BX 3:FI_100FX 4:_AMS_CU_PASSTHRU \
+          5:AMS_FI_PASSTHRU 6:AMS_CU_1000BX 7:AMS_FI_1000BX 8:AMS_CU_100FX 9:AMS_FI_100FX
+BYWORD  =
+
+! conf-mode
+CMD_VAR = has_conf_mode
+CMD_VAR = v_0_2
+RUNTIME =
+HELP    = Set PHY Operating Mode 
+HELP    = 0:MODE_ANEG 1:MODE_FORCED 2:MODE_POWER_DOWN
+BYWORD  =
+
+! Speed
+CMD_VAR = has_speed
+CMD_VAR = has_1g
+CMD_VAR = has_100M
+CMD_VAR = has_10M
+RUNTIME =
+HELP    =
+BYWORD  =
+
+CODE_BEGIN
+   VTSS_RC(phy_icli_debug_phy_mode_set(session_id, plist, has_media_if, v_0_9,has_conf_mode,v_0_2, has_speed, has_1g, has_100M, has_10M));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy do-page-chk [enable|disable]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! do-page-chk
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! has_enable
+CMD_VAR = has_enable
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! has_disable
+CMD_VAR = has_disable
+RUNTIME =
+HELP    =
+BYWORD  =
+
+CODE_BEGIN
+   VTSS_RC(phy_icli_debug_do_page_chk(session_id, has_enable, has_disable));
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy force-pass-through-speed {1G | 100M | 10M}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! force-pass-through-speed
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! Speed
+CMD_VAR = has_1g
+CMD_VAR = has_100M
+CMD_VAR = has_10M
+RUNTIME =
+HELP    =
+BYWORD  =
+
+CODE_BEGIN
+   VTSS_RC(phy_icli_debug_phy_pass_through_speed(session_id, plist, has_1g, has_100M, has_10M));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy reset
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Select PHY for debugging (Note only local PHYs, NOT stack-aware)
+BYWORD  =
+
+! reset
+CMD_VAR =
+RUNTIME =
+HELP    = Reset the PHY for the given interface or interfaces
+BYWORD  =
+
+
+CODE_BEGIN
+    VTSS_RC(phy_icli_debug_phy_reset(session_id, plist));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy gpio <0-255> mode {output|input|alternative}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+!gpio
+CMD_VAR =
+RUNTIME =
+HELP    = GPIO keyword
+BYWORD  =
+
+!<1-13>
+CMD_VAR = gpio_no
+RUNTIME =
+HELP    = GPIO number to configure
+BYWORD  =
+
+!mode
+CMD_VAR =
+RUNTIME =
+HELP    = Configure GPIO operating mode
+BYWORD  =
+
+!output
+CMD_VAR = has_mode_output
+RUNTIME =
+HELP    = Set GPIO as output
+BYWORD  =
+
+!input
+CMD_VAR = has_mode_input
+RUNTIME =
+HELP    = Set GPIO as input
+BYWORD  =
+
+!alternative
+CMD_VAR = has_mode_alternative
+RUNTIME =
+HELP    = Set GPIO in alternative mode (see data-sheet)
+BYWORD  =
+
+CODE_BEGIN
+    VTSS_RC(phy_icli_debug_phy_gpio(session_id, plist, has_mode_output, has_mode_input, has_mode_alternative, FALSE, FALSE, FALSE, gpio_no))
+;
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy gpio <0-255> set {high|low}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+!gpio
+CMD_VAR =
+RUNTIME =
+HELP    = GPIO keyword
+BYWORD  =
+
+!<1-13>
+CMD_VAR = gpio_no
+RUNTIME =
+HELP    = GPIO number to set
+BYWORD  =
+
+!get
+CMD_VAR =
+RUNTIME =
+HELP    = Set the GPIO
+BYWORD  =
+
+!high
+CMD_VAR = high
+RUNTIME =
+HELP    = Set the GPIO high
+BYWORD  =
+
+!low
+CMD_VAR = low
+RUNTIME =
+HELP    = Set the GPIO low
+BYWORD  =
+
+
+CODE_BEGIN
+   high = !low;
+   VTSS_RC(phy_icli_debug_phy_gpio(session_id, plist, FALSE, FALSE, FALSE, FALSE, TRUE, high, gpio_no));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy gpio <0-255> get
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+!gpio
+CMD_VAR =
+RUNTIME =
+HELP    = GPIO keyword
+BYWORD  =
+
+!<0-255>
+CMD_VAR = gpio_no
+RUNTIME =
+HELP    = GPIO number to get from
+BYWORD  =
+
+!get
+CMD_VAR =
+RUNTIME =
+HELP    = Print the value of the GPIO
+BYWORD  =
+
+CODE_BEGIN
+    VTSS_RC(phy_icli_debug_phy_gpio(session_id, plist, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, gpio_no));
+CODE_END
+
+CMD_END
+
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy neg-1g { status | conf { get | set { ref | client | disable } } }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: neg-1g
+! 4: status
+! 5: conf
+! 6: get
+! 7: set
+! 8: master
+! 9: slave
+! 10: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_status
+CMD_VAR = has_conf
+CMD_VAR = has_get
+CMD_VAR = has_set
+CMD_VAR = has_ref
+CMD_VAR = has_client
+CMD_VAR = has_disable
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP = 1G negotiation
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = status : Option
+BYWORD = conf : Option
+BYWORD = get : Option
+BYWORD = set : Option
+BYWORD = master : Option
+BYWORD = slave : Option
+BYWORD = disable : Option
+
+VARIABLE_BEGIN
+    u32                     i;
+    u32                     j;
+    u32                     iport;
+    mepa_conf_t             phy_conf;
+    mepa_aneg_status_t      phy_status;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_get | has_status) {
+        ICLI_PRINTF("\n");
+        ICLI_PRINTF("%9s",  "Phy port");
+        ICLI_PRINTF("%15s", has_get ? "Manual Config" : "Ref Fault");
+        ICLI_PRINTF("%15s", "Ref/Client");
+        ICLI_PRINTF("\n");
+        ICLI_PRINTF(" -------- -------------- --------------\n");
+    }
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+            if (has_status) {
+                ICLI_PRINTF("%9u", iport);
+                if (meba_phy_aneg_status_get(board_instance, iport, &phy_status) == MEPA_RC_OK) {
+                    ICLI_PRINTF("%15s", phy_status.master_cfg_fault ? "TRUE" : "FALSE");
+                    ICLI_PRINTF("%15s", phy_status.master ? "Ref" : "Client");
+                    ICLI_PRINTF("\n");
+                } else {
+                    ICLI_PRINTF("Status get failed\n");
+                }
+            } else if (has_conf) {
+                if (meba_phy_conf_get(board_instance, iport, &phy_conf) == MEPA_RC_OK) {
+                    if (has_set) {
+                        phy_conf.man_neg = has_disable ? MEPA_MANUAL_NEG_DISABLED :
+                                           has_ref ? MEPA_MANUAL_NEG_REF : has_client ? MEPA_MANUAL_NEG_CLIENT : MEPA_MANUAL_NEG_REF;
+
+                        if (meba_phy_conf_set(board_instance, iport, &phy_conf) == MEPA_RC_OK) {
+                            ICLI_PRINTF("%% Manual negotiation set for phy port %u\n", iport);
+                        }
+                    } else if (has_get) {
+                        ICLI_PRINTF("%9u", iport);
+                        if ( phy_conf.man_neg ) {
+                            ICLI_PRINTF("%15s", "Enabled");
+                            if ( phy_conf.man_neg == MEPA_MANUAL_NEG_REF ) {
+                                ICLI_PRINTF("%15s", "Ref");
+                            } else {
+                                ICLI_PRINTF("%15s", "Client");
+                            }
+                        } else {
+                            ICLI_PRINTF("%15s", "Disabled");
+                            ICLI_PRINTF("%15s", "n/a");
+                        }
+                        ICLI_PRINTF("\n");
+                    }
+                } else {
+                    ICLI_PRINTF("Conf data failed\n");
+                }
+            }
+        }
+    }
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ring-resiliency { get | { enable | disable } }
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ring-resiliency
+! 4: get
+! 5: enable
+! 6: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_get
+CMD_VAR = has_enable
+CMD_VAR = has_disable
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP = get the ring-resiliency configuration
+HELP = enable ring-resiliency of PHY (clocking master becomes slave and vice versa)
+HELP = disable ring-resiliency of PHY
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = get : Option
+BYWORD = enable : Option
+BYWORD = disable : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    VTSS_RC(phy_icli_debug_phy_ring_resiliency_conf(session_id, plist, has_enable, has_disable, has_get));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy clock <0-1> { get | set type { serdes | copper | tclk | xtal | disable } [ frequency { 25m | 125m | 3125m } ] [ squelch <0-3> ] }
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! clock
+CMD_VAR =
+RUNTIME =
+HELP    = Clock configuration
+BYWORD  =
+
+! <0-1>
+CMD_VAR = clock_port
+RUNTIME =
+HELP    = Clock port
+BYWORD  =
+
+! get
+CMD_VAR = b_get
+RUNTIME =
+HELP    = Display clock configuration
+BYWORD  =
+
+! set
+CMD_VAR =
+RUNTIME =
+HELP    = Set clock configuration
+BYWORD  =
+
+! type
+CMD_VAR =
+RUNTIME =
+HELP    = Clock source type
+BYWORD  =
+
+! serdes
+CMD_VAR = b_serdes
+RUNTIME =
+HELP    = SERDES PHY
+BYWORD  =
+
+! copper
+CMD_VAR = b_copper
+RUNTIME =
+HELP    = COPPER PHY
+BYWORD  =
+
+! tclk
+CMD_VAR = b_tclk
+RUNTIME =
+HELP    = Transmitter TCLK
+BYWORD  =
+
+! xtal
+CMD_VAR = b_xtal
+RUNTIME =
+HELP    = Local XTAL
+BYWORD  =
+
+! disable
+CMD_VAR =
+RUNTIME =
+HELP    = Recovered Clock Disable
+BYWORD  =
+
+! frequency
+CMD_VAR =
+RUNTIME =
+HELP    = Recovered clock frequency
+BYWORD  =
+
+! 25m
+CMD_VAR =
+RUNTIME =
+HELP    = 25M Hz
+BYWORD  =
+
+! 125m
+CMD_VAR = b_125m
+RUNTIME =
+HELP    = 125M Hz
+BYWORD  =
+
+! 3125m
+CMD_VAR = b_3125m
+RUNTIME =
+HELP    = 3125M Hz
+BYWORD  =
+
+! squelch
+CMD_VAR = b_squelch
+RUNTIME =
+HELP    = Clock squelch level
+BYWORD  =
+
+! <0-3>
+CMD_VAR = squelch
+RUNTIME =
+HELP    = Clock squelch level
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32                     i;
+    u32                     j;
+    u32                     iport;
+    vtss_phy_clock_conf_t   conf;
+    mesa_port_no_t          clock_source;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( b_get ) {
+        ICLI_PRINTF("\n");
+        ICLI_PRINTF("%9s",  "Phy port");
+        ICLI_PRINTF("%10s", "Clock");
+        ICLI_PRINTF("%11s", "Source");
+        ICLI_PRINTF("%9s",  "Type");
+        ICLI_PRINTF("%14s", "Frequence");
+        ICLI_PRINTF("%12s", "Squelch");
+        ICLI_PRINTF("\n");
+        ICLI_PRINTF(" -------- --------- ---------- -------- ------------- -----------\n");
+
+        for ( i = 0; i < plist->cnt; ++i ) {
+            for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+                iport = plist->switch_range[i].begin_iport + j;
+
+                if ( vtss_phy_clock_conf_get(MISC_INST, iport, clock_port, &conf, &clock_source) != VTSS_RC_OK ) {
+                    ICLI_PRINTF("%% Fail: get phy port %u\n", iport);
+                    continue;
+                }
+
+                ICLI_PRINTF("%9u", iport);
+
+                switch( clock_port ) {
+                    case VTSS_PHY_RECOV_CLK1:    ICLI_PRINTF("%10s", "1");     break;
+                    case VTSS_PHY_RECOV_CLK2:    ICLI_PRINTF("%10s", "2");     break;
+                    default:                     ICLI_PRINTF("%10s", "-");
+                }
+
+                ICLI_PRINTF("%11u", clock_source);
+
+                switch( conf.src ) {
+                    case VTSS_PHY_SERDES_MEDIA:    ICLI_PRINTF("%9s", "serdes");     break;
+                    case VTSS_PHY_COPPER_MEDIA:    ICLI_PRINTF("%9s", "copper");     break;
+                    case VTSS_PHY_TCLK_OUT:        ICLI_PRINTF("%9s", "tclk");       break;
+                    case VTSS_PHY_LOCAL_XTAL:      ICLI_PRINTF("%9s", "xtal");       break;
+                    case VTSS_PHY_CLK_DISABLED:    ICLI_PRINTF("%9s", "disable");    break;
+                    default:                       ICLI_PRINTF("%9s", "-------");    break;
+                }
+
+                switch( conf.freq ) {
+                    case VTSS_PHY_FREQ_25M:     ICLI_PRINTF("%14s", "25M");      break;
+                    case VTSS_PHY_FREQ_125M:    ICLI_PRINTF("%14s", "125M");     break;
+                    case VTSS_PHY_FREQ_3125M:   ICLI_PRINTF("%14s", "3125M");    break;
+                    default:                    ICLI_PRINTF("%14s", "-----");    break;
+                }
+
+                switch( conf.squelch ) {
+                    case VTSS_PHY_CLK_SQUELCH_MAX:    ICLI_PRINTF("%12s", "0");    break;
+                    case VTSS_PHY_CLK_SQUELCH_MED:    ICLI_PRINTF("%12s", "1");    break;
+                    case VTSS_PHY_CLK_SQUELCH_MIN:    ICLI_PRINTF("%12s", "2");    break;
+                    case VTSS_PHY_CLK_SQUELCH_NONE:   ICLI_PRINTF("%12s", "3");    break;
+                    default:                          ICLI_PRINTF("%12s", "-");    break;
+                }
+                ICLI_PRINTF("\n");
+            }
+        }
+    } else {
+        conf.src = b_serdes ? VTSS_PHY_SERDES_MEDIA :
+                   b_copper ? VTSS_PHY_COPPER_MEDIA :
+                   b_tclk   ? VTSS_PHY_TCLK_OUT     :
+                   b_xtal   ? VTSS_PHY_LOCAL_XTAL   : VTSS_PHY_CLK_DISABLED;
+
+        conf.freq = b_125m  ? VTSS_PHY_FREQ_125M  :
+                    b_3125m ? VTSS_PHY_FREQ_3125M : VTSS_PHY_FREQ_25M;
+
+        conf.squelch = (vtss_phy_clk_squelch)(b_squelch ? squelch : 0);
+
+        for ( i = 0; i < plist->cnt; ++i ) {
+            for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+                iport = plist->switch_range[i].begin_iport + j;
+                if (vtss_phy_clock_conf_set(MISC_INST, iport, clock_port, &conf) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Fail: set phy port %u\n", iport);
+                }
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy i2c read <0-3> <0-127> <0-255> <0-255>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! i2c
+CMD_VAR =
+RUNTIME =
+HELP    = I2C register
+BYWORD  =
+
+! read
+CMD_VAR =
+RUNTIME =
+HELP    = Read I2C register
+BYWORD  =
+
+! <0-3>
+CMD_VAR = i2c_mux
+RUNTIME =
+HELP    = I2C MUX
+BYWORD  =
+
+! <0-127>
+CMD_VAR = i2c_device_addr
+RUNTIME =
+HELP    = I2C device address
+BYWORD  =
+
+! <0-255>
+CMD_VAR = i2c_reg_addr
+RUNTIME =
+HELP    = I2C register address
+BYWORD  =
+
+! <0-255>
+CMD_VAR = i2c_data_cnt
+RUNTIME =
+HELP    = I2C data count [pass 0: to print entire range from 0 to 255]
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+    u8      value[255];
+    u16     byte_cnt,cnt;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            if ( vtss_phy_i2c_read(MISC_INST, iport, i2c_mux, i2c_reg_addr, i2c_device_addr, FALSE, i2c_data_cnt, &value[0]) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%% Fail: read phy port %u\n", iport);
+            } else {
+                ICLI_PRINTF("Iport %u\n", iport);
+                ICLI_PRINTF("Addr   Data\n");
+                (i2c_data_cnt == 0)?( cnt = 256): (cnt = i2c_data_cnt);
+                for ( byte_cnt = 0; byte_cnt < cnt; ++byte_cnt ) {
+                    ICLI_PRINTF("0x%04x 0x%04x\n", i2c_reg_addr, value[byte_cnt]);
+                }
+            }
+            ICLI_PRINTF("\n");
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy i2c write <0-3> <0-127> <0-255> <hexval>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! i2c
+CMD_VAR =
+RUNTIME =
+HELP    = I2C register
+BYWORD  =
+
+! write
+CMD_VAR =
+RUNTIME =
+HELP    = Write I2C register
+BYWORD  =
+
+! <0-3>
+CMD_VAR = i2c_mux
+RUNTIME =
+HELP    = I2C MUX
+BYWORD  =
+
+! <0-127>
+CMD_VAR = i2c_device_addr
+RUNTIME =
+HELP    = I2C device address
+BYWORD  =
+
+! <0-255>
+CMD_VAR = i2c_reg_addr
+RUNTIME =
+HELP    = I2C register address
+BYWORD  =
+
+! <hexval>
+CMD_VAR = data
+RUNTIME =
+HELP    = Hex data to write
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            if ( vtss_phy_i2c_write(MISC_INST, iport, i2c_mux, i2c_reg_addr, i2c_device_addr, FALSE, data.len, data.hex) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Fail: write phy port %u\n", iport);
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_CHIP_10G_PHY)
+
+COMMAND = debug phy i2c-reset
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! i2c-reset
+CMD_VAR =
+RUNTIME =
+HELP    = I2C reset
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32 i, j, iport;
+VARIABLE_END
+
+CODE_BEGIN
+    for (i = 0; i < plist->cnt; ++i) {
+        for (j = 0; j < plist->switch_range[i].port_cnt; ++j) {
+            iport = plist->switch_range[i].begin_iport + j;
+            if (vtss_phy_10g_i2c_reset(MISC_INST, iport) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%% Fail: I2C reset phy port %u\n", iport);
+            } else {
+                ICLI_PRINTF("%% Success : I2C reset phy port %u\n", iport);
+            }
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_CHIP_10G_PHY)
+COMMAND = debug phy i2c-slave-conf [<0-0xff>] [<0-0xffff>]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! i2c-slave-conf
+CMD_VAR =
+RUNTIME =
+HELP    = I2C slave conf
+BYWORD  =
+
+! <0-0x7f>
+CMD_VAR = i2c_slave_id
+RUNTIME =
+HELP    = I2C slave id
+BYWORD  =
+
+! <0-0xffff>
+CMD_VAR = prescale
+RUNTIME =
+HELP    = prescale value (SCL Frequency = 156.25 MHz/5*(Prescale+1). 0 to 76 are invalid settings.)
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i,j,iport;
+    vtss_phy_10g_i2c_slave_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    for (i = 0; i < plist->cnt; ++i) {
+        for (j = 0; j < plist->switch_range[i].port_cnt; ++j) {
+             iport = plist->switch_range[i].begin_iport + j;
+             if (i2c_slave_id) { conf.slave_id = i2c_slave_id;} else { conf.slave_id = 0x50;}
+             if (prescale) { conf.prescale = prescale; } else { conf.prescale = 0x4d;}
+             if (i2c_slave_id || prescale) {
+                 if (vtss_phy_10g_i2c_slave_conf_set(MISC_INST, iport, &conf) != VTSS_RC_OK) {
+                     ICLI_PRINTF("%% Fail: slave conf phy port %u\n", iport);
+                 } else {
+                    ICLI_PRINTF("%% Success: slave conf phy port %u\n", iport);
+                 }
+             } else {
+                if (vtss_phy_10g_i2c_slave_conf_get(MISC_INST, iport, &conf) == VTSS_RC_OK) {
+                    ICLI_PRINTF("phy port:%u slave_id:0x%x prescale:0x%x\n",iport, conf.slave_id, conf.prescale);
+                }
+             }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ib-cterm <0-0xff> <0-0xff>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! ib-cterm
+CMD_VAR =
+RUNTIME =
+HELP    = Set the ib cterm patch
+BYWORD  =
+
+! <0-0xff>
+CMD_VAR = ib_cterm_value
+RUNTIME =
+HELP    = Value to call the ib cterm patch
+BYWORD  =
+
+! <0-0xff>
+CMD_VAR = ib_eq_mode
+RUNTIME =
+HELP    = Value of ib_eq_mode to call the ib cterm patch
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            if ( vtss_phy_cfg_ib_cterm(NULL, iport, ib_cterm_value, ib_eq_mode) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%% Fail: set phy port %u\n", iport);
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug phy loopback [ near | far | connector | mac-serdes-input | mac-serdes-facility | mac-serdes-equipment | media-serdes-input | media-serdes-facility | media-serdes-equipment | qsgmii-tbi | qsgmii-gmi | qsgmii-serdes ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+
+! debug
+CMD_VAR =
+HELP    = ##ICLI_HELP_DEBUG
+
+! phy
+CMD_VAR =
+HELP    = Select PHY for debugging (Note only local PHYs, NOT stack-aware)
+
+! loopback
+CMD_VAR =
+HELP    = Enable/Disable loopback in the PHY
+
+! near
+CMD_VAR = has_near
+HELP    = Near end loopback (MAC side)
+
+! far
+CMD_VAR = has_far
+HELP    = Far end loopback (Cu port)
+
+!connector
+CMD_VAR = has_connector
+HELP    =
+
+!mac-serdes-input
+CMD_VAR = has_mac_serdes_input
+HELP    =
+
+!mac-serdes-facility
+CMD_VAR = has_mac_serdes_facility
+HELP    =
+
+!mac-serdes-equipment
+CMD_VAR = has_mac_serdes_equipment
+HELP    =
+
+!media-serdes-input
+CMD_VAR = has_media_serdes_input
+HELP    =
+
+!media-serdes-facility
+CMD_VAR = has_media_serdes_facility
+HELP    =
+
+!media-serdes-equipment
+CMD_VAR = has_media_serdes_equipment
+HELP    =
+
+!qsgmii-tbi
+CMD_VAR = has_qsgmii_tbi
+HELP    =
+
+!qsgmii-gmi
+CMD_VAR = has_qsgmii_gmi
+HELP    =
+
+!qsgmii-serdes
+CMD_VAR = has_qsgmii_serdes
+HELP    =
+
+CODE_BEGIN
+    phy_icli_loopback_t lb = {};
+    lb.near = has_near;
+    lb.far = has_far;
+    lb.connector = has_connector;
+    lb.mac_serdes_input = has_mac_serdes_input;
+    lb.mac_serdes_facility = has_mac_serdes_facility;
+    lb.mac_serdes_equipment = has_mac_serdes_equipment;
+    lb.media_serdes_input = has_media_serdes_input;
+    lb.media_serdes_facility = has_media_serdes_facility;
+    lb.media_serdes_equipment = has_media_serdes_equipment;
+    lb.qsgmii_tbi = has_qsgmii_tbi;
+    lb.qsgmii_gmi = has_qsgmii_gmi;
+    lb.qsgmii_serdes = has_qsgmii_serdes;
+    if (phy_icli_debug_phy_loop(session_id, plist, lb, FALSE) != MESA_RC_OK) {
+        ICLI_PRINTF(" Loopback set failed\n");
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    phy_icli_loopback_t lb = {};
+    lb.near = has_near;
+    lb.far = has_far;
+    lb.connector = has_connector;
+    lb.mac_serdes_input = has_mac_serdes_input;
+    lb.mac_serdes_facility = has_mac_serdes_facility;
+    lb.mac_serdes_equipment = has_mac_serdes_equipment;
+    lb.media_serdes_input = has_media_serdes_input;
+    lb.media_serdes_facility = has_media_serdes_facility;
+    lb.media_serdes_equipment = has_media_serdes_equipment;
+    lb.qsgmii_tbi = has_qsgmii_tbi;
+    lb.qsgmii_gmi = has_qsgmii_gmi;
+    lb.qsgmii_serdes = has_qsgmii_serdes;
+    if (phy_icli_debug_phy_loop(session_id, plist, lb, TRUE) != MESA_RC_OK) {
+        ICLI_PRINTF(" Loopback unset failed\n");
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy mmd read <0-31> <0-0xffff>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! mmd
+CMD_VAR =
+RUNTIME =
+HELP    = MMD register
+BYWORD  =
+
+! read
+CMD_VAR =
+RUNTIME =
+HELP    = Read MMD register
+BYWORD  =
+
+! <0-31>
+CMD_VAR = devad
+RUNTIME =
+HELP    = PHY devad
+BYWORD  =
+
+! <0-0xffff>
+CMD_VAR = mmd_reg_addr
+RUNTIME =
+HELP    = PHY MMD register address
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32             i;
+    u32             j;
+    u32             iport;
+    vtss_isid_t     isid;
+    ushort          value;
+    i32             k;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("ISID  Iport  Addr     Value   15      8 7       0\n");
+
+    for ( i = 0; i < plist->cnt; ++i ) {
+        isid = plist->switch_range[i].isid;
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            if ( misc_debug_phy_read(isid, iport, mmd_reg_addr, 0, &value, TRUE, devad) == VTSS_RC_OK ) {
+                ICLI_PRINTF("%4u  ", isid);
+                ICLI_PRINTF("%5u  ", iport);
+                ICLI_PRINTF("0x%04x   ", mmd_reg_addr);
+                ICLI_PRINTF("0x%04x  ", value);
+                for ( k = 15; k >= 0; --k ) {
+                    ICLI_PRINTF("%u%s", value & (1 << k) ? 1 : 0, k == 0 ? "\n" : (k % 4) ? "" : ".");
+                }
+            } else {
+                ICLI_PRINTF("%% Fail: read isid %u iport %u\n", isid, iport);
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy mmd write <0-31> <0-0xffff> <uint16>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! mmd
+CMD_VAR =
+RUNTIME =
+HELP    = MMD register
+BYWORD  =
+
+! write
+CMD_VAR =
+RUNTIME =
+HELP    = Write MMD register
+BYWORD  =
+
+! <0-31>
+CMD_VAR = devad
+RUNTIME =
+HELP    = PHY devad
+BYWORD  =
+
+! <0-0xffff>
+CMD_VAR = mmd_reg_addr
+RUNTIME =
+HELP    = PHY MMD register address
+BYWORD  =
+
+! <uint16>
+CMD_VAR = value
+RUNTIME =
+HELP    = Value to write
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32             i;
+    u32             j;
+    u32             iport;
+    vtss_isid_t     isid;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        isid = plist->switch_range[i].isid;
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            if ( misc_debug_phy_write(isid, iport, mmd_reg_addr, 0, value, TRUE, devad) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%% Fail: write isid %u iport %u\n", isid, iport);
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ob-post0 <uint16>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! ob-post0
+CMD_VAR =
+RUNTIME =
+HELP    = Check the ob post0 patch
+BYWORD  =
+
+! <uint16>
+CMD_VAR = value
+RUNTIME =
+HELP    = Value to call the ob post0 patch
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            if ( vtss_phy_cfg_ob_post0(NULL, iport, value) != VTSS_RC_OK ) {
+                ICLI_PRINTF("%% Fail: configure iport %u\n", iport);
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy patch-settings-get
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! patch-settings-get
+CMD_VAR =
+RUNTIME =
+HELP    = Prints the patch settings
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+
+    u8      cfg_buf[MAX_CFG_BUF_SIZE];
+    u8      stat_buf[MAX_STAT_BUF_SIZE];
+    u8      mcb_bus;
+    mesa_rc rc;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            mcb_bus = 0;
+
+            // Get SerDes 6G
+            ICLI_PRINTF("\n");
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("Iport : %u\n", iport);
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("\n");
+            if ((rc = vtss_phy_patch_settings_get(NULL, iport, &mcb_bus, &cfg_buf[0], &stat_buf[0])) != VTSS_RC_OK ) {
+                if (rc == VTSS_RC_ERR_PHY_PATCH_SETTING_NOT_SUPPORTED) {
+                   ICLI_PRINTF("Micro patch setting not supported for iport:%u\n", iport);
+                } else {
+                   ICLI_PRINTF("%% Fail: get iport %u, mcb bus %u\n", iport, mcb_bus);
+                }
+                continue;
+            } else {
+                if ( mcb_bus == 1 ) {
+                    // Get SerDes 6G
+                    ICLI_PRINTF("************ serdes6g_dig_cfg ************\n");
+                    _cfg_print("gp",281,279, &cfg_buf[0]);
+                    _cfg_print("tx_bit_doubling_mode_ena",278, -1, &cfg_buf[0]);
+                    _cfg_print("sigdet_testmode",277, -1, &cfg_buf[0]);
+                    _cfg_print("sigdet_ast",276,274, &cfg_buf[0]);
+                    _cfg_print("sigdet_dst",273,271, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_dft_cfg0 ************\n");
+                    _cfg_print("lazybit",270, -1,&cfg_buf[0]);
+                    _cfg_print("inv_dis",269, -1, &cfg_buf[0]);
+                    _cfg_print("prbs_sel",268,267, &cfg_buf[0]);
+                    _cfg_print("test_mode",266,264,  &cfg_buf[0]);
+                    _cfg_print("rx_phs_corr_dis",263, -1, &cfg_buf[0]);
+                    _cfg_print("rx_pdsens_ena",262, -1, &cfg_buf[0]);
+                    _cfg_print("rx_dft_ena",261, -1, &cfg_buf[0]);
+                    _cfg_print("tx_dft_ena",260, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_dft_cfg1 ************\n");
+                    _cfg_print("tx_jitter_ampl",259,250, &cfg_buf[0]);
+                    _cfg_print("tx_step_freq",249,246, &cfg_buf[0]);
+                    _cfg_print("tx_ji_ena",245, -1, &cfg_buf[0]);
+                    _cfg_print("tx_waveform_sel",244, -1, &cfg_buf[0]);
+                    _cfg_print("tx_freqoff_dir",243, -1, &cfg_buf[0]);
+                    _cfg_print("tx_freqoff_ena",242, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_dft_cfg2 ************\n");
+                    _cfg_print("rx_jitter_ampl",241,232, &cfg_buf[0]);
+                    _cfg_print("rx_step_freq",231,228, &cfg_buf[0]);
+                    _cfg_print("rx_ji_ena",227, -1, &cfg_buf[0]);
+                    _cfg_print("rx_waveform_sel",226, -1, &cfg_buf[0]);
+                    _cfg_print("rx_freqoff_dir",225, -1, &cfg_buf[0]);
+                    _cfg_print("rx_freqoff_ena",224, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_tp_cfg0 ************\n");
+                    _cfg_print("static_pattern",223,204, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_tp_cfg1 ************\n");
+                    _cfg_print("static_pattern2",203,184, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_misc_cfg ************\n");
+                    _cfg_print("pll_bist_ena",183, -1, &cfg_buf[0]);
+                    _cfg_print("des_100fx_kick_mode",182,181, &cfg_buf[0]);
+                    _cfg_print("des_100fx_cpmd_swap",180, -1, &cfg_buf[0]);
+                    _cfg_print("des_100fx_cpmd_mode",179, -1, &cfg_buf[0]);
+                    _cfg_print("des_100fx_cpmd_ena",178, -1, &cfg_buf[0]);
+                    _cfg_print("rx_lpi_mode_ena",177, -1, &cfg_buf[0]);
+                    _cfg_print("tx_lpi_mode_ena",176, -1, &cfg_buf[0]);
+                    _cfg_print("rx_data_inv_ena",175, -1, &cfg_buf[0]);
+                    _cfg_print("tx_data_inv_ena",174, -1, &cfg_buf[0]);
+                    _cfg_print("lane_rst",173, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_ob_aneg_cfg ************\n");
+                    _cfg_print("an_ob_post0",172,167, &cfg_buf[0]);
+                    _cfg_print("an_ob_post1",166,162, &cfg_buf[0]);
+                    _cfg_print("an_ob_prec",161,157, &cfg_buf[0]);
+                    _cfg_print("an_ob_ena_cas",156,154, &cfg_buf[0]);
+                    _cfg_print("an_ob_lev",153,148, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_des_cfg ************\n");
+                    _cfg_print("des_phs_ctrl",147,144,  &cfg_buf[0]);
+                    _cfg_print("des_mbtr_ctrl",143,141,&cfg_buf[0]);
+                    _cfg_print("des_cpmd_sel",140,139, &cfg_buf[0]);
+                    _cfg_print("des_bw_hyst",138,136,  &cfg_buf[0]);
+                    _cfg_print("des_swap_hyst",135, -1, &cfg_buf[0]);
+                    _cfg_print("des_bw_ana",134,132,  &cfg_buf[0]);
+                    _cfg_print("des_swap_ana",131, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_ib_cfg ************\n");
+                    _cfg_print("acjtag_hyst",130,128,  &cfg_buf[0]);
+                    _cfg_print("ib_ic_ac",127,125,  &cfg_buf[0]);
+                    _cfg_print("ib_ic_com",124,122,  &cfg_buf[0]);
+                    _cfg_print("ib_ic_dc",121,119,  &cfg_buf[0]);
+                    _cfg_print("ib_r_cor",118, -1, &cfg_buf[0]);
+                    _cfg_print("ib_rf",117,114,  &cfg_buf[0]);
+                    _cfg_print("ib_rt",113,110,  &cfg_buf[0]);
+                    _cfg_print("ib_vbac",109,107,  &cfg_buf[0]);
+                    _cfg_print("ib_vbcom",106,104,  &cfg_buf[0]);
+                    _cfg_print("ib_resistor_ctrl",103,100,  &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_ib_cfg1 ************\n");
+                    _cfg_print("ib_c_off",99,98,  &cfg_buf[0]);
+                    _cfg_print("ib_c",97,94,  &cfg_buf[0]);
+                    _cfg_print("ib_chf",93, -1, &cfg_buf[0]);
+                    _cfg_print("ib_aneg_mode",92, -1, &cfg_buf[0]);
+                    _cfg_print("ib_cterm_ena",91, -1, &cfg_buf[0]);
+                    _cfg_print("ib_dis_eq",90, -1, &cfg_buf[0]);
+                    _cfg_print("ib_ena_offsac",89, -1, &cfg_buf[0]);
+                    _cfg_print("ib_ena_offsdc",88, -1, &cfg_buf[0]);
+                    _cfg_print("ib_fx100_ena",87, -1, &cfg_buf[0]);
+                    _cfg_print("ib_rst",86, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_ob_cfg ************\n");
+                    _cfg_print("ob_idle",85, -1, &cfg_buf[0]);
+                    _cfg_print("ob_ena1v_mode",84, -1, &cfg_buf[0]);
+                    _cfg_print("ob_pol",83, -1, &cfg_buf[0]);
+                    _cfg_print("ob_post0",82,77,  &cfg_buf[0]);
+                    _cfg_print("ob_post1",76,72,  &cfg_buf[0]);
+                    _cfg_print("ob_prec",71,67,  &cfg_buf[0]);
+                    _cfg_print("ob_r_adj_mux",66, -1, &cfg_buf[0]);
+                    _cfg_print("ob_r_adj_pdr",65, -1, &cfg_buf[0]);
+                    _cfg_print("ob_r_cor",64, -1, &cfg_buf[0]);
+                    _cfg_print("ob_sel_rctrl",63, -1, &cfg_buf[0]);
+                    _cfg_print("ob_sr_h",62, -1, &cfg_buf[0]);
+                    _cfg_print("ob_sr",61,58, &cfg_buf[0]);
+                    _cfg_print("ob_resistor_ctrl",57,54,  &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_ob_cfg1 ************\n");
+                    _cfg_print("ob_ena_cas",53,51,  &cfg_buf[0]);
+                    _cfg_print("ob_lev",50,45,  &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_ser_cfg ************\n");
+                    _cfg_print("ser_4tap_ena",44, -1, &cfg_buf[0]);
+                    _cfg_print("ser_cpmd_sel",43, -1, &cfg_buf[0]);
+                    _cfg_print("ser_swap_cpmd",42, -1, &cfg_buf[0]);
+                    _cfg_print("ser_alisel",41,40,  &cfg_buf[0]);
+                    _cfg_print("ser_enhys",39, -1, &cfg_buf[0]);
+                    _cfg_print("ser_big_win",38, -1, &cfg_buf[0]);
+                    _cfg_print("ser_en_win",37, -1, &cfg_buf[0]);
+                    _cfg_print("ser_enali",36, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_common_cfg ************\n");
+                    _cfg_print("sys_rst",35, -1, &cfg_buf[0]);
+                    _cfg_print("se_auto_squelch_b_ena",34, -1, &cfg_buf[0]);
+                    _cfg_print("se_auto_squelch_a_ena",33, -1, &cfg_buf[0]);
+                    _cfg_print("reco_sel_b",32, -1, &cfg_buf[0]);
+                    _cfg_print("reco_sel_a",31, -1, &cfg_buf[0]);
+                    _cfg_print("ena_lane",30, -1, &cfg_buf[0]);
+                    _cfg_print("pwd_rx",29, -1, &cfg_buf[0]);
+                    _cfg_print("pwd_tx",28, -1, &cfg_buf[0]);
+                    _cfg_print("lane_ctrl",27,25,  &cfg_buf[0]);
+                    _cfg_print("ena_direct",24, -1, &cfg_buf[0]);
+                    _cfg_print("ena_eloop",23, -1, &cfg_buf[0]);
+                    _cfg_print("ena_floop",22, -1, &cfg_buf[0]);
+                    _cfg_print("ena_iloop",21, -1, &cfg_buf[0]);
+                    _cfg_print("ena_ploop",20, -1, &cfg_buf[0]);
+                    _cfg_print("hrate",19, -1, &cfg_buf[0]);
+                    _cfg_print("qrate",18, -1, &cfg_buf[0]);
+                    _cfg_print("if_mode",17,16, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_pll_cfg ************\n");
+                    _cfg_print("pll_div4",15, -1, &cfg_buf[0]);
+                    _cfg_print("pll_ena_rot",14, -1, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_ctrl_data",13,6, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_ena",5, -1, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_force_set_ena",4, -1, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_oor_recal_ena",3, -1, &cfg_buf[0]);
+                    _cfg_print("pll_rb_data_sel",2, -1, &cfg_buf[0]);
+                    _cfg_print("pll_rot_dir",1, -1, &cfg_buf[0]);
+                    _cfg_print("pll_rot_frq",0, -1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_dft_status ************\n");
+                    _cfg_print("pll_bist_not_done",17, -1, &stat_buf[0]);
+                    _cfg_print("pll_bist_failed",16, -1, &stat_buf[0]);
+                    _cfg_print("pll_bist_timeout_err",15, -1, &stat_buf[0]);
+                    _cfg_print("bist_active",14, -1, &stat_buf[0]);
+                    _cfg_print("bist_nosync",13, -1, &stat_buf[0]);
+                    _cfg_print("bist_complete_n",12, -1, &stat_buf[0]);
+                    _cfg_print("bist_error",11, -1, &stat_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_pll_status ************\n");
+                    _cfg_print("pll_cal_not_done",10, -1, &stat_buf[0]);
+                    _cfg_print("pll_cal_err",9, -1, &stat_buf[0]);
+                    _cfg_print("pll_out_of_range_err",8, -1, &stat_buf[0]);
+                    _cfg_print("pll_rb_data",7,0, &stat_buf[0]);
+                } else {
+                    ICLI_PRINTF("************ Serdes1g_dft_cfg0 ************\n");
+                    _cfg_print("lazybit",177,-1, &cfg_buf[0]);
+                    _cfg_print("inv_dis",176,-1, &cfg_buf[0]);
+                    _cfg_print("prbs_sel",175,174, &cfg_buf[0]);
+                    _cfg_print("test_mode",173,171, &cfg_buf[0]);
+                    _cfg_print("rx_phs_corr_dis",170,-1, &cfg_buf[0]);
+                    _cfg_print("rx_pdsens_ena",169,-1, &cfg_buf[0]);
+                    _cfg_print("rx_dft_ena",168,-1, &cfg_buf[0]);
+                    _cfg_print("tx_dft_ena",167,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_dft_cfg1 ************\n");
+                    _cfg_print("tx_jitter_ampl",166,157, &cfg_buf[0]);
+                    _cfg_print("tx_step_freq",156,153, &cfg_buf[0]);
+                    _cfg_print("tx_ji_ena",152,-1, &cfg_buf[0]);
+                    _cfg_print("tx_waveform_sel",151, -1, &cfg_buf[0]);
+                    _cfg_print("tx_freqoff_dir",150,-1, &cfg_buf[0]);
+                    _cfg_print("tx_freqoff_ena",149,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_dft_cfg2 ************\n");
+                    _cfg_print("rx_jitter_ampl",148,139, &cfg_buf[0]);
+                    _cfg_print("rx_step_freq",138,135, &cfg_buf[0]);
+                    _cfg_print("rx_ji_ena",134,-1, &cfg_buf[0]);
+                    _cfg_print("rx_waveform_sel",133,-1, &cfg_buf[0]);
+                    _cfg_print("rx_freqoff_dir",132,-1, &cfg_buf[0]);
+                    _cfg_print("rx_freqoff_ena",131,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_tp_cfg ************\n");
+                    _cfg_print("static_pattern",130,111, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_misc_cfg ************\n");
+                    _cfg_print("pll_bist_ena",110,-1, &cfg_buf[0]);
+                    _cfg_print("des_100fx_kick_mode",109,108, &cfg_buf[0]);
+                    _cfg_print("des_100fx_cpmd_swap",107,-1, &cfg_buf[0]);
+                    _cfg_print("des_100fx_cpmd_mode",106, -1, &cfg_buf[0]);
+                    _cfg_print("des_100fx_cpmd_ena",105,-1, &cfg_buf[0]);
+                    _cfg_print("rx_lpi_mode_ena",104,-1, &cfg_buf[0]);
+                    _cfg_print("tx_lpi_mode_ena",103,-1, &cfg_buf[0]);
+                    _cfg_print("rx_data_inv_ena",102,-1, &cfg_buf[0]);
+                    _cfg_print("tx_data_inv_ena",101,-1, &cfg_buf[0]);
+                    _cfg_print("lane_rst",100,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_des_cfg ************\n");
+                    _cfg_print("des_phs_ctrl",99,96, &cfg_buf[0]);
+                    _cfg_print("des_cpmd_sel",95,94, &cfg_buf[0]);
+                    _cfg_print("des_mbtr_ctrl",93,91, &cfg_buf[0]);
+                    _cfg_print("des_bw_ana",90,88, &cfg_buf[0]);
+                    _cfg_print("des_swap_ana",87,-1, &cfg_buf[0]);
+                    _cfg_print("des_bw_hyst",86,84, &cfg_buf[0]);
+                    _cfg_print("des_swap_hyst",83,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_ib_cfg ************\n");
+                    _cfg_print("ib_fx100_ena",82,-1, &cfg_buf[0]);
+                    _cfg_print("acjtag_hyst",81,79, &cfg_buf[0]);
+                    _cfg_print("ib_det_lev",78,76, &cfg_buf[0]);
+                    _cfg_print("ib_hyst_lev",75,-1, &cfg_buf[0]);
+                    _cfg_print("ib_ena_cmv_term",74, -1, &cfg_buf[0]);
+                    _cfg_print("ib_ena_dc_coupling",73,-1, &cfg_buf[0]);
+                    _cfg_print("ib_ena_detlev",72,-1, &cfg_buf[0]);
+                    _cfg_print("ib_ena_hyst",71,-1, &cfg_buf[0]);
+                    _cfg_print("ib_ena_offset_comp",70,-1, &cfg_buf[0]);
+                    _cfg_print("ib_eq_gain",69,67, &cfg_buf[0]);
+                    _cfg_print("ib_sel_corner_freq",66,65, &cfg_buf[0]);
+                    _cfg_print("ib_resistor_ctrl",64,61, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_ob_cfg ************\n");
+                    _cfg_print("ob_slp",60,59, &cfg_buf[0]);
+                    _cfg_print("ob_amp_ctrl",58,55, &cfg_buf[0]);
+                    _cfg_print("ob_cmm_bias_ctrl",54,52, &cfg_buf[0]);
+                    _cfg_print("ob_dis_vcm_ctrl",51,-1, &cfg_buf[0]);
+                    _cfg_print("ob_en_meas_vreg",50,-1, &cfg_buf[0]);
+                    _cfg_print("ob_vcm_ctrl",49,46, &cfg_buf[0]);
+                    _cfg_print("ob_resistor_ctrl",45,42, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_ser_cfg ************\n");
+                    _cfg_print("ser_idle",41,-1, &cfg_buf[0]);
+                    _cfg_print("ser_deemph",40,-1, &cfg_buf[0]);
+                    _cfg_print("ser_cpmd_sel",39,-1, &cfg_buf[0]);
+                    _cfg_print("ser_swap_cpmd",38,-1, &cfg_buf[0]);
+                    _cfg_print("ser_alisel",37,36, &cfg_buf[0]);
+                    _cfg_print("ser_enhys",35,-1, &cfg_buf[0]);
+                    _cfg_print("ser_big_win",34,-1, &cfg_buf[0]);
+                    _cfg_print("ser_en_win",33,-1, &cfg_buf[0]);
+                    _cfg_print("ser_enali",32,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_common_cfg ************\n");
+                    _cfg_print("sys_rst",31,-1, &cfg_buf[0]);
+                    _cfg_print("se_auto_squelch_b_ena",30,-1, &cfg_buf[0]);
+                    _cfg_print("se_auto_squelch_a_ena",29,-1, &cfg_buf[0]);
+                    _cfg_print("reco_sel_b",28,-1, &cfg_buf[0]);
+                    _cfg_print("reco_sel_a",27,-1, &cfg_buf[0]);
+                    _cfg_print("ena_lane",26,-1, &cfg_buf[0]);
+                    _cfg_print("pwd_rx",25,-1, &cfg_buf[0]);
+                    _cfg_print("pwd_tx",24,-1, &cfg_buf[0]);
+                    _cfg_print("lane_ctrl",23,21, &cfg_buf[0]);
+                    _cfg_print("ena_direct",20,-1, &cfg_buf[0]);
+                    _cfg_print("ena_eloop",19,-1, &cfg_buf[0]);
+                    _cfg_print("ena_floop",18,-1, &cfg_buf[0]);
+                    _cfg_print("ena_iloop",17,-1, &cfg_buf[0]);
+                    _cfg_print("ena_ploop",16,-1, &cfg_buf[0]);
+                    _cfg_print("hrate",15,-1, &cfg_buf[0]);
+                    _cfg_print("if_mode",14,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes1g_pll_cfg ************\n");
+                    _cfg_print("pll_ena_fb_div2",13,-1, &cfg_buf[0]);
+                    _cfg_print("pll_ena_rc_div2",12,-1, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_ctrl_data",11,4, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_ena",3,-1, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_force_set_ena",2,-1, &cfg_buf[0]);
+                    _cfg_print("pll_fsm_oor_recal_ena",1,-1, &cfg_buf[0]);
+                    _cfg_print("pll_rb_data_sel",0,-1, &cfg_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_dft_status ************\n");
+                    _cfg_print("pll_bist_not_done",17,-1, &stat_buf[0]);
+                    _cfg_print("pll_bist_failed",16,-1, &stat_buf[0]);
+                    _cfg_print("pll_bist_timeout_err",15,-1, &stat_buf[0]);
+                    _cfg_print("bist_active",14,-1, &stat_buf[0]);
+                    _cfg_print("bist_nosync",13,-1, &stat_buf[0]);
+                    _cfg_print("bist_complete_n",12,-1, &stat_buf[0]);
+                    _cfg_print("bist_error",11,-1, &stat_buf[0]);
+                    ICLI_PRINTF("************ serdes6g_pll_status ************\n");
+                    _cfg_print("pll_cal_not_done",10,-1, &stat_buf[0]);
+                    _cfg_print("pll_cal_err",9,-1, &stat_buf[0]);
+                    _cfg_print("pll_out_of_range_err",8,-1, &stat_buf[0]);
+                    _cfg_print("pll_rb_data",7,0, &stat_buf[0]);
+                }
+            }
+
+            // LCPLL/RComp setting
+            mcb_bus = 2;
+            if ((rc = vtss_phy_patch_settings_get(NULL, iport, &mcb_bus, &cfg_buf[0], &stat_buf[0])) != VTSS_RC_OK ) {
+                if (rc == VTSS_RC_ERR_PHY_PATCH_SETTING_NOT_SUPPORTED) {
+                } else {
+                   ICLI_PRINTF("%% Fail: get iport %u, mcb bus %u\n", iport, mcb_bus);
+                }
+                continue;
+            } else {
+                ICLI_PRINTF("************ LCPLLcfg ************\n");
+                _cfg_print("core_clk_div",170,165, &cfg_buf[0]);
+                _cfg_print("cpu_clk_div",164,159, &cfg_buf[0]);
+                _cfg_print("ena_bias",158, -1,&cfg_buf[0]);
+                _cfg_print("ena_vco_buf",157, -1,&cfg_buf[0]);
+                _cfg_print("ena_cp1",156, -1,&cfg_buf[0]);
+                _cfg_print("ena_vco_contrh",155, -1,&cfg_buf[0]);
+                _cfg_print("selcpi",154,153, &cfg_buf[0]);
+                _cfg_print("loop_bw_res",152,148, &cfg_buf[0]);
+                _cfg_print("selbgv820",147,144, &cfg_buf[0]);
+                _cfg_print("ena_lock_fine",143, -1, &cfg_buf[0]);
+                _cfg_print("div4",142, -1,&cfg_buf[0]);
+                _cfg_print("ena_clktree",141, -1,&cfg_buf[0]);
+                _cfg_print("ena_lane",140, -1,&cfg_buf[0]);
+                _cfg_print("ena_rot",139, -1,&cfg_buf[0]);
+                _cfg_print("force_set_ena",138, -1,&cfg_buf[0]);
+                _cfg_print("half_rate",137, -1,&cfg_buf[0]);
+                _cfg_print("out_of_range_recal_ena",136, -1,&cfg_buf[0]);
+                _cfg_print("pwd_rx",135, -1,&cfg_buf[0]);
+                _cfg_print("pwd_tx",134, -1,&cfg_buf[0]);
+                _cfg_print("quarter_rate",133, -1,&cfg_buf[0]);
+                _cfg_print("rc_ctrl_data",132,125, &cfg_buf[0]);
+                _cfg_print("rc_enable",124, -1,&cfg_buf[0]);
+                _cfg_print("readback_data_sel",123, -1,&cfg_buf[0]);
+                _cfg_print("rot_dir",122, -1,&cfg_buf[0]);
+                _cfg_print("rot_speed",121, -1,&cfg_buf[0]);
+                _cfg_print("ena_direct",120, -1,&cfg_buf[0]);
+                _cfg_print("ena_gain_test",119, -1,&cfg_buf[0]);
+                _cfg_print("disable_fsm",118, -1,&cfg_buf[0]);
+                _cfg_print("en_reset_frq_det",117, -1,&cfg_buf[0]);
+                _cfg_print("en_reset_lim_det",116, -1,&cfg_buf[0]);
+                _cfg_print("en_reset_overrun",115, -1,&cfg_buf[0]);
+                _cfg_print("gain_test",114,110, &cfg_buf[0]);
+                _cfg_print("disable_fsm_por",109, -1,&cfg_buf[0]);
+                _cfg_print("frc_fsm_por",108, -1,&cfg_buf[0]);
+                _cfg_print("ampc_sel",107,100, &cfg_buf[0]);
+                _cfg_print("ena_amp_ctrl_force",99, -1,&cfg_buf[0]);
+                _cfg_print("ena_ampctrl",98, -1,&cfg_buf[0]);
+                _cfg_print("pwd_ampctrl_n",97, -1,&cfg_buf[0]);
+                _cfg_print("ena_clk_bypass",96, -1,&cfg_buf[0]);
+                _cfg_print("ena_clk_bypass1",95, -1,&cfg_buf[0]);
+                _cfg_print("ena_cp2",94, -1,&cfg_buf[0]);
+                _cfg_print("ena_rcpll",93, -1,&cfg_buf[0]);
+                _cfg_print("ena_fbtestout",92, -1,&cfg_buf[0]);
+                _cfg_print("ena_vco_nref_testout",91, -1,&cfg_buf[0]);
+                _cfg_print("ena_pfd_in_flip",90, -1,&cfg_buf[0]);
+                _cfg_print("ena_test_mode",89, -1,&cfg_buf[0]);
+                _cfg_print("fbdivsel",88,81, &cfg_buf[0]);
+                _cfg_print("fbdivsel_tst_ena",80, -1,&cfg_buf[0]);
+                _cfg_print("force_cp",79, -1,&cfg_buf[0]);
+                _cfg_print("force_ena",78, -1,&cfg_buf[0]);
+                _cfg_print("force_hi",77, -1,&cfg_buf[0]);
+                _cfg_print("force_lo",76, -1,&cfg_buf[0]);
+                _cfg_print("force_vco_contrh",75, -1,&cfg_buf[0]);
+                _cfg_print("rst_fb_n",74, -1,&cfg_buf[0]);
+                _cfg_print("sel_cml_cmos_pfd",73, -1,&cfg_buf[0]);
+                _cfg_print("sel_fbdclk",72, -1,&cfg_buf[0]);
+                _cfg_print("ena_test_out",71, -1,&cfg_buf[0]);
+                _cfg_print("ena_ana_test_out",70, -1,&cfg_buf[0]);
+                _cfg_print("testout_sel",69,67, &cfg_buf[0]);
+                _cfg_print("test_ana_out_sel",66,65, &cfg_buf[0]);
+                _cfg_print("ib_ctrl",64,49, &cfg_buf[0]);
+                _cfg_print("ib_bias_ctrl",48,41, &cfg_buf[0]);
+                _cfg_print("ob_ctrl",40,25, &cfg_buf[0]);
+                _cfg_print("ob_bias_ctrl",24,17, &cfg_buf[0]);
+                ICLI_PRINTF("************ RCompcfg ************\n");
+                _cfg_print("pwd_ena",16, -1,&cfg_buf[0]);
+                _cfg_print("run_cal",15, -1,&cfg_buf[0]);
+                _cfg_print("speed_sel",14,13, &cfg_buf[0]);
+                _cfg_print("mode_sel",12,11, &cfg_buf[0]);
+                _cfg_print("force_ena",10, -1,&cfg_buf[0]);
+                _cfg_print("rcomp_val",9,6, &cfg_buf[0]);
+                ICLI_PRINTF("************ SyncEthcfg ************\n");
+                _cfg_print("sel_reco_clk_b",5,4, &cfg_buf[0]);
+                _cfg_print("sel_reco_clk_a",3,2, &cfg_buf[0]);
+                _cfg_print("reco_clk_b_ena",1, -1,&cfg_buf[0]);
+                _cfg_print("reco_clk_a_ena",0, -1,&cfg_buf[0]);
+                ICLI_PRINTF("************ LCPLLstatus ************\n");
+                _cfg_print("lock_status",45,-1, &stat_buf[0]);
+                _cfg_print("readback_data",44,37, &stat_buf[0]);
+                _cfg_print("calibration_done",36, -1, &stat_buf[0]);
+                _cfg_print("calibration_err",35, -1, &stat_buf[0]);
+                _cfg_print("out_of_range_err",34, -1, &stat_buf[0]);
+                _cfg_print("range_lim",33, -1, &stat_buf[0]);
+                _cfg_print("fsm_lock",32, -1, &stat_buf[0]);
+                _cfg_print("fsm_stat",31,29, &stat_buf[0]);
+                _cfg_print("fbcnt_dif",28,19, &stat_buf[0]);
+                _cfg_print("gain_stat",18,14, &stat_buf[0]);
+                _cfg_print("sig_del",13,6, &stat_buf[0]);
+                ICLI_PRINTF("************ RCompstatus ************\n");
+                _cfg_print("busy",5, -1, &stat_buf[0]);
+                _cfg_print("delta_alert",4, -1, &stat_buf[0]);
+                _cfg_print("rcomp",3,0, &stat_buf[0]);
+            }
+
+        } // for j
+    } // for i
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy serdes6g-rcpll-status-get
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! serdes6g-rcpll-status-get
+CMD_VAR =
+RUNTIME =
+HELP    = Serdes6g RC-PLL status
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+    mesa_rc rc;
+    vtss_rcpll_status_t rcpll_status;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+            ICLI_PRINTF("\n");
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("Iport : %u\n", iport);
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("\n");
+            if ((rc = vtss_phy_serdes6g_rcpll_status_get(NULL, iport, &rcpll_status)) != VTSS_RC_OK ) {
+                if (rc == MESA_RC_ERR_PHY_RCPLL_NOT_SUPPORTED)
+                    ICLI_PRINTF("%% Serdes6g RC-PLL status not supported for iport:%u\n", iport);
+                else if (rc == MESA_RC_ERR_PHY_6G_RCPLL_ON_BASE_PORT_ONLY)
+                    ICLI_PRINTF("%% Serdes6g RC-PLL status only on Base port\n");
+                else
+                    ICLI_PRINTF("%% Fail: get iport %u, Serdes6g RC-PLL Status\n", iport);
+                continue;
+            } else {
+                ICLI_PRINTF("************ Serdes6g-RCPLL status ************\n");
+                ICLI_PRINTF("Calibration: %s\n", rcpll_status.cal_not_done ? "Done" : "Not Started / ongoing");
+                ICLI_PRINTF("Calibration Error: %s\n", rcpll_status.cal_error? "Yes" : "No");
+                ICLI_PRINTF("Out of Range Error: %s\n", rcpll_status.out_of_range ? "Yes" : "No");
+            }
+        } // for j
+    } // for i
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy serdes1g-rcpll-status-get
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! serdes1g-rcpll-status-get
+CMD_VAR =
+RUNTIME =
+HELP    = Serdes1g RC-PLL status
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+    mesa_rc rc;
+    vtss_rcpll_status_t rcpll_status;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+            ICLI_PRINTF("\n");
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("Iport : %u\n", iport);
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("\n");
+            if ((rc = vtss_phy_serdes1g_rcpll_status_get(NULL, iport, &rcpll_status)) != VTSS_RC_OK ) {
+                if (rc == MESA_RC_ERR_PHY_RCPLL_NOT_SUPPORTED)
+                    ICLI_PRINTF("%% Serdes1g RC-PLL status not supported for iport:%u\n", iport);
+                else
+                    ICLI_PRINTF("%% Fail: get iport %u, Serdes1g RC-PLL Status\n", iport);
+                continue;
+            } else {
+                ICLI_PRINTF("************ Serdes1g-RCPLL status ************\n");
+                ICLI_PRINTF("Calibration: %s\n", rcpll_status.cal_not_done ? "Done" : "Not Started / ongoing");
+                ICLI_PRINTF("Calibration Error: %s\n", rcpll_status.cal_error? "Yes" : "No");
+                ICLI_PRINTF("Out of Range Error: %s\n", rcpll_status.out_of_range ? "Yes" : "No");
+            }
+        } // for j
+    } // for i
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+COMMAND = debug phy lcpll-status-get
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! lcpll-status-get
+CMD_VAR =
+RUNTIME =
+HELP    = LC-PLL status
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+    mesa_rc rc;
+    vtss_lcpll_status_t lcpll_status;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+            ICLI_PRINTF("\n");
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("Iport : %u\n", iport);
+            ICLI_PRINTF("------------------------------------------------\n");
+            ICLI_PRINTF("\n");
+            if ((rc = vtss_phy_lcpll_status_get(NULL, iport, &lcpll_status)) != VTSS_RC_OK ) {
+                if (rc == MESA_RC_ERR_PHY_LCPLL_NOT_SUPPORTED)
+                    ICLI_PRINTF("%% LC-PLL status not supported for iport:%u\n", iport);
+                else
+                    ICLI_PRINTF("%% Fail: get iport %u, LC-PLL Status\n", iport);
+                continue;
+            } else {
+                ICLI_PRINTF("************ LCPLLstatus ************\n");
+                ICLI_PRINTF("Lock Statu: %s\n", lcpll_status.lock_status ?  "Enable" : "Disable");
+                ICLI_PRINTF("Calibration Done: %s\n", lcpll_status.cal_done ? "Yes" : "No");
+                ICLI_PRINTF("Calibration Error: %s\n", lcpll_status.cal_error? "Yes" : "No");
+                ICLI_PRINTF("FSM Lock: %s\n", lcpll_status.fsm_lock ?  "Enable" : "Disable");
+                ICLI_PRINTF("FSM Stat: %d\n", lcpll_status.fsm_stat);
+                ICLI_PRINTF("Gain Stat: %d\n", lcpll_status.gain_stat);
+            }
+        } // for j
+    } // for i
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy statistic
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! statistic
+CMD_VAR =
+RUNTIME =
+HELP    = Show PHY statistic
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32             i;
+    u32             j;
+    u32             iport;
+    BOOL            b_first;
+VARIABLE_END
+
+CODE_BEGIN
+    b_first = TRUE;
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            (void) vtss_phy_debug_stat_print(NULL, (mesa_debug_printf_t)icli_session_self_printf, iport, b_first);
+            if ( b_first ) {
+                b_first = FALSE;
+            }
+
+        } // for j
+    } // for i
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy regdump
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    = Physical layer (Remember to use the interface with the PHY which contains the GPIO)
+BYWORD  =
+
+! regdump
+CMD_VAR =
+RUNTIME =
+HELP    = Show PHY Registers dump
+BYWORD  =
+
+VARIABLE_BEGIN
+    u32             i;
+    u32             j;
+    u32             iport;
+VARIABLE_END
+
+CODE_BEGIN
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            (void) vtss_phy_debug_register_dump(PHY_INST, (mesa_debug_printf_t)icli_session_self_printf, FALSE, iport);
+
+        } // for j
+    } // for i
+CODE_END
+
+CMD_END
+
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug phy page-check
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+HELP    = ##ICLI_HELP_DEBUG
+
+! phy
+CMD_VAR =
+HELP    = Select PHY for debugging (Note only local PHYs, NOT stack-aware)
+
+! page-check
+CMD_VAR =
+HELP    = Enable/Disable page check in the PHY
+
+CODE_BEGIN
+    VTSS_RC(vtss_phy_do_page_chk_set(NULL, TRUE));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug no phy page-check
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+HELP    = ##ICLI_HELP_DEBUG
+
+! no
+CMD_VAR =
+HELP    = ##ICLI_HELP_NO
+
+! phy
+CMD_VAR =
+HELP    = Select PHY for debugging (Note only local PHYs, NOT stack-aware)
+
+! page-check
+CMD_VAR =
+HELP    = Enable/Disable page check in the PHY
+
+CODE_BEGIN
+    VTSS_RC(vtss_phy_do_page_chk_set(NULL, FALSE));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug phy page-check status
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+HELP    = ##ICLI_HELP_DEBUG
+
+! phy
+CMD_VAR =
+HELP    = Select PHY for debugging (Note only local PHYs, NOT stack-aware)
+
+! page-check
+CMD_VAR =
+HELP    = Enable/Disable page check in the PHY
+
+! status
+CMD_VAR =
+HELP    = Get current page check status in the PHY
+
+VARIABLE_BEGIN
+    BOOL    b_enable;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_phy_do_page_chk_get(NULL, &b_enable) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Fail: not able to get page check configuration \n");
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Page check is %s.\n", b_enable ? "enabled" : "disabled");
+CODE_END
+
+CMD_END
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_CHIP_10G_PHY_SAVE_OPERMODE_IN_CFG)
+
+COMMAND = platform phy mode { wan | 1g }
+
+DOC_CMD_DESC    = command is used for changing 10G PHY mode
+DOC_CMD_DEFAULT = LAN mode
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = platform phy mode lan
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: platform
+! 2: phy
+! 3: mode
+! 4: lan
+! 5: wan
+! 6: 1
+! 7: g
+
+RUNTIME = phy_10g_present
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_wan
+CMD_VAR = has_1
+CMD_VAR =
+
+HELP =
+HELP =
+HELP =
+HELP = WAN mode
+HELP = 1G mode
+HELP =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = wan : Option
+BYWORD = 1g : Option
+BYWORD =
+
+VARIABLE_BEGIN
+    BOOL has_lan = FALSE;
+VARIABLE_END
+
+CODE_BEGIN
+    if(icli_cmd_phy_oper_mode(session_id, plist, has_lan, has_wan, has_1) != VTSS_RC_OK) {
+       return ICLI_RC_ERROR;
+    } 
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_CHIP_10G_PHY_SAVE_OPERMODE_IN_CFG)
+
+
+COMMAND =  no platform phy mode
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: no
+! 2: platform
+! 3: phy
+! 4: mode
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+RUNTIME = phy_10g_present
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP = Platform specific commands
+HELP = PHY(10G) specific
+HELP = operating mode
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+CODE_BEGIN
+    if(icli_cmd_phy_oper_mode(session_id, plist, TRUE, FALSE, FALSE) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: failed to set default mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_CHIP_10G_PHY_SAVE_OPERMODE_IN_CFG)
+
+COMMAND = show platform phy mode [interface <port_type_list>]
+
+DOC_CMD_DESC    = Show 10G-PHY  mode information for all or a given interface
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show platform phy mode 10GigabitEthernet 1/3
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: show
+! 2: platform
+! 3: phy
+! 4: mode
+! 5: interface
+! 6: <port_type_list>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_interface
+CMD_VAR = v_port_type_list
+
+RUNTIME = phy_10g_present
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP = Platform specific information
+HELP = PHYs' information
+HELP = Operating mode of PHY
+HELP = 10G ports allowed
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = interface : Option
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+CODE_BEGIN
+    if (!has_interface) {
+        v_port_type_list = NULL;
+    }
+    if(icli_cmd_phy_oper_mode(session_id, v_port_type_list, FALSE, FALSE, FALSE) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: failed to get Oper-mode \n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy led-set [ led-num <0-3> ] [ led-mode <0-23> ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! phy
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! led-set
+CMD_VAR =
+RUNTIME =
+HELP    = Set the LED[0:3] configuration
+BYWORD  =
+
+! led_num
+CMD_VAR = has_led_num
+CMD_VAR = v_0_3
+RUNTIME =
+HELP    = Set PHY LED
+HELP    = 0: LED[0] 1: LED[1] 2: LED[2] 3: LED[3]
+BYWORD  =
+
+! led-mode
+CMD_VAR = has_led_mode
+CMD_VAR = v_0_22
+RUNTIME =
+HELP    = Set PHY LED Mode
+HELP    = 0:Link/Activity 1:Link1000/Activity 2:Link100/Activity 3:Link10/Activity \
+          4:Link100/1000/Activity 5:Link10/1000/Activity 6:Link10/100/Activity 7:Link100Bas-Fx/1000Base-X/Activity \
+          8:Duplex/Collision 9:Collision 10:Activity 11:100Base-Fx/1000Base-X/FiberActivity \
+          12:Autoneg-Fault 13:Link1000Base-X/Activity 14:Link100Base-X/Activity 15:Base1000/Activity \
+          16:Base100-Fx/Activity 17:Force-LED-OFF 18:Force-LED-ON 19:Fast-Link-Fail \
+          20:Link-TX 21:Link-RX 22:Link-Fault 23:No-Extended-Led
+BYWORD  =
+
+CODE_BEGIN
+    if (phy_icli_debug_phy_led_set(session_id, plist, has_led_num, v_0_3, has_led_mode, v_0_22) != VTSS_RC_OK) {
+        ICLI_PRINTF("Led mode not set\n");
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy cls-45 read page <0-65535> addr <0-65535> [ to <0-65535> ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: cls-45
+! 4: read
+! 5: page
+! 6: <0-65535>
+! 7: addr
+! 8: <0-65535>
+! 9: to
+! 10: <0-65535>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_0_to_65535
+CMD_VAR =
+CMD_VAR = v_0_to_65535_1
+CMD_VAR = has_to
+CMD_VAR = v_0_to_65535_upper
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+        int count;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_to) {
+        v_0_to_65535_upper = v_0_to_65535_1;
+    }
+    count = v_0_to_65535_upper - v_0_to_65535_1 + 1;
+    (void)phy_icli_dbg_phy_clause45_access(session_id, plist, v_0_to_65535, v_0_to_65535_1, 1, 0, count);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy cls-45 write page <0-65535> addr <0-65535> val <0-65535>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: cls-45
+! 4: write
+! 5: page
+! 6: <0-65535>
+! 7: addr
+! 8: <0-65535>
+! 9: val
+! 10: <0-65535>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_0_to_65535
+CMD_VAR =
+CMD_VAR = v_0_to_65535_1
+CMD_VAR =
+CMD_VAR = v_0_to_65535_2
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)phy_icli_dbg_phy_clause45_access(session_id, plist, v_0_to_65535, v_0_to_65535_1, 0, v_0_to_65535_2, 1);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy qsgmii-aneg { enable | disable }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: qsgmii-aneg
+! 4: enable
+! 5: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_enable
+CMD_VAR = has_disable
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP = QSGMII auto-negotiation for Indy phy
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = enable : Option
+BYWORD = disable : Option
+
+VARIABLE_BEGIN
+    BOOL enable = FALSE;
+VARIABLE_END
+
+CODE_BEGIN
+    enable = has_enable ? TRUE : (has_disable ? FALSE : FALSE);
+    (void)phy_icli_dbg_phy_qsgmii_aneg_set(session_id, plist, enable);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy event { set { enable | disable } <0-0xFFFFFFFF> | get | poll }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: event
+! 4: set
+! 5: enable
+! 6: disable
+! 7: <0-31>
+! 8: get
+! 9: poll
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_set
+CMD_VAR = has_enable
+CMD_VAR = has_disable
+CMD_VAR = v_0_to_31
+CMD_VAR = has_get
+CMD_VAR = has_poll
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = set : Option
+BYWORD = enable : Option
+BYWORD = disable : Option
+BYWORD =
+BYWORD = get : Option
+BYWORD = poll : Option
+
+VARIABLE_BEGIN
+    BOOL enable;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_enable) {
+        enable = TRUE;
+    }
+    if (has_disable) {
+        enable = FALSE;
+    }
+    (void)phy_icli_dbg_event_conf_status(session_id, plist, has_set, enable, v_0_to_31, has_get, has_poll);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy indy-coma { enable | disable }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+! 2: phy
+! 3: indy-coma
+! 4: enable
+! 5: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_enable
+CMD_VAR = has_disable
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP = coma mode in Indy phy
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = enable : Option
+BYWORD = disable : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    BOOL enable = has_enable ? TRUE : (has_disable ? FALSE : FALSE);
+    mesa_sgpio_conf_t conf;
+    if (mesa_sgpio_conf_get(NULL, 0, 0, &conf) == MESA_RC_OK) {
+        /* Disable coma mode. */
+        conf.port_conf[16].mode[0] = enable ? MESA_SGPIO_MODE_ON : MESA_SGPIO_MODE_OFF;
+        (void)mesa_sgpio_conf_set(NULL, 0, 0, &conf);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa class set { ing | egr } <0-23> encap { none | eth | ip } [ clock <0-5> ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: class
+! 5: set
+! 6: ing
+! 7: egr
+! 8: <0-23>
+! 9: encap
+! 10: none
+! 11: eth
+! 12: ip
+! 13: clock
+! 14: <0-5>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_ing
+CMD_VAR = has_egr
+CMD_VAR = v_0_to_23
+CMD_VAR =
+CMD_VAR = has_none
+CMD_VAR = has_eth
+CMD_VAR = has_ip
+CMD_VAR = has_clock
+CMD_VAR = v_0_to_5
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = ing : Option
+BYWORD = egr : Option
+BYWORD =
+BYWORD = 
+BYWORD = none : Option
+BYWORD = eth : Option
+BYWORD = ip : Option
+BYWORD = clock : Option
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    bool ingress = has_ing ? true : (has_egr ? false : true);
+    mepa_ts_pkt_encap_t encap = has_none ? MEPA_TS_ENCAP_NONE : (has_eth ? MEPA_TS_ENCAP_ETH_PTP : (has_ip ? MEPA_TS_ENCAP_ETH_IP_PTP : MEPA_TS_ENCAP_NONE));
+    phy_ts_mepa_class_comm_set(session_id, plist, ingress, v_0_to_23, encap, has_clock ? v_0_to_5 : 0);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa class-eth set { ing | egr } <0-23> [ pbb-en | pbb-dis ] [ etype <0-0xffff> ] [ tpid <0-0xffff> ] { match-addr { none | src | dst | src-or-dst } } [ match-full | any-mac | any-multi | any-uni ] [ mac <mac_addr> ] [ vlan-chk-en | vlan-chk-dis ] [ tag-cnt <0-2> ] [ out-tag { rng-low <0-0xFFFF> rng-high <0-0xFFFF> | val <0-0xFFFF> mask <0-0xFFFF> } ] [ in-tag { rng-low <0-0xFFFF> rng-high <0-0xFFFF> | val <0-0xFFFF> mask <0-0xFFFF> } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: class-eth
+! 5: set
+! 6: ing
+! 7: egr
+! 8: <0-23>
+! 9: pbb-en
+! 10: pbb-dis
+! 11: etype
+! 12: <0-0xffff>
+! 13: tpid
+! 14: <0-0xffff>
+! 15: match-addr
+! 16: none
+! 17: src
+! 18: dst
+! 19: src-or-dst
+! 20: match-full
+! 21: any-mac
+! 22: any-multi
+! 23: any-uni
+! 24: mac
+! 25: <mac_addr>
+! 26: vlan-chk-en
+! 27: vlan-chk-dis
+! 28: tag-cnt
+! 29: <0-2>
+! 30: out-tag
+! 31: rng-low
+! 32: <0-0xFFFF>
+! 33: rng-high
+! 34: <0-0xFFFF>
+! 35: val
+! 36: <0-0xFFFF>
+! 37: mask
+! 38: <0-0xFFFF>
+! 39: in-tag
+! 40: rng-low
+! 41: <0-0xFFFF>
+! 42: rng-high
+! 43: <0-0xFFFF>
+! 44: val
+! 45: <0-0xFFFF>
+! 46: mask
+! 47: <0-0xFFFF>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_ing
+CMD_VAR = has_egr
+CMD_VAR = v_0_to_23
+CMD_VAR = has_pbb_en
+CMD_VAR = has_pbb_dis
+CMD_VAR = has_etype
+CMD_VAR = v_0_0xffff
+CMD_VAR = has_tpid
+CMD_VAR = v_0_0xffff_1
+CMD_VAR =
+CMD_VAR = has_none
+CMD_VAR = has_src
+CMD_VAR = has_dst
+CMD_VAR = has_src_or_dst
+CMD_VAR = has_match_full
+CMD_VAR = has_any_mac
+CMD_VAR = has_any_multi
+CMD_VAR = has_any_uni
+CMD_VAR = has_mac
+CMD_VAR = v_mac_addr
+CMD_VAR = has_vlan_chk_en
+CMD_VAR = has_vlan_chk_dis
+CMD_VAR = has_tag_cnt
+CMD_VAR = v_0_to_2
+CMD_VAR = has_out_tag
+CMD_VAR = has_rng_low
+CMD_VAR = v_0_0xFFFF
+CMD_VAR =
+CMD_VAR = v_0_0xFFFF_1
+CMD_VAR = has_val
+CMD_VAR = v_0_0xFFFF_2
+CMD_VAR =
+CMD_VAR = v_0_0xFFFF_3
+CMD_VAR = has_in_tag
+CMD_VAR = has_rng_low_1
+CMD_VAR = v_0_0xFFFF_4
+CMD_VAR =
+CMD_VAR = v_0_0xFFFF_5
+CMD_VAR = has_val_1
+CMD_VAR = v_0_0xFFFF_6
+CMD_VAR =
+CMD_VAR = v_0_0xFFFF_7
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = ing : Option
+BYWORD = egr : Option
+BYWORD =
+BYWORD = pbb-en : Option
+BYWORD = pbb-dis : Option
+BYWORD = etype : Option
+BYWORD =
+BYWORD = tpid : Option
+BYWORD =
+BYWORD =
+BYWORD = none : Option
+BYWORD = src : Option
+BYWORD = dst : Option
+BYWORD = src-or-dst : Option
+BYWORD = match-full : Option
+BYWORD = any-mac : Option
+BYWORD = any-multi : Option
+BYWORD = any-uni : Option
+BYWORD = mac : Option
+BYWORD =
+BYWORD = vlan-chk-en : Option
+BYWORD = vlan-chk-dis : Option
+BYWORD = tag-cnt : Option
+BYWORD =
+BYWORD = out-tag : Option
+BYWORD = rng-low : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = val : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = in-tag : Option
+BYWORD = rng-low : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = val : Option
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    bool ingress = has_ing ? true : (has_egr ? false : true);
+    mesa_bool_t pbb_en = has_pbb_en ? TRUE : (has_pbb_dis ? FALSE : FALSE); //default false
+    mepa_ts_mac_match_select_t mac_match_select = has_none ? MEPA_TS_ETH_MATCH_NONE : (has_src ? MEPA_TS_ETH_MATCH_SRC_ADDR :
+                                                  (has_dst ? MEPA_TS_ETH_MATCH_DEST_ADDR : (has_src_or_dst ? MEPA_TS_ETH_MATCH_SRC_OR_DEST : MEPA_TS_ETH_MATCH_DEST_ADDR))); // default MEPA_TS_ETH_MATCH_DEST_ADDR
+    mepa_ts_mac_match_mode_t mac_match_mode = has_match_full ? MEPA_TS_ETH_ADDR_MATCH_48BIT : (has_any_mac ? MEPA_TS_ETH_ADDR_MATCH_ANY :
+                            (has_any_multi ? MEPA_TS_ETH_ADDR_MATCH_ANY_MULTICAST : (has_any_uni ? MEPA_TS_ETH_ADDR_MATCH_ANY_UNICAST : MEPA_TS_ETH_ADDR_MATCH_ANY))); // default MEPA_TS_ETH_ADDR_MATCH_ANY
+    mepa_bool_t vlan_chk = has_vlan_chk_en ? TRUE : (has_vlan_chk_dis ? FALSE : FALSE);
+
+    phy_ts_mepa_eth_class_set(session_id, plist, ingress, v_0_to_23, pbb_en, has_etype, v_0_0xffff, has_tpid, v_0_0xffff_1, mac_match_select, mac_match_mode, has_mac, v_mac_addr, vlan_chk, has_tag_cnt, v_0_to_2, has_out_tag, has_rng_low, v_0_0xFFFF, v_0_0xFFFF_1, has_val, v_0_0xFFFF_2, v_0_0xFFFF_3, has_in_tag, has_rng_low_1, v_0_0xFFFF_4, v_0_0xFFFF_5, has_val_1, v_0_0xFFFF_6, v_0_0xFFFF_7);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa class-ip set { ing | egr } <0-23> [ udp-src-port <0-0xFFFF> ] [ udp-dst-port <0-0xFFFF> ] [ match-addr { none | src | dest | src-or-dst } ] [ ipv4 { <ipv4_addr> <ipv4_netmask> } | ipv6 <ipv6_addr> <ipv6_netmask> ]
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: class-ip
+! 5: set
+! 6: ing
+! 7: egr
+! 8: <0-23>
+! 9: udp-src-port
+! 10: <0-0xFFFF>
+! 11: udp-dst-port
+! 12: <0-0xFFFF>
+! 13: match-addr
+! 14: none
+! 15: src
+! 16: dest
+! 17: src-or-dst
+! 18: ipv4
+! 19: <ipv4_addr>
+! 20: <ipv4_netmask>
+! 21: ipv6
+! 22: <ipv6_addr>
+! 23: <ipv6_netmask>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_ing
+CMD_VAR = has_egr
+CMD_VAR = v_0_to_23
+CMD_VAR = has_udp_src_port
+CMD_VAR = v_0_0xFFFF
+CMD_VAR = has_udp_dst_port
+CMD_VAR = v_0_0xFFFF_1
+CMD_VAR = has_match_addr
+CMD_VAR = has_none
+CMD_VAR = has_src
+CMD_VAR = has_dest
+CMD_VAR = has_src_or_dst
+CMD_VAR = has_ipv4
+CMD_VAR = v_ipv4_addr
+CMD_VAR = v_ipv4_netmask
+CMD_VAR = has_ipv6
+CMD_VAR = v_ipv6_addr
+CMD_VAR = v_ipv6_netmask
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = ing : Option
+BYWORD = egr : Option
+BYWORD = 
+BYWORD = udp-src-port : Option
+BYWORD = 
+BYWORD = udp-dst-port : Option
+BYWORD = 
+BYWORD = match-addr : Option
+BYWORD = none : Option
+BYWORD = src : Option
+BYWORD = dest : Option
+BYWORD = src-or-dst : Option
+BYWORD = ipv4 : Option
+BYWORD = 
+BYWORD = 
+BYWORD = ipv6 : Option
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    bool ingress = has_ing ? true : (has_egr ? false : true);
+    mepa_ts_ip_match_select_t ip_match_mode = MEPA_TS_IP_MATCH_NONE;
+    if (has_match_addr) {
+        ip_match_mode = has_none ? MEPA_TS_IP_MATCH_NONE : (has_src ?  MEPA_TS_IP_MATCH_SRC : (has_dest ? MEPA_TS_IP_MATCH_DEST : (has_src_or_dst ? MEPA_TS_IP_MATCH_SRC_OR_DEST : MEPA_TS_IP_MATCH_NONE))); // default none
+    }
+    phy_ts_mepa_ip_class_set(session_id, plist, ingress, v_0_to_23, has_udp_src_port, v_0_0xFFFF, has_udp_dst_port, v_0_0xFFFF_1, ip_match_mode, has_ipv4, v_ipv4_addr, v_ipv4_netmask, has_ipv6, v_ipv6_addr, v_ipv6_netmask);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa clock set { ing | egr } { clock <0-5> } { en | dis } [ clk-type { bc1 | bc2 | tc1 | tc2 } ] [ delay-type { e2e | p2p } ] [ cf-update { en | dis } ] [ version-rng low <0-0xFF> high <0-0xFF> ] [ minor-vers-rng low <0-0xFF> high <0-0xFF> ] [ domain { rng-low <0-0xFF> rng-high <0-0xFF> | val <0-0xFF> mask <0-0xFF> } ] [ sdoid { rng-low <0-0xFF> rng-high <0-0xFF> | val <0-0xFF> mask <0-0xFF> } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: clock
+! 5: set
+! 6: ing
+! 7: egr
+! 8: clock
+! 9: <0-5>
+! 10: en
+! 11: dis
+! 12: clk-type
+! 13: bc1
+! 14: bc2
+! 15: tc1
+! 16: tc2
+! 17: delay-type
+! 18: e2e
+! 19: p2p
+! 20: cf-update
+! 21: en
+! 22: dis
+! 23: version-rng
+! 24: low
+! 25: <0-0xFF>
+! 26: high
+! 27: <0-0xFF>
+! 28: minor-vers-rng
+! 29: low
+! 30: <0-0xFF>
+! 31: high
+! 32: <0-0xFF>
+! 33: domain
+! 34: rng-low
+! 35: <0-0xFF>
+! 36: rng-high
+! 37: <0-0xFF>
+! 38: val
+! 39: <0-0xFF>
+! 40: mask
+! 41: <0-0xFF>
+! 42: sdoid
+! 43: rng-low
+! 44: <0-0xFF>
+! 45: rng-high
+! 46: <0-0xFF>
+! 47: val
+! 48: <0-0xFF>
+! 49: mask
+! 50: <0-0xFF>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_ing
+CMD_VAR = has_egr
+CMD_VAR =
+CMD_VAR = v_0_to_5
+CMD_VAR = has_en
+CMD_VAR = has_dis
+CMD_VAR = has_clk_type
+CMD_VAR = has_bc1
+CMD_VAR = has_bc2
+CMD_VAR = has_tc1
+CMD_VAR = has_tc2
+CMD_VAR = has_delay_type
+CMD_VAR = has_e2e
+CMD_VAR = has_p2p
+CMD_VAR = has_cf_update
+CMD_VAR = has_en_1
+CMD_VAR = has_dis_1
+CMD_VAR = has_version_rng
+CMD_VAR =
+CMD_VAR = v_0_0xFF
+CMD_VAR =
+CMD_VAR = v_0_0xFF_1
+CMD_VAR = has_minor_vers_rng
+CMD_VAR =
+CMD_VAR = v_0_0xFF_2
+CMD_VAR =
+CMD_VAR = v_0_0xFF_3
+CMD_VAR = has_domain
+CMD_VAR = has_rng_low
+CMD_VAR = v_0_0xFF_4
+CMD_VAR =
+CMD_VAR = v_0_0xFF_5
+CMD_VAR = has_val
+CMD_VAR = v_0_0xFF_6
+CMD_VAR =
+CMD_VAR = v_0_0xFF_7
+CMD_VAR = has_sdoid
+CMD_VAR = has_rng_low_1
+CMD_VAR = v_0_0xFF_8
+CMD_VAR =
+CMD_VAR = v_0_0xFF_9
+CMD_VAR = has_val_1
+CMD_VAR = v_0_0xFF_10
+CMD_VAR =
+CMD_VAR = v_0_0xFF_11
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = ing : Option
+BYWORD = egr : Option
+BYWORD =
+BYWORD =
+BYWORD = en : Option
+BYWORD = dis : Option
+BYWORD = clk-type : Option
+BYWORD = bc1 : Option
+BYWORD = bc2 : Option
+BYWORD = tc1 : Option
+BYWORD = tc2 : Option
+BYWORD = delay-type : Option
+BYWORD = e2e : Option
+BYWORD = p2p : Option
+BYWORD = cf-update : Option
+BYWORD = en : Option
+BYWORD = dis : Option
+BYWORD = version-rng : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = minor-vers-rng : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = domain : Option
+BYWORD = rng-low : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = val : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = sdoid : Option
+BYWORD = rng-low : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = val : Option
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    bool ingress = has_ing ? true : (has_egr ? false : true);
+    BOOL enable = has_en ? TRUE : has_dis ? FALSE : FALSE;
+    mepa_ts_ptp_clock_mode_t clk_mode = MEPA_TS_PTP_CLOCK_MODE_BC1STEP;
+    mepa_ts_ptp_delaym_type_t delaym = MEPA_TS_PTP_DELAYM_E2E;
+    BOOL cf_update = has_en_1 ? TRUE : (has_dis_1 ? FALSE : FALSE);
+
+    clk_mode = has_bc1 ? MEPA_TS_PTP_CLOCK_MODE_BC1STEP : (has_bc2 ? MEPA_TS_PTP_CLOCK_MODE_BC2STEP :
+                   has_tc1 ? MEPA_TS_PTP_CLOCK_MODE_TC1STEP : (has_tc2 ? MEPA_TS_PTP_CLOCK_MODE_TC2STEP : MEPA_TS_PTP_CLOCK_MODE_BC1STEP));
+    delaym = has_e2e ? MEPA_TS_PTP_DELAYM_E2E : (has_p2p ? MEPA_TS_PTP_DELAYM_P2P : MEPA_TS_PTP_DELAYM_E2E);
+    phy_ts_mepa_clock_set(session_id, plist, ingress, v_0_to_5, enable, has_clk_type, clk_mode, has_delay_type, delaym, has_cf_update, cf_update, has_version_rng, v_0_0xFF, v_0_0xFF_1, has_minor_vers_rng, v_0_0xFF_2, v_0_0xFF_3, has_domain, has_rng_low, v_0_0xFF_4, v_0_0xFF_5, has_val, v_0_0xFF_6, v_0_0xFF_7, has_sdoid, has_rng_low_1, v_0_0xFF_8, v_0_0xFF_9, has_val_1, v_0_0xFF_10, v_0_0xFF_11);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa class get { ing | egr } <0-23> [ eth | ip ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: class
+! 5: get
+! 6: ing
+! 7: egr
+! 8: <0-23>
+! 9: eth
+! 10: ip
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_ing
+CMD_VAR = has_egr
+CMD_VAR = v_0_to_23
+CMD_VAR = has_eth
+CMD_VAR = has_ip
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = ing : Option
+BYWORD = egr : Option
+BYWORD =
+BYWORD = eth : Option
+BYWORD = ip : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    bool ingress = has_ing ? true : (has_egr ? false : true);
+    phy_ts_mepa_class_get(session_id, plist, ingress, v_0_to_23, has_eth, has_ip);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa clock get { ing | egr } <0-5>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: clock
+! 5: get
+! 6: ing
+! 7: egr
+! 8: <0-5>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_ing
+CMD_VAR = has_egr
+CMD_VAR = v_0_to_5
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP = clock id
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = ing : Option
+BYWORD = egr : Option
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    bool ingress = has_ing ? true : (has_egr ? false : true);
+    phy_ts_mepa_clock_get(session_id, plist, ingress, v_0_to_5);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa port-mode { ena | dis }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: port-mode
+! 5: ena
+! 6: dis
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_ena
+CMD_VAR = has_dis
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = ena : Option
+BYWORD = dis : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    BOOL enable = has_ena ? TRUE : has_dis ? FALSE : FALSE;
+    phy_ts_mepa_port_mode_set(session_id, plist, enable);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa fifo { empty | get }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: fifo
+! 5: empty
+! 6: get
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_empty
+CMD_VAR = has_get
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP = Empty the FIFO using old MEPA API meba_phy_ts_fifo_empty
+HELP = Read up to 8 entries of FIFO using new MEPA API meba_phy_ts_fifo_get
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = empty : Option
+BYWORD = get : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    BOOL fifo_read;
+    fifo_read = has_empty ? FALSE : (has_get ? TRUE : TRUE);
+    phy_ts_mepa_fifo_empty(session_id, plist, fifo_read);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy mepa synce-set src { copper | serdes | clk-in-1 | clk-in-2 | disable } [ dst { clk-out-1 | clk-out-2 } ] [ freq { 25 | 31 | 125 } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: mepa
+! 4: synce-set
+! 5: src
+! 6: copper
+! 7: serdes
+! 8: clk-in-1
+! 9: clk-in-2
+! 10: disable
+! 11: dst
+! 12: clk-out-1
+! 13: clk-out-2
+! 14: freq
+! 15: 25
+! 16: 31
+! 17: 125
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_copper
+CMD_VAR = has_serdes
+CMD_VAR = has_clk_in_1
+CMD_VAR = has_clk_in_2
+CMD_VAR = has_disable
+CMD_VAR = has_dst
+CMD_VAR = has_clk_out_1
+CMD_VAR = has_clk_out_2
+CMD_VAR = has_freq
+CMD_VAR = has_25
+CMD_VAR = has_31
+CMD_VAR = has_125
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP = frequency in Mhz
+HELP = 25Mhz
+HELP = 31.25Mhz
+HELP = 125Mhz
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = copper : Option
+BYWORD = serdes : Option
+BYWORD = clk-in-1 : Option
+BYWORD = clk-in-2 : Option
+BYWORD = disable : Option
+BYWORD = dst : Option
+BYWORD = clk-out-1 : Option
+BYWORD = clk-out-2 : Option
+BYWORD = freq : Option
+BYWORD = 25 : Option
+BYWORD = 31 : Option
+BYWORD = 125 : Option
+
+VARIABLE_BEGIN
+    u32                     i;
+    u32                     j;
+    u32                     iport;
+VARIABLE_END
+
+CODE_BEGIN
+    mepa_synce_clock_src_t src = MEPA_SYNCE_CLOCK_SRC_DISABLED;
+    mepa_synce_clock_dst_t dst = MEPA_SYNCE_CLOCK_DST_1;
+    mepa_freq_t freq = MEPA_FREQ_125M;
+    mepa_synce_clock_conf_t conf;
+
+    if (has_copper) {
+        src = MEPA_SYNCE_CLOCK_SRC_COPPER_MEDIA;
+    } else if (has_serdes) {
+        src = MEPA_SYNCE_CLOCK_SRC_SERDES_MEDIA;
+    } else if (has_clk_in_1) {
+        src = MEPA_SYNCE_CLOCK_SRC_CLOCK_IN_1;
+    } else if (has_clk_in_2) {
+        src = MEPA_SYNCE_CLOCK_SRC_CLOCK_IN_2;
+    } else if (has_disable) {
+        src = MEPA_SYNCE_CLOCK_SRC_DISABLED;
+    }
+
+    if (has_dst) {
+        if (has_clk_out_2) {
+            dst = MEPA_SYNCE_CLOCK_DST_2;
+        } else if (has_clk_out_1) {
+            dst = MEPA_SYNCE_CLOCK_DST_1;
+        }
+    }
+
+    if (has_freq) {
+        if (has_25) {
+            freq = MEPA_FREQ_25M;
+        } else if (has_31) {
+            freq = MEPA_FREQ_31_25M;
+        } else if (has_125) {
+            freq = MEPA_FREQ_125M;
+        }
+    }
+    conf.src = src;
+    conf.dst = dst;
+    conf.freq = freq;
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+
+            (void)meba_phy_synce_clock_conf_set(board_instance, iport, &conf);
+        }
+    }
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa test encap { eth | ipv4 | ipv6 | none } [ clock { bc1 | bc2 | tc1 | tc2 } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: test
+! 5: encap
+! 6: eth
+! 7: ipv4
+! 8: ipv6
+! 9: none
+! 10: clock
+! 11: bc1
+! 12: bc2
+! 13: tc1
+! 14: tc2
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_eth
+CMD_VAR = has_ipv4
+CMD_VAR = has_ipv6
+CMD_VAR = has_none
+CMD_VAR = has_clock
+CMD_VAR = has_bc1
+CMD_VAR = has_bc2
+CMD_VAR = has_tc1
+CMD_VAR = has_tc2
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = eth : Option
+BYWORD = ipv4 : Option
+BYWORD = ipv6 : Option
+BYWORD = none : Option
+BYWORD = clock : Option
+BYWORD = bc1 : Option
+BYWORD = bc2 : Option
+BYWORD = tc1 : Option
+BYWORD = tc2 : Option
+
+VARIABLE_BEGIN
+    port_iter_t                     pit;
+    switch_iter_t                   sit;
+VARIABLE_END
+
+CODE_BEGIN
+    mepa_ts_pkt_encap_t encap = MEPA_TS_ENCAP_NONE;
+    mepa_ts_ptp_clock_mode_t clk_type = MEPA_TS_PTP_CLOCK_MODE_NONE;
+    encap = has_eth ? MEPA_TS_ENCAP_ETH_PTP : (has_ipv4 ? MEPA_TS_ENCAP_ETH_IP_PTP :
+            (has_ipv6 ? MEPA_TS_ENCAP_ETH_IP_PTP : (has_none ? MEPA_TS_ENCAP_NONE : MEPA_TS_ENCAP_ETH_PTP)));
+    clk_type = has_clock ? (has_bc1 ? MEPA_TS_PTP_CLOCK_MODE_BC1STEP :
+               (has_bc2 ? MEPA_TS_PTP_CLOCK_MODE_BC2STEP :
+               (has_tc1 ? MEPA_TS_PTP_CLOCK_MODE_TC1STEP :
+               (has_tc2 ? MEPA_TS_PTP_CLOCK_MODE_TC2STEP : MEPA_TS_PTP_CLOCK_MODE_BC1STEP)))) :
+               MEPA_TS_PTP_CLOCK_MODE_NONE;
+    VTSS_RC(icli_switch_iter_init(&sit));
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        // Loop though the ports
+        VTSS_RC(icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL));
+        while (icli_port_iter_getnext(&pit, plist)) {
+            phy_ts_mepa_test_conf(pit.iport, encap, clk_type, has_ipv6);
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa init-set [ clk-freq <25,125,156,200,250,500> ] [ clk-src { internal125 | qsgmii125 | external1588 } ] [ rx-ts-pos { in-ptp | end } ] [ rx-ts-len <30,32> ] [ tx-ts-len <4,10> ] [ ls-clear { auto | manual } ] [ tc-mode { a | b | c } ] [ dly-req-rcv-10 { true | false } ] [ auto-ts | intr-ts ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: init-set
+! 5: clk-freq
+! 6: <25,125,156,200,250,500>
+! 7: clk-src
+! 8: internal125
+! 9: qsgmii125
+! 10: external1588
+! 11: rx-ts-pos
+! 12: in-ptp
+! 13: end
+! 14: rx-ts-len
+! 15: <30,32>
+! 16: tx-ts-len
+! 17: <4,10>
+! 18: ls-clear
+! 19: auto
+! 20: manual
+! 21: tc-mode
+! 22: a
+! 23: b
+! 24: c
+! 25: dly-req-rcv-10
+! 26: true
+! 27: false
+! 28: auto-ts
+! 29: intr-ts
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_clk_freq
+CMD_VAR = v_freq
+CMD_VAR = has_clk_src
+CMD_VAR = has_internal125
+CMD_VAR = has_qsgmii125
+CMD_VAR =
+CMD_VAR = has_rx_ts_pos
+CMD_VAR = has_in_ptp
+CMD_VAR =
+CMD_VAR = has_rx_ts_len
+CMD_VAR = v_rx_ts
+CMD_VAR = has_tx_ts_len
+CMD_VAR = v_tx_ts
+CMD_VAR = has_ls_clear
+CMD_VAR = has_auto
+CMD_VAR = has_manual
+CMD_VAR = has_tc_mode
+CMD_VAR = has_a
+CMD_VAR = has_b
+CMD_VAR =
+CMD_VAR = has_dly_req_rcv_10
+CMD_VAR = has_true
+CMD_VAR = has_false
+CMD_VAR = has_auto_ts
+CMD_VAR = has_intr_ts
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP = Reference clock frequency
+HELP =
+HELP = clock source 
+HELP =
+HELP =
+HELP =
+HELP = Rx timestamp position
+HELP =
+HELP =
+HELP = Rx timestamp length
+HELP =
+HELP = Timestamp size in Tx TSFIFO 
+HELP =
+HELP =
+HELP =
+HELP =
+HELP = TC operating mode
+HELP =
+HELP =
+HELP =
+HELP = Store 10-byte ingress timestamp for delay request message. Used for auto delay req/response
+HELP =
+HELP =
+HELP = Phy would insert timestamp in follow-up message.
+HELP = Phy would generate interrupt for timestamp saved in FIFO.
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = clk-freq : Option
+BYWORD =
+BYWORD = clk-src : Option
+BYWORD = internal125 : Option
+BYWORD = qsgmii125 : Option
+BYWORD = external1588 : Option
+BYWORD = rx-ts-pos : Option
+BYWORD = in-ptp : Option
+BYWORD = end : Option
+BYWORD = rx-ts-len : Option
+BYWORD =
+BYWORD = tx-ts-len : Option
+BYWORD =
+BYWORD = ls-clear : Option
+BYWORD = auto : Option
+BYWORD = manual : Option
+BYWORD = tc-mode : Option
+BYWORD = a : Option
+BYWORD = b : Option
+BYWORD = c : Option
+BYWORD = dly-req-rcv-10 : Option
+BYWORD = true : Option
+BYWORD = false : Option
+BYWORD = auto-ts : Option
+BYWORD = intr-ts : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    mepa_ts_clock_freq_t freq = MEPA_TS_CLOCK_FREQ_250M;
+    if (has_clk_freq) {
+        if (v_freq == 25) {
+            freq = MEPA_TS_CLOCK_FREQ_25M;
+        }
+        if (v_freq == 125) {
+            freq = MEPA_TS_CLOCK_FREQ_125M;
+        }
+        else if(v_freq == 156.25) {
+            freq = MEPA_TS_CLOCK_FREQ_15625M;
+        }
+        else if(v_freq == 200) {
+            freq = MEPA_TS_CLOCK_FREQ_200M;
+        }
+        else if(v_freq == 250) {
+            freq = MEPA_TS_CLOCK_FREQ_250M;
+        }
+        else if(v_freq == 500) {
+            freq = MEPA_TS_CLOCK_FREQ_500M;
+        }
+        else {
+            freq = MEPA_TS_CLOCK_FREQ_MAX;
+        }
+    } 
+    mepa_ts_clock_src_t src = MEPA_TS_CLOCK_SRC_125MHZ_INTERNAL_SYS_PLL;
+    if (has_clk_src) {
+        src = has_internal125 ? MEPA_TS_CLOCK_SRC_125MHZ_INTERNAL_SYS_PLL :(has_qsgmii125 ? MEPA_TS_CLOCK_SRC_125MHZ_QSGMII_REC_CLOCK : MEPA_TS_CLOCK_SRC_EXT_1588_REF_CLOCK);
+    }
+    mepa_ts_rx_timestamp_pos_t ts_rx_pos = MEPA_TS_RX_TIMESTAMP_POS_IN_PTP;
+    ts_rx_pos = has_rx_ts_pos ?  (has_in_ptp ? MEPA_TS_RX_TIMESTAMP_POS_IN_PTP : MEPA_TS_RX_TIMESTAMP_POS_AT_END) :MEPA_TS_RX_TIMESTAMP_POS_AT_END ;
+    mepa_ts_rx_timestamp_len_t len = MEPA_TS_RX_TIMESTAMP_LEN_32BIT;
+    if(has_rx_ts_len) {
+        len = (v_rx_ts == 32) ? MEPA_TS_RX_TIMESTAMP_LEN_32BIT : MEPA_TS_RX_TIMESTAMP_LEN_30BIT;  
+    }
+    mepa_ts_fifo_timestamp_len_t ts_len = MEPA_TS_FIFO_TIMESTAMP_LEN_10BYTE;
+    if(has_tx_ts_len){
+            ts_len = (v_tx_ts == 10)? MEPA_TS_FIFO_TIMESTAMP_LEN_10BYTE : MEPA_TS_FIFO_TIMESTAMP_LEN_4BYTE;
+    }
+    mepa_bool_t clear =  has_manual;
+    clear =  has_ls_clear ? has_manual : has_auto; 
+    mepa_ts_tc_op_mode_t tc_mode = MEPA_TS_TC_OP_MODE_A;
+    if(has_tc_mode) {
+        tc_mode = has_a ? MEPA_TS_TC_OP_MODE_A :(has_b ? MEPA_TS_TC_OP_MODE_B : MEPA_TS_TC_OP_MODE_C);
+    }
+    mepa_bool_t  delay = has_false, auto_ts = has_auto_ts;
+    delay = has_dly_req_rcv_10 ? has_true : has_false;
+    if (has_intr_ts) {
+        auto_ts = FALSE;
+    }
+    phy_icli_dbg_phy_ts_mepa_init_set(session_id, plist, has_clk_freq, has_clk_src, has_rx_ts_pos, has_rx_ts_len, has_tx_ts_len, has_ls_clear, has_tc_mode, has_dly_req_rcv_10, freq, src, ts_rx_pos, len, ts_len, clear, tc_mode, delay, auto_ts);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy show sqi [interface <port_type_list>] 
+
+DOC_CMD_DESC    = Show Signal Quality Index for all or a given interface
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! 1: debug
+! 2: phy
+! 3: show
+! 4: sqi
+! 5: interface
+! 6: <port_type_list>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_interface
+CMD_VAR = v_port_type_list
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP = 
+HELP = 
+HELP = SQI information
+HELP = Interface 
+HELP = 
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = interface : Option
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_interface) {
+        v_port_type_list = NULL;
+    }
+    phy_icli_show_sqi_value(session_id, v_port_type_list);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy mdi [{mdi | mdix | auto}]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: mdi
+! 4: mdi
+! 5: mdix
+! 6: auto
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_mdi
+CMD_VAR = has_mdix
+CMD_VAR = has_auto
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+
+HELP =
+HELP =
+HELP =
+HELP = Media dependent interface
+HELP = Media dependent interface crossover
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = mdi : Option
+BYWORD = mdix : Option
+BYWORD = auto : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    phy_icli_dbg_phy_mdi(session_id, plist, has_mdi, has_mdix, has_auto);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug  phy sof-pulses [ sofno <0,1,2,3> ] [ dir { tx | rx } ] [ sof-preemption-val <0,1,2,3> ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: sof-pulses
+! 4: sofno
+! 5: <0,1,2,3>
+! 6: dir
+! 7: tx
+! 8: rx
+! 9: sof-preemption-val
+! 10: <0,1,2,3>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_sofno
+CMD_VAR = v_sofno
+CMD_VAR = has_dir
+CMD_VAR =
+CMD_VAR = has_rx
+CMD_VAR = has_sof_preemption_val
+CMD_VAR = v_sof_preemption_val
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP = Start of Frame number(SOF)
+HELP =
+HELP = Tx or Rx SOF
+HELP =
+HELP =
+HELP = SOF Preemption value
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = sofno : Option
+BYWORD =
+BYWORD = dir : Option
+BYWORD =
+BYWORD = rx : Option
+BYWORD = sof-preemption-val : Option
+BYWORD =
+
+VARIABLE_BEGIN
+    u8 sofno = 0;
+VARIABLE_END
+
+CODE_BEGIN
+    mepa_bool_t ingress = TRUE;
+    if (has_dir) {
+        ingress = has_rx ? TRUE : FALSE;
+    }
+    if (has_sofno) {
+        sofno =  (v_sofno == 0) ? 0 : (v_sofno == 1 ? 1 : (v_sofno == 2 ? 2 : 3));
+    }
+    mepa_preemption_mode_t preemption = MEPA_PREEMPTION_NORMAL_SFD;
+    if (has_sof_preemption_val) {
+        preemption =  (v_sof_preemption_val == MEPA_PREEMPTION_NORMAL_SFD) ? MEPA_PREEMPTION_NORMAL_SFD : (v_sof_preemption_val == MEPA_PREEMPTION_SMD_E ? MEPA_PREEMPTION_SMD_E : (v_sof_preemption_val == MEPA_PREEMPTION_SMD_EXCEPT_CONTINUOUS ? MEPA_PREEMPTION_SMD_EXCEPT_CONTINUOUS : MEPA_PREEMPTION_SMD_ALL));
+    }
+    phy_icli_dbg_phy_start_of_frame_pulses(session_id, plist, ingress, has_dir, has_sofno, sofno, has_sof_preemption_val, preemption);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy frame-preemption [ { enable | disable } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: frame-preemption
+! 4: enable
+! 5: disable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_enable
+CMD_VAR = has_disable
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP = Frame preemption
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = enable : Option
+BYWORD = disable : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    phy_icli_dbg_phy_frame_preemption(session_id, plist, has_enable, has_disable);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy selftest [ speed { 1 G | 100 M | 10 M } ] [ media-mode { mdi | mdix } ] [ frames <0-65535000>]  {start | read}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST 
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: selftest-check
+! 4: speed
+! 5: 1
+! 6: G
+! 7: 100
+! 8: M
+! 9: 
+! 10: 
+! 11: media-mode
+! 12: mdi
+! 13: mdix
+! 14: frames
+! 15: <0-65535000>
+! 16: start
+! 17: read
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_speed
+CMD_VAR = v_1
+CMD_VAR =
+CMD_VAR = v_100
+CMD_VAR =
+CMD_VAR = 
+CMD_VAR =
+CMD_VAR = has_media_mode
+CMD_VAR = has_mdi
+CMD_VAR = has_mdix
+CMD_VAR = 
+CMD_VAR = v_0_to_65535000
+CMD_VAR = has_start
+CMD_VAR = has_read
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = Self test Frame Generation
+HELP =
+HELP =
+HELP = Speed
+HELP = 
+HELP =
+HELP =
+HELP = Media mode
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =  
+HELP = Number of frames
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = speed : Option
+BYWORD = 1 : Option
+BYWORD =
+BYWORD = 100 : Option
+BYWORD =
+BYWORD = 
+BYWORD =
+BYWORD = media-mode : Option
+BYWORD = mdi : Option
+BYWORD = mdix : Option
+BYWORD = 
+BYWORD =
+BYWORD = start : Option
+BYWORD = read : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    mepa_port_speed_t speed = MESA_SPEED_1G;
+    mepa_media_mode_t  mode = MEPA_MEDIA_MODE_AUTO;
+    if (has_speed) {
+        speed = v_1 ? MESA_SPEED_1G :(v_100 ? MESA_SPEED_100M : MESA_SPEED_10M);
+    }
+    if (has_media_mode) {
+        mode = has_mdi ? MEPA_MEDIA_MODE_MDI :(has_mdix ? MEPA_MEDIA_MODE_MDIX : MEPA_MEDIA_MODE_AUTO);
+    }
+    phy_icli_dbg_phy_selftest(session_id, plist, speed, mode,  v_0_to_65535000, has_start, has_read);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy ts-mepa crc-12 clock-identity <word24> port <0-65535>
+
+DOC_CMD_DESC    = Generate CRC-12 value used in LAN8814 taking clock identity and port-id as input.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = debug phy ts-mepa crc-12 clock-identity 00:01:c1:ff:fe:00:00:09 port 7
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+! 2: phy
+! 3: ts-mepa
+! 4: crc-12
+! 5: clock-identity
+! 6: <word24>
+! 7: port
+! 8: <0-65535>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_word24
+CMD_VAR =
+CMD_VAR = v_0_to_65535
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP = Generate crc-12 for source port identity input.
+HELP =
+HELP = clock identity format - 01:01:01:01:01:01:01:01
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)phy_icli_crc_gen(session_id, v_word24, v_0_to_65535);
+CODE_END
+
+!==============================================================================
+CMD_END
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy prbs [<7,15,31>] [ { enable | disable } ] [ type { serdes | pcs } ] [ dir { line | host } ] [ clk { 25mhz | 125mhz} ] [ loopback { internal | external} ]
+
+DOC_CMD_DESC    = Enable or Disable of PRBS generation
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: prbs
+! 4: <7,15,31>
+! 5: enable
+! 6: disable
+! 7: type
+! 8: serdes
+! 9: pcs
+! 10: dir
+! 11: line
+! 12: host
+! 13: clk
+! 14: 25mhz
+! 15: 125mhz
+! 16: loopback
+! 17: internal
+! 18: external
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_prbs
+CMD_VAR = has_enable
+CMD_VAR = has_disable
+CMD_VAR =
+CMD_VAR = has_serdes
+CMD_VAR = has_pcs
+CMD_VAR =
+CMD_VAR = has_line
+CMD_VAR = has_host
+CMD_VAR =
+CMD_VAR = has_25mhz
+CMD_VAR = has_125mhz
+CMD_VAR =
+CMD_VAR = has_internal
+CMD_VAR = has_external
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP = Pseudo Random Binary Sequence
+HELP = 7 bit PRBS, no support for 15 and 31 bit
+HELP = Enable
+HELP = Disable
+HELP =
+HELP = Serdes
+HELP = PCS no support added
+HELP =
+HELP = Line no support added
+HELP = Host
+HELP = Clock
+HELP = 25 MHZ
+HELP = 125 MHZ
+HELP = Loopback
+HELP = Internal Loopback
+HELP = External Loopback no support added
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = v_prbs : Option
+BYWORD = enable : Option
+BYWORD = disable : Option
+BYWORD =
+BYWORD = serdes : Option
+BYWORD = pcs : Option
+BYWORD =
+BYWORD = line : Option
+BYWORD = host : Option
+BYWORD =
+BYWORD = 25mhz : Option
+BYWORD = 125mhz : Option
+BYWORD =
+BYWORD = internal : Option
+BYWORD = external : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    bool enable;
+    enable =  has_enable ? 1 :(has_disable ? 0 : 0);
+    mepa_phy_prbs_type_t type = MEPA_PHY_PRBS_TYPE_SERDES;
+    type = has_serdes ? MEPA_PHY_PRBS_TYPE_SERDES : (has_pcs ? MEPA_PHY_PRBS_TYPE_PCS : MEPA_PHY_PRBS_TYPE_CNT);
+    mepa_phy_prbs_direction_t direction = MEPA_PHY_DIRECTION_HOST;
+    direction = has_line ? MEPA_PHY_DIRECTION_LINE : (has_host ? MEPA_PHY_DIRECTION_HOST : MEPA_PHY_DIRECTION_CNT);
+    mepa_prbs_pattern_t prbsn_sel = MEPA_PRBS7;
+    prbsn_sel = v_prbs == 7 ? MEPA_PRBS7 :(v_prbs == 15 ? MEPA_PRBS15 : MEPA_PRBS31);
+    mepa_prbs_clock_t clk = MEPA_PRBS_CLK25_MHZ;
+    clk = has_25mhz ? MEPA_PRBS_CLK25_MHZ :(has_125mhz ? MEPA_PRBS_CLK125_MHZ : MEPA_PRBS_CLK125_MHZ);
+    mepa_prbs_loopback_t loopback = MEPA_PRBS_INTERNAL_LOOPBACK;
+    loopback = has_internal ? MEPA_PRBS_INTERNAL_LOOPBACK :(has_external ? MEPA_PRBS_EXTERNAL_LOOPBACK : MEPA_PRBS_EXTERNAL_LOOPBACK);
+    phy_icli_dbg_phy_prbs(session_id, plist, enable, type, direction, prbsn_sel, (has_enable || has_disable), clk, loopback);
+CODE_END
+
+CMD_END
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug phy checker prbs [<7,15,31>] [inject] [value]
+
+DOC_CMD_DESC    = Inject error or get errors of PRBS generation
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! 1: debug
+! 2: phy
+! 3: checker
+! 4: prbs
+! 5: <7,15,31>
+! 6: inject
+! 7: value
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_prbs
+CMD_VAR = has_inject
+CMD_VAR = has_value
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP = Pseudo Random Binary Sequence
+HELP =
+HELP = N bit, only PRBS7 works
+HELP = Introduces one error into sequence
+HELP = Display Error Count
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = v_prbs : option
+BYWORD = inject : option
+BYWORD = value : option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    mepa_prbs_pattern_t prbsn_sel = MEPA_PRBS7;
+    prbsn_sel = v_prbs == 7 ? MEPA_PRBS7 :(v_prbs == 15 ? MEPA_PRBS15 : MEPA_PRBS31);
+    phy_icli_show_prbs_checker_value(session_id, plist, prbsn_sel, has_inject, has_value);
+CODE_END
+
+CMD_END
+!==============================================================================

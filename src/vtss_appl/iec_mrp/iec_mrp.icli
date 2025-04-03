@@ -1,0 +1,3064 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include <vtss/appl/iec_mrp.h>      /* For vtss_appl_iec_mrp_XXX()               */
+#include "iec_mrp_api.h"            /* For iec_mrp_util_XXX()                    */
+#include "cfm_api.h"                /* For cfm_util_XXX()                        */
+#include "ip_utils.hxx"             /* For operator== on mesa_mac_t              */
+#include "misc_api.h"               /* For iport2uport()                         */
+#include "vlan_api.h"               /* For vlan_mgmt_XXX()                       */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+#include <functional>               /* For std::function                         */
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include IEC_MRP's trace here, because ICLI defines its own that I
+// don't want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "iec_mrp_trace.h"
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define MRP_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// MRP_ICFG_port_conf_print()
+/******************************************************************************/
+static mesa_rc MRP_ICFG_port_conf_print(uint32_t inst, vtss_icfg_conf_print_t &conf_print, vtss_appl_iec_mrp_port_conf_t *conf, vtss_appl_iec_mrp_port_conf_t *default_conf, vtss_appl_iec_mrp_port_type_t port_type, int what)
+{
+    vtss_ifindex_elm_t ife;
+    char               buf[100], cmd[50];
+    bool               empty;
+    mesa_rc            rc;
+
+    switch (what) {
+    case 0:
+        // Print interface
+        sprintf(cmd, "%s interface", iec_mrp_util_port_type_to_str(port_type));
+        conf_print.is_default = false;
+
+        if (conf->ifindex == VTSS_IFINDEX_NONE) {
+            if (conf_print.req->all_defaults) {
+                VTSS_RC(vtss_icfg_conf_print(&conf_print, "no", "%s", cmd));
+            }
+        } else {
+            if ((rc = vtss_appl_ifindex_port_configurable(conf->ifindex, &ife)) != VTSS_RC_OK) {
+                T_EG(MRP_TRACE_GRP_ICLI, "%u: Unable to decompose %s ifindex %u", inst, iec_mrp_util_port_type_to_str(port_type), VTSS_IFINDEX_PRINTF_ARG(conf->ifindex));
+                return rc;
+            }
+
+            VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), buf)));
+        }
+
+        break;
+
+    case 1:
+        // Print sf-trigger
+        sprintf(cmd, "%s sf-trigger", iec_mrp_util_port_type_to_str(port_type));
+
+        switch (conf->sf_trigger) {
+        case VTSS_APPL_IEC_MRP_SF_TRIGGER_LINK:
+            conf_print.is_default = conf->sf_trigger == default_conf->sf_trigger;
+            VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", iec_mrp_util_sf_trigger_to_str(conf->sf_trigger)));
+            break;
+
+        case VTSS_APPL_IEC_MRP_SF_TRIGGER_MEP:
+            VTSS_RC(cfm_util_key_check(conf->mep, &empty));
+            if (empty) {
+                T_EG(MRP_TRACE_GRP_ICLI, "%u: Internal error: %s: SF trigger is %s, but MEP config is empty (%s)", inst, iec_mrp_util_port_type_to_str(port_type), iec_mrp_util_sf_trigger_to_str(conf->sf_trigger), conf->mep);
+                return VTSS_APPL_IEC_MRP_RC_INTERNAL_ERROR;
+            }
+
+            VTSS_RC(vtss_icfg_printf(conf_print.result, " %s mep domain %s service %s mep-id %d\n", cmd, conf->mep.md.c_str(), conf->mep.ma.c_str(), conf->mep.mepid));
+            break;
+
+        default:
+            T_EG(MRP_TRACE_GRP_ICLI, "%u: Invalid sf-trigger for %s (%d)", inst, iec_mrp_util_port_type_to_str(port_type), conf->sf_trigger);
+            return VTSS_APPL_IEC_MRP_RC_INTERNAL_ERROR;
+        }
+
+        break;
+
+    default:
+        T_EG(MRP_TRACE_GRP_ICLI, "%u: Internal error: No support for what = %d on %s", inst, what, iec_mrp_util_port_type_to_str(port_type));
+        return VTSS_APPL_IEC_MRP_RC_INTERNAL_ERROR;
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// MRP_ICFG_conf_print()
+/******************************************************************************/
+static mesa_rc MRP_ICFG_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    uint32_t                      inst;
+    vtss_icfg_conf_print_t        conf_print;
+    vtss_appl_iec_mrp_conf_t      conf, default_conf;
+    vtss_appl_iec_mrp_port_type_t ring_port;
+    char                          buf[100];
+    int                           what;
+
+    // Due to clash with Multiple Registration Protocol, I have to name all ICLI
+    // commands with another name. I have chosen "media-redundancy".
+    // Format:
+    // media-redundancy <1-max>
+    //  [no] role {mrc | mrm | mra}
+    //  [no] name <string1-240>
+    //  [no] uuid <string36-36>
+    //  [no] oui {default | siemens | custom <oui>}
+    //  [no] port1 interface <port_type_id>
+    //  [no] port2 interface <port_type_id>
+    //  [no] port1 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    //  [no] port2 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    //  [no] control-vlan <vlan_id>
+    //  [no] recovery-profile {10ms | 30ms | 200ms | 500ms}
+
+    //  [no] mrm priority <uint>
+    //  [no] mrm react-on-link-change
+
+    //  [no] interconnection role {mic | mim | none}
+    //  [no] interconnection mode {link-check | ring-check}
+    //  [no] interconnection id <uint16>
+    //  [no] interconnection name <string1-240>
+    //  [no] interconnection interface <port_type_id>
+    //  [no] interconnection sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    //  [no] interconnection control-vlan <vlan_id>
+    //  [no] interconnection recovery-profile {200ms | 500ms}
+
+    //  admin-state {enable | disable}
+
+    if (req->cmd_mode != ICLI_CMD_MODE_IEC_MRP) {
+        T_EG(MRP_TRACE_GRP_ICLI, "Invalid cmd_mode (%d). Expected %d", req->cmd_mode, ICLI_CMD_MODE_IEC_MRP);
+        return VTSS_RC_OK;
+    }
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+
+    inst = req->instance_id.generic_u32;
+
+    VTSS_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    VTSS_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+
+    //  [no] role {mrc | mrm | mra}
+    conf_print.is_default = conf.role == default_conf.role;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "role", "%s", iec_mrp_util_role_to_str(conf.role)));
+
+    //  [no] name <string1-240>
+    conf_print.is_default = memcmp(conf.name, default_conf.name, sizeof(conf.name)) == 0;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "name", "\"%s\"", conf.name));
+    conf_print.force_no_keyword = false;
+
+    //  [no] uuid <string36-36>
+    conf_print.is_default = memcmp(conf.domain_id, default_conf.domain_id, sizeof(conf.domain_id)) == 0;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "uuid", "\"%s\"", iec_mrp_util_domain_id_to_uuid(buf, sizeof(buf), conf.domain_id)));
+
+    //  [no] oui {default | siemens | custom <oui>}
+    if (conf.oui_type == VTSS_APPL_IEC_MRP_OUI_TYPE_CUSTOM) {
+        sprintf(buf, " %02X-%02X-%02X", conf.custom_oui[0], conf.custom_oui[1], conf.custom_oui[2]);
+    } else {
+        buf[0] = '\0';
+    }
+
+    conf_print.is_default = conf.oui_type == default_conf.oui_type;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "oui", "%s%s", iec_mrp_util_oui_type_to_str(conf.oui_type), buf));
+
+    //  [no] port1 interface <port_type_id>
+    //  [no] port2 interface <port_type_id>
+    //  [no] port1 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    //  [no] port2 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    for (what = 0; what < 2; what++) {
+        for (ring_port = VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1; ring_port <= VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2; ring_port++) {
+            VTSS_RC(MRP_ICFG_port_conf_print(inst, conf_print, &conf.ring_port[ring_port], &default_conf.ring_port[ring_port], ring_port, what));
+        }
+    }
+
+    //  [no] control-vlan <vlan_id>
+    conf_print.is_default = conf.vlan == default_conf.vlan;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "control-vlan", "%u", conf.vlan));
+    conf_print.force_no_keyword = false;
+
+    //  [no] recovery-profile {10ms | 30ms | 200ms | 500ms}
+    conf_print.is_default = conf.recovery_profile == default_conf.recovery_profile;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "recovery-profile", "%s", iec_mrp_util_recovery_profile_to_str(conf.recovery_profile)));
+
+    //  [no] mrm priority <uint>
+    conf_print.is_default = conf.mrm.prio == default_conf.mrm.prio;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "mrm priority", "0x%x", conf.mrm.prio));
+
+    //  [no] mrm react-on-link-change
+    conf_print.is_default = conf.mrm.react_on_link_change == default_conf.mrm.react_on_link_change;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "mrm react-on-link-change", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    //  [no] interconnection role {mic | mim | none}
+    conf_print.is_default = conf.in_role == default_conf.in_role;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "interconnection role", "%s", iec_mrp_util_in_role_to_str(conf.in_role)));
+
+    //  [no] interconnection mode {link-check | ring-check}
+    conf_print.is_default = conf.in_mode == default_conf.in_mode;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "interconnection mode", "%s", iec_mrp_util_in_mode_to_str(conf.in_mode)));
+
+    //  [no] interconnection id <uint16>
+    conf_print.is_default = conf.in_id == default_conf.in_id;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "interconnection id", "%u", conf.in_id));
+
+    //  [no] interconnection name <string1-240>
+    conf_print.is_default = memcmp(conf.in_name, default_conf.in_name, sizeof(conf.in_name)) == 0;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "interconnection name", "\"%s\"", conf.in_name));
+    conf_print.force_no_keyword = false;
+
+    //  [no] interconnection interface <port_type_id>
+    //  [no] interconnection sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    for (what = 0; what < 2; what++) {
+        VTSS_RC(MRP_ICFG_port_conf_print(inst, conf_print, &conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION], &default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION], VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION, what));
+    }
+
+    //  [no] interconnection control-vlan <vlan_id>
+    conf_print.is_default = conf.in_vlan == default_conf.in_vlan;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "interconnection control-vlan", "%u", conf.in_vlan));
+    conf_print.force_no_keyword = false;
+
+    //  [no] interconnection recovery-profile {200ms | 500ms}
+    conf_print.is_default = conf.in_recovery_profile == default_conf.in_recovery_profile;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "interconnection recovery-profile", "%s", iec_mrp_util_recovery_profile_to_str(conf.in_recovery_profile)));
+
+    //  admin-state {enable | disable}
+    conf_print.is_default = conf.admin_active == default_conf.admin_active;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "admin-state", "%s", conf.admin_active ? "enable" : "disable"));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// iec_mrp_icfg_init()
+/******************************************************************************/
+mesa_rc iec_mrp_icfg_init(void)
+{
+    return vtss_icfg_query_register(VTSS_ICFG_IEC_MRP, "media-redundancy", MRP_ICFG_conf_print);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+/******************************************************************************/
+// MRP_ICLI_do_instance_range()
+/******************************************************************************/
+static BOOL MRP_ICLI_do_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing)
+{
+    vtss_appl_iec_mrp_capabilities_t cap;
+    uint32_t                         prev_inst, inst, cnt;
+    mesa_rc                          rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_iec_mrp_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_iec_mrp_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 10;
+    }
+
+    // Add the default range first.
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    if (!include_existing) {
+        return TRUE;
+    }
+
+    prev_inst = 0;
+    while (vtss_appl_iec_mrp_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// MRP_ICLI_instance_range()
+/******************************************************************************/
+static BOOL MRP_ICLI_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return MRP_ICLI_do_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// MRP_ICLI_existing_instance_range()
+/******************************************************************************/
+static BOOL MRP_ICLI_existing_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return MRP_ICLI_do_instance_range(session_id, ask, runtime, true);
+}
+
+/******************************************************************************/
+// MRP_ICLI_recovery_profile_supported()
+/******************************************************************************/
+static BOOL MRP_ICLI_recovery_profile_supported(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, vtss_appl_iec_mrp_recovery_profile_t profile)
+{
+    vtss_appl_iec_mrp_capabilities_t cap;
+    mesa_rc                          rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_iec_mrp_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_iec_mrp_capabilities_get() failed: %s", error_txt(rc));
+        cap.fastest_recovery_profile = VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_500MS;
+    }
+
+    runtime->present = profile >= cap.fastest_recovery_profile;
+    return TRUE;
+}
+
+/******************************************************************************/
+// MRP_ICLI_recovery_profile_10ms_supported()
+/******************************************************************************/
+static BOOL MRP_ICLI_recovery_profile_10ms_supported(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return MRP_ICLI_recovery_profile_supported(session_id, ask, runtime, VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_10MS);
+}
+
+/******************************************************************************/
+// MRP_ICLI_recovery_profile_30ms_supported()
+/******************************************************************************/
+static BOOL MRP_ICLI_recovery_profile_30ms_supported(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return MRP_ICLI_recovery_profile_supported(session_id, ask, runtime, VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_30MS);
+}
+
+/******************************************************************************/
+// MRP_ICLI_recovery_profile_200ms_supported()
+/******************************************************************************/
+static BOOL MRP_ICLI_recovery_profile_200ms_supported(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return MRP_ICLI_recovery_profile_supported(session_id, ask, runtime, VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_200MS);
+}
+
+/******************************************************************************/
+// MRP_ICLI_bool_to_yes_no()
+/******************************************************************************/
+static const char *MRP_ICLI_bool_to_yes_no(bool val)
+{
+    return val ? "Yes" : "No";
+}
+
+/******************************************************************************/
+// MRP_ICLI_bool_to_yes_no_dash()
+/******************************************************************************/
+static const char *MRP_ICLI_bool_to_yes_no_dash(vtss_appl_iec_mrp_conf_t &conf, bool val)
+{
+    return conf.in_role == VTSS_APPL_IEC_MRP_IN_ROLE_NONE ? "-" : val ? "Yes" : "No";
+}
+
+/******************************************************************************/
+// MRP_ICLI_show_mrp_status()
+/******************************************************************************/
+static void MRP_ICLI_show_mrp_status(uint32_t session_id, uint32_t inst, vtss_appl_iec_mrp_conf_t &conf, vtss_appl_iec_mrp_status_t &status, bool first_print, bool has_details)
+{
+    vtss_appl_iec_mrp_port_type_t     port_type;
+    vtss_appl_iec_mrp_port_status_t   &s1 = status.port_status[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1];
+    vtss_appl_iec_mrp_port_status_t   &s2 = status.port_status[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2];
+    vtss_appl_iec_mrp_port_status_t   &s3 = status.port_status[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION];
+    vtss_ifindex_elm_t                ife;
+    char                              interface_str[3][ICLI_PORTING_STR_BUF_SIZE];
+    char                              buf[400], buf2[20];
+    const int                         width = 29, c_width = 10, p_width = 9;
+    vtss_appl_iec_mrp_oper_warnings_t oper_warning;
+    bool                              first, using_interconnection = conf.in_role != VTSS_APPL_IEC_MRP_IN_ROLE_NONE;
+    int                               i;
+
+    if (has_details) {
+        if (!first_print) {
+            // Not first print, but separate from previous detailed instance
+            ICLI_PRINTF("\n------------------------------------------------------------------------\n\n");
+        }
+
+        ICLI_PRINTF("%-*s %u\n", width, "Instance:",          inst);
+        ICLI_PRINTF("%-*s %s\n", width, "Name:",              conf.name);
+        ICLI_PRINTF("%-*s %s\n", width, "Operational State:", iec_mrp_util_oper_state_to_str(status.oper_state));
+
+        if (status.oper_state != VTSS_APPL_IEC_MRP_OPER_STATE_ACTIVE) {
+            return;
+        }
+
+        for (port_type = VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1; port_type <= VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION; port_type++) {
+            if (port_type != VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION || using_interconnection) {
+                // Convert ifindex to something that ICLI can understand.
+                if (vtss_appl_ifindex_port_configurable(conf.ring_port[port_type].ifindex, &ife) != VTSS_RC_OK) {
+                    T_EG(MRP_TRACE_GRP_ICLI, "%u: Unable to decompose ifindex %u", inst, VTSS_IFINDEX_PRINTF_ARG(conf.ring_port[port_type].ifindex));
+                    return;
+                }
+
+                (void)icli_port_info_txt_short(ife.usid, iport2uport(ife.ordinal), interface_str[port_type]);
+            } else {
+                strcpy(interface_str[port_type], "-");
+            }
+        }
+
+        if (status.oper_warnings) {
+            // Print one operational warning per line
+            first = true;
+
+            for (i = 0; i < 8 * sizeof(status.oper_warnings); i++) {
+                oper_warning = status.oper_warnings & (vtss_appl_iec_mrp_oper_warnings_t)VTSS_BIT64(i);
+                if (oper_warning) {
+                    ICLI_PRINTF("%-*s %s\n", width, first ? "Operational Warnings:" : "", iec_mrp_util_oper_warnings_to_txt(buf, sizeof(buf), oper_warning));
+                    first = false;
+                }
+            }
+        } else {
+            ICLI_PRINTF("%-*s %s\n", width, "Operational Warnings:", "None");
+        }
+
+        if (conf.role == VTSS_APPL_IEC_MRP_ROLE_MRC) {
+            strcpy(buf, "-");
+        } else {
+            sprintf(buf, "0x%X", conf.mrm.prio);
+        }
+
+        ICLI_PRINTF("%-*s %s/%s\n", width, "Role (conf/oper):", iec_mrp_util_role_to_str(conf.role, true), iec_mrp_util_role_to_str(status.oper_role, true));
+        ICLI_PRINTF("%-*s %s\n",    width, "Rec. Profile:",     iec_mrp_util_recovery_profile_to_str(conf.recovery_profile));
+        ICLI_PRINTF("%-*s %s\n",    width, "MRM Priority:",     buf);
+        ICLI_PRINTF("%-*s %s\n",    width, "UUID:",             iec_mrp_util_domain_id_to_uuid(buf, sizeof(buf), conf.domain_id));
+        ICLI_PRINTF("%-*s %s\n",    width, "Ring State:",       iec_mrp_util_ring_state_to_str(status.ring_state));
+
+        if (conf.vlan) {
+            sprintf(buf, "%u", conf.vlan);
+        } else {
+            sprintf(buf, "Untagged");
+        }
+
+        ICLI_PRINTF("%-*s %s\n", width, "VLAN:",                         buf);
+        ICLI_PRINTF("%-*s %s\n", width, "Interconnection Role:",         iec_mrp_util_in_role_and_mode_to_str(conf.in_role, conf.in_mode));
+        ICLI_PRINTF("%-*s %s\n", width, "Interconnection Name:",         using_interconnection ? conf.in_name : "");
+        ICLI_PRINTF("%-*s %s\n", width, "Interconnection Rec. Profile:", using_interconnection ? iec_mrp_util_recovery_profile_to_str(conf.in_recovery_profile) : "-");
+        ICLI_PRINTF("%-*s %s\n", width, "Interconnection State:",        using_interconnection ? iec_mrp_util_ring_state_to_str(status.in_ring_state) : "-");
+
+        if (using_interconnection) {
+            if (conf.in_vlan) {
+                sprintf(buf, "%u", conf.in_vlan);
+            } else {
+                sprintf(buf, "Untagged");
+            }
+        } else {
+            sprintf(buf, "-");
+        }
+
+        ICLI_PRINTF("%-*s %s\n\n",   width, "Interconnection VLAN:",  buf);
+
+        // Per port configuration/status
+        ICLI_PRINTF("           | Port1     | Port2     | Interconnection\n");
+        ICLI_PRINTF("-----------|-----------|-----------|----------------\n");
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Interface",  p_width, interface_str[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1], p_width, interface_str[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2], interface_str[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION]);
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "SF",         p_width, MRP_ICLI_bool_to_yes_no(s1.sf),                        p_width, MRP_ICLI_bool_to_yes_no(s2.sf),                        MRP_ICLI_bool_to_yes_no_dash(conf, s3.sf));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Blocked",    p_width, MRP_ICLI_bool_to_yes_no(!s1.forwarding),               p_width, MRP_ICLI_bool_to_yes_no(!s2.forwarding),               MRP_ICLI_bool_to_yes_no_dash(conf, !s3.forwarding));
+    } else {
+        if (first_print) {
+            ICLI_PRINTF("                       Ring      Ring      I/C    I/C Ring  Port1 Port2 I/C   Port1   Port2   I/C\n");
+            ICLI_PRINTF("Inst Operational State Role      State     Role   State     SF    SF    SF    Blocked Blocked Blocked\n");
+            ICLI_PRINTF("---- ----------------- --------- --------- ------ --------- ----- ----- ----- ------- ------- -------\n");
+        }
+
+        ICLI_PRINTF("%4u %-17s", inst, iec_mrp_util_oper_state_to_str(status.oper_state, status.oper_warnings));
+
+        if (status.oper_state != VTSS_APPL_IEC_MRP_OPER_STATE_ACTIVE) {
+            ICLI_PRINTF("\n");
+            return;
+        }
+
+        sprintf(buf, "%s", iec_mrp_util_role_to_str(status.oper_role, true));
+        if (conf.role == VTSS_APPL_IEC_MRP_ROLE_MRA) {
+            strcat(buf, " (MRA)");
+        }
+
+        sprintf(buf2, "%s", conf.in_role == VTSS_APPL_IEC_MRP_IN_ROLE_NONE ? "-" : iec_mrp_util_ring_state_to_str(status.in_ring_state));
+
+        ICLI_PRINTF(" %-9s %-9s %-6s %-9s %-5s %-5s %-5s %-7s %-7s %s\n",
+                    buf,
+                    iec_mrp_util_ring_state_to_str(status.ring_state),
+                    iec_mrp_util_in_role_and_mode_to_str(conf.in_role, conf.in_mode),
+                    buf2,
+                    MRP_ICLI_bool_to_yes_no(s1.sf),
+                    MRP_ICLI_bool_to_yes_no(s2.sf),
+                    MRP_ICLI_bool_to_yes_no_dash(conf, s3.sf),
+                    MRP_ICLI_bool_to_yes_no(!s1.forwarding),
+                    MRP_ICLI_bool_to_yes_no(!s2.forwarding),
+                    MRP_ICLI_bool_to_yes_no_dash(conf, !s3.forwarding));
+    }
+}
+
+/******************************************************************************/
+// MRP_ICLI_in_cnt_to_str_dash()
+/******************************************************************************/
+static char *MRP_ICLI_in_cnt_to_str_dash(vtss_appl_iec_mrp_conf_t &conf, uint64_t cnt, char *str)
+{
+    if (conf.in_role == VTSS_APPL_IEC_MRP_IN_ROLE_NONE) {
+        strcpy(str, "-");
+    } else {
+        sprintf(str, VPRI64u, cnt);
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// MRP_ICLI_mra_cnt_to_str_dash()
+/******************************************************************************/
+static char *MRP_ICLI_mra_cnt_to_str_dash(vtss_appl_iec_mrp_conf_t &conf, uint64_t cnt, char *str)
+{
+    if (conf.role != VTSS_APPL_IEC_MRP_ROLE_MRA) {
+        strcpy(str, "-");
+    } else {
+        sprintf(str, VPRI64u, cnt);
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// MRP_ICLI_round_trip_time_to_str()
+/******************************************************************************/
+static char *MRP_ICLI_round_trip_time_to_str(char *str, vtss_appl_iec_mrp_round_trip_statistics_t &s, uint64_t now)
+{
+    if (s.last_update_secs) {
+        sprintf(str, "%u/%u/%u msecs (last received " VPRI64u " seconds ago)", s.msec_min, s.msec_last, s.msec_max, now - s.last_update_secs);
+    } else {
+        strcpy(str, "-");
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// MRP_ICLI_show_mrp_statistics()
+/******************************************************************************/
+static void MRP_ICLI_show_mrp_statistics(uint32_t session_id, uint32_t inst, vtss_appl_iec_mrp_conf_t &conf, vtss_appl_iec_mrp_status_t &status, bool first_print, bool has_details)
+{
+    vtss_appl_iec_mrp_port_type_t    port_type;
+    vtss_appl_iec_mrp_pdu_type_t     pdu_type;
+    vtss_appl_iec_mrp_statistics_t   *s;
+    vtss_appl_iec_mrp_statistics_t   &s1 = status.port_status[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].statistics;
+    vtss_appl_iec_mrp_statistics_t   &s2 = status.port_status[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].statistics;
+    vtss_appl_iec_mrp_statistics_t   &s3 = status.port_status[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].statistics;
+    vtss_appl_iec_mrp_capabilities_t cap;
+    char                             str1[100], str2[30], str3[30], str4[30], str5[30], str6[30];
+    uint64_t                         rx_cnt[3], tx_cnt[3], now = vtss::uptime_seconds();
+    const int                        width = 42, c_width = 16;
+    mesa_rc                          rc;
+
+    if ((rc = vtss_appl_iec_mrp_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(MRP_TRACE_GRP_ICLI, "vtss_appl_iec_mrp_capabilities_get() failed: %s", error_txt(rc));
+        cap.hw_tx_test_pdus = false;
+    }
+
+    if (has_details) {
+        if (!first_print) {
+            // Not first print, but separate from previous detailed instance
+            ICLI_PRINTF("\n------------------------------------------------------------------------\n\n");
+        }
+
+        ICLI_PRINTF("%-*s %u\n",          width, "Instance:",                                  inst);
+        ICLI_PRINTF("%-*s " VPRI64u "\n", width, "Flushes:",                                   status.flush_cnt);
+        ICLI_PRINTF("%-*s %s\n",          width, "MRM/MRC transitions:",                       MRP_ICLI_mra_cnt_to_str_dash(conf, status.mrm_mrc_transitions, str1));
+        ICLI_PRINTF("%-*s " VPRI64u "\n", width, "Ring Open/Closed transitions:",              status.transitions);
+        ICLI_PRINTF("%-*s %s\n",          width, "I/C  Open/Closed transitions:",              MRP_ICLI_in_cnt_to_str_dash(conf, status.in_transitions, str1));
+        ICLI_PRINTF("%-*s %s\n",          width, "MRP_Test   round-trip time (min/last/max):", status.round_trip_time.valid    ? MRP_ICLI_round_trip_time_to_str(str1, status.round_trip_time, now)    : "N/A");
+        ICLI_PRINTF("%-*s %s\n\n",        width, "MRP_InTest round-trip time (min/last/max):", status.in_round_trip_time.valid ? MRP_ICLI_round_trip_time_to_str(str1, status.in_round_trip_time, now) : "N/A");
+
+        ICLI_PRINTF("Counter          Port1 Rx         Port2 Rx         I/C Rx           Port1 Tx         Port2 Tx         I/C Tx\n");
+        ICLI_PRINTF("---------------- ---------------- ---------------- ---------------- ---------------- ---------------- ----------------\n");
+
+        for (pdu_type = (vtss_appl_iec_mrp_pdu_type_t)0; pdu_type < VTSS_APPL_IEC_MRP_PDU_TYPE_LAST; pdu_type++) {
+            sprintf(str1, VPRI64Fu("16"),     s1.rx_cnt[pdu_type]);
+            sprintf(str2, VPRI64Fu("16"),     s2.rx_cnt[pdu_type]);
+            MRP_ICLI_in_cnt_to_str_dash(conf, s3.rx_cnt[pdu_type], str3);
+
+            if (cap.hw_tx_test_pdus && (pdu_type == VTSS_APPL_IEC_MRP_PDU_TYPE_TEST || pdu_type == VTSS_APPL_IEC_MRP_PDU_TYPE_IN_TEST)) {
+                // When H/W transmits MRP_Test and MRP_InTest PDUs, we don't
+                // count them.
+                strcpy(str4, "N/A");
+                strcpy(str5, "N/A");
+                strcpy(str6, "N/A");
+            } else if (pdu_type == VTSS_APPL_IEC_MRP_PDU_TYPE_UNKNOWN) {
+                // No Unknown Tx counters.
+                str4[0] = '\0';
+                str5[0] = '\0';
+                str6[0] = '\0';
+            } else {
+                sprintf(str4, VPRI64Fu("16"), s1.tx_cnt[pdu_type]);
+                sprintf(str5, VPRI64Fu("16"), s2.tx_cnt[pdu_type]);
+                MRP_ICLI_in_cnt_to_str_dash(conf, s3.tx_cnt[pdu_type], str6);
+            }
+
+            ICLI_PRINTF("%-*s %16s %16s %16s %16s %16s %16s\n", c_width, iec_mrp_util_pdu_type_to_str(pdu_type, false), str1, str2, str3, str4, str5, str6);
+        }
+
+        // The following don't have a Tx equivalent
+        ICLI_PRINTF("%-*s " VPRI64Fu("16") " " VPRI64Fu("16") " %16s\n", c_width, "Errors",       s1.rx_error_cnt,     s2.rx_error_cnt,     MRP_ICLI_in_cnt_to_str_dash(conf, s3.rx_error_cnt,     str3));
+        ICLI_PRINTF("%-*s " VPRI64Fu("16") " " VPRI64Fu("16") " %16s\n", c_width, "Unhandled",    s1.rx_unhandled_cnt, s2.rx_unhandled_cnt, MRP_ICLI_in_cnt_to_str_dash(conf, s3.rx_unhandled_cnt, str3));
+        ICLI_PRINTF("%-*s " VPRI64Fu("16") " " VPRI64Fu("16") " %16s\n", c_width, "Own",          s1.rx_own_cnt,       s2.rx_own_cnt,       MRP_ICLI_in_cnt_to_str_dash(conf, s3.rx_own_cnt,       str3));
+        ICLI_PRINTF("%-*s " VPRI64Fu("16") " " VPRI64Fu("16") " %16s\n", c_width, "Others",       s1.rx_others_cnt,    s2.rx_others_cnt,    MRP_ICLI_in_cnt_to_str_dash(conf, s3.rx_others_cnt,    str3));
+        ICLI_PRINTF("%-*s " VPRI64Fu("16") " " VPRI64Fu("16") " %16s\n", c_width, "Signal Fails", s1.sf_cnt,           s2.sf_cnt,           MRP_ICLI_in_cnt_to_str_dash(conf, s3.sf_cnt,           str3));
+     } else {
+        if (first_print) {
+            ICLI_PRINTF("                  Port1                                  Port2                                  Interconnection\n");
+            ICLI_PRINTF("Inst Flushes      Rx PDU       Tx PDU       SF Count     Rx PDU       Tx PDU       SF Count     Rx PDU       Tx PDU       SF Count\n");
+            ICLI_PRINTF("---- ------------ ------------ ------------ ------------ ------------ ------------ ------------ ------------ ------------ ------------\n");
+        }
+
+        // Compress it all to a oneliner, so summarize all Rx counters into one
+        // and all Tx counters into one.
+        for (port_type = VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1; port_type <= VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION; port_type++) {
+            s = &status.port_status[port_type].statistics;
+            rx_cnt[port_type] = 0;
+            tx_cnt[port_type] = 0;
+
+            for (pdu_type = vtss_appl_iec_mrp_pdu_type_t(0); pdu_type < VTSS_APPL_IEC_MRP_PDU_TYPE_LAST; pdu_type++) {
+                rx_cnt[port_type] += s->rx_cnt[pdu_type];
+                tx_cnt[port_type] += s->tx_cnt[pdu_type];
+            }
+        }
+
+        ICLI_PRINTF("%4u " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") " %12s %12s %12s\n",
+                    inst,
+                    status.flush_cnt,
+                    rx_cnt[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1],
+                    tx_cnt[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1],
+                    s1.sf_cnt,
+                    rx_cnt[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2],
+                    tx_cnt[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2],
+                    s2.sf_cnt,
+                    MRP_ICLI_in_cnt_to_str_dash(conf, rx_cnt[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION], str1),
+                    MRP_ICLI_in_cnt_to_str_dash(conf, tx_cnt[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION], str1),
+                    MRP_ICLI_in_cnt_to_str_dash(conf, s3.sf_cnt, str1));
+     }
+}
+
+/******************************************************************************/
+// MRP_ICLI_show_mrp()
+/******************************************************************************/
+static icli_rc_t MRP_ICLI_show_mrp(uint32_t session_id, icli_range_t *inst_list, bool has_status, bool has_details)
+{
+    vtss_appl_iec_mrp_conf_t   conf;
+    vtss_appl_iec_mrp_status_t status;
+    uint32_t                   prev_inst, inst, i;
+    bool                       first = true, first_print = true, show;
+    mesa_rc                    rc;
+
+    while (vtss_appl_iec_mrp_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            show = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    show = true;
+                    break;
+                }
+            }
+        } else {
+            show = true;
+        }
+
+        if (!show) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_iec_mrp_conf_get(inst, &conf)) != VTSS_RC_OK) {
+            T_EG(MRP_TRACE_GRP_ICLI, "vtss_appl_iec_mrp_conf_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if ((rc = vtss_appl_iec_mrp_status_get(inst, &status)) != VTSS_RC_OK) {
+            T_EG(MRP_TRACE_GRP_ICLI, "vtss_appl_iec_mrp_status_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if (has_status) {
+            MRP_ICLI_show_mrp_status(session_id, inst, conf, status, first_print, has_details);
+        } else {
+            MRP_ICLI_show_mrp_statistics(session_id, inst, conf, status, first_print, has_details);
+        }
+
+        first_print = false;
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// MRP_ICLI_statistics_clear())
+/******************************************************************************/
+static icli_rc_t MRP_ICLI_statistics_clear(uint32_t session_id, icli_range_t *inst_list)
+{
+    uint32_t prev_inst, inst, i;
+    bool     first = true, clear;
+    mesa_rc  rc;
+
+    while (vtss_appl_iec_mrp_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            clear = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    clear = true;
+                    break;
+                }
+            }
+        } else {
+            clear = true;
+        }
+
+        if (!clear) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_iec_mrp_statistics_clear(inst)) != VTSS_RC_OK) {
+            T_EG(MRP_TRACE_GRP_ICLI, "vtss_appl_iec_mrp_statistics_clear() failed: %s", error_txt(rc));
+            continue;
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// MRP_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t MRP_ICLI_show_capabilities(uint32_t session_id)
+{
+    vtss_appl_iec_mrp_capabilities_t cap;
+    const int                        cap_width = 39;
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_capabilities_get(&cap));
+
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Instance count:",                    cap.inst_cnt_max);
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Fastest recovery profile:",               iec_mrp_util_recovery_profile_to_str(cap.fastest_recovery_profile));
+    ICLI_PRINTF("%-*s %s\n", cap_width, "H/W transmits MRP_Test/MRP_InTest PDUs:", MRP_ICLI_bool_to_yes_no(cap.hw_tx_test_pdus));
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+HELP_MRP       = Media Redundancy Protocol (IEC 62439-2)
+HELP_MRP_PORT1 = Set configuration for ring port1
+HELP_MRP_PORT2 = Set configuration for ring port2
+HELP_MRP_MRM   = Set configuration used when role is MRM or if becoming MRM when role is MRA
+HELP_MRP_MRC   = Set configuration used when role is MRC or if becoming MRC when role is MRA
+HELP_MRP_IN    = Set interconnection configuration
+HELP_MRP_MIM   = Set interconnection configuration used when interconnection role is MIM
+HELP_MRP_MIC   = Set interconnection configuration used when interconnection role is MIC
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = role {mrc | mrm | mra}
+
+HELP_MRP_ROLE    = Set the role of this node for this ring instance
+DOC_CMD_DESC     = ##HELP_MRP_ROLE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_ROLE
+DOC_CMD_EXAMPLE  =
+
+FUNC_NAME = mrp_role
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! role
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_ROLE
+
+! mrc
+CMD_VAR = has_mrc
+RUNTIME =
+HELP    = Set this node to be a Media Redundancy Client (MRC) for this ring.
+
+! mrm
+CMD_VAR = has_mrm
+RUNTIME =
+HELP    = Set this node to be the Media Redundancy Manager (MRM) for this ring.
+
+! auto
+CMD_VAR =
+RUNTIME =
+HELP    = Set this node to be a Media Redundancy Auto Manager (MRA) for this ring. Eventually it will become an MRM or MRC.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.role = has_mrc ? VTSS_APPL_IEC_MRP_ROLE_MRC :
+                has_mrm ? VTSS_APPL_IEC_MRP_ROLE_MRM :
+                          VTSS_APPL_IEC_MRP_ROLE_MRA;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no role
+
+HELP_MRP_NO_ROLE = Set the role of this node to be the default role
+DOC_CMD_DESC     = ##HELP_MRP_NO_ROLE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_ROLE
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_role
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! role
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_ROLE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.role = default_conf.role;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = name <string1-240>
+
+HELP_MRP_NAME   = Set a domain name for this media-redundancy instance for easy identification
+DOC_CMD_DESC    = ##HELP_MRP_NAME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NAME
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_name
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! name
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NAME
+
+! <string1-240>
+CMD_VAR = name
+RUNTIME =
+HELP    = Domain name (1-240 characters enclosed in double-quotes)
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.name[sizeof(conf.name) - 1] = '\0';
+    strncpy(conf.name, name, sizeof(conf.name) - 1);
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no name
+
+HELP_MRP_NO_NAME = Clear the domain name of this media-redundancy instance
+DOC_CMD_DESC     = ##HELP_MRP_NO_NAME
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_NAME
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_name
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! name
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_NAME
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    memcpy(conf.name, default_conf.name, sizeof(conf.name));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = uuid <string36-36>
+
+HELP_MRP_UUID   = Set a UUID for this media-redundancy instance. Also used in PDUs.
+DOC_CMD_DESC    = ##HELP_MRP_UUID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_UUID
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_uuid
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! uuid
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_UUID
+
+! <string36-36>
+CMD_VAR = uuid
+RUNTIME =
+HELP    = Universally Unique Identifier (UUID) on the form XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX, where X is a hexadecimal digit. Must be enclosed in double-quotes.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    MRP_PRINT_RC(iec_mrp_util_domain_id_from_uuid(conf.domain_id, uuid));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no uuid
+
+HELP_MRP_NO_UUID = Restore the default UUID.
+DOC_CMD_DESC     = ##HELP_MRP_NO_UUID
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_UUID
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_uuid
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! uuid
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_UUID
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    memcpy(conf.domain_id, default_conf.domain_id, sizeof(conf.domain_id));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = oui {default | siemens | custom <oui>}
+
+HELP_MRP_OUI    = Set the OUI used in MRP_Option TLVs.
+DOC_CMD_DESC     = ##HELP_MRP_OUI
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_OUI
+DOC_CMD_EXAMPLE  =
+
+FUNC_NAME = mrp_oui
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! oui
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_OUI
+
+! default
+CMD_VAR = has_default
+RUNTIME =
+HELP    = Use the switch's own OUI in MRP_option TLVs
+
+! siemens
+CMD_VAR = has_siemens
+RUNTIME =
+HELP    = Use Siemens OUI (08-00-06) to get Wireshark to dissect MRP PDUs with MRP_option TLVs correctly.
+
+! custom
+CMD_VAR =
+RUNTIME =
+HELP    = Use the following OUI in MRP_Option TLVs.
+
+! <oui>
+CMD_VAR = custom_oui
+RUNTIME =
+HELP    = OUI to use in MRP_Option TLVs
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+
+    memset(conf.custom_oui, 0, sizeof(conf.custom_oui));
+
+    if (has_default) {
+        conf.oui_type = VTSS_APPL_IEC_MRP_OUI_TYPE_DEFAULT;
+    } else if (has_siemens) {
+        conf.oui_type = VTSS_APPL_IEC_MRP_OUI_TYPE_SIEMENS;
+    } else {
+        conf.oui_type = VTSS_APPL_IEC_MRP_OUI_TYPE_CUSTOM;
+        memcpy(conf.custom_oui, &custom_oui, sizeof(conf.custom_oui));
+    }
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no oui
+
+HELP_MRP_NO_OUI  = Set the OUI used in MRP_Option TLVs to default (the switch's own OUI).
+DOC_CMD_DESC     = ##HELP_MRP_NO_OUI
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_OUI
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_oui
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! oui
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_OUI
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.oui_type = default_conf.oui_type;
+    memcpy(conf.custom_oui, default_conf.custom_oui, sizeof(conf.custom_oui));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port1 interface <port_type_id>
+
+HELP_MRP_PORT1_INTERFACE = Assign an interface to ring port1
+DOC_CMD_DESC    = ##HELP_MRP_PORT1_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_PORT1_INTERFACE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_port1_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! port1
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT1
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT1_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_MRP_PORT1_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no port1 interface
+
+HELP_MRP_NO_PORT1_INTERFACE = Unassign port1's interface.
+DOC_CMD_DESC    = ##HELP_MRP_NO_PORT1_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_PORT1_INTERFACE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_port1_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! port1
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT1
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_PORT1_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].ifindex = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].ifindex;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port2 interface <port_type_id>
+
+HELP_MRP_PORT2_INTERFACE = Assign an interface to ring port2
+DOC_CMD_DESC    = ##HELP_MRP_PORT2_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_PORT2_INTERFACE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_port2_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! port2
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT2
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT2_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_MRP_PORT2_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no port2 interface
+
+HELP_MRP_NO_PORT2_INTERFACE = Unassign port2's interface.
+DOC_CMD_DESC    = ##HELP_MRP_NO_PORT2_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_PORT2_INTERFACE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_port2_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+!no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! port2
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT2
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_PORT2_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].ifindex = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].ifindex;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port1 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+
+HELP_MRP_PORT1_SF_TRIGGER = Choose whether port1's interface link state or a MEP installed on port1's interface is used as signal-fail trigger
+DOC_CMD_DESC    = ##HELP_MRP_PORT1_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_PORT1_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_port1_sf_trigger
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! port1
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT1
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT1_SF_TRIGGER
+
+! link
+CMD_VAR = has_link
+RUNTIME =
+HELP    = Port1's interface link state is used as signal-fail trigger
+
+! mep
+CMD_VAR =
+RUNTIME =
+HELP    = A MEP installed on port1 is used as signal-fail trigger
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t      conf;
+    vtss_appl_iec_mrp_port_conf_t *port_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    port_conf = &conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1];
+
+    if (has_link) {
+        port_conf->sf_trigger = VTSS_APPL_IEC_MRP_SF_TRIGGER_LINK;
+    } else {
+        port_conf->sf_trigger = VTSS_APPL_IEC_MRP_SF_TRIGGER_MEP;
+        port_conf->mep.md     = md_name;
+        port_conf->mep.ma     = ma_name;
+        port_conf->mep.mepid  = mepid;
+    }
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no port1 sf-trigger
+
+HELP_MRP_NO_PORT1_SF_TRIGGER = Set port1's signal fail trigger to default (link)
+
+DOC_CMD_DESC    = ##HELP_MRP_NO_PORT1_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_PORT1_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_port1_sf_trigger
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! port1
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT1
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_PORT1_SF_TRIGGER
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].sf_trigger = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].sf_trigger;
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].mep        = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT1].mep;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port2 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+
+HELP_MRP_PORT2_SF_TRIGGER = Choose whether port2's interface link state or a MEP installed on port2's interface is used as signal-fail trigger
+DOC_CMD_DESC    = ##HELP_MRP_PORT2_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_PORT2_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_port2_sf_trigger
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! port2
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT2_SF_TRIGGER
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT2
+
+! link
+CMD_VAR = has_link
+RUNTIME =
+HELP    = Port2's interface link state is used as signal-fail trigger
+
+! mep
+CMD_VAR =
+RUNTIME =
+HELP    = A MEP installed on port2 is used as signal-fail trigger
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t      conf;
+    vtss_appl_iec_mrp_port_conf_t *port_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    port_conf = &conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2];
+
+    if (has_link) {
+        port_conf->sf_trigger = VTSS_APPL_IEC_MRP_SF_TRIGGER_LINK;
+    } else {
+        port_conf->sf_trigger = VTSS_APPL_IEC_MRP_SF_TRIGGER_MEP;
+        port_conf->mep.md     = md_name;
+        port_conf->mep.ma     = ma_name;
+        port_conf->mep.mepid  = mepid;
+    }
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no port2 sf-trigger
+
+HELP_MRP_NO_PORT2_SF_TRIGGER = Set port2's signal fail trigger to default (link)
+DOC_CMD_DESC    = ##HELP_MRP_NO_PORT2_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_PORT2_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_port2_sf_trigger
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! port2
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_PORT2
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_PORT2_SF_TRIGGER
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].sf_trigger = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].sf_trigger;
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].mep        = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_RING_PORT2].mep;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = control-vlan <vlan_id>
+
+HELP_MRP_CONTROL_VLAN = Set the media-redundancy instance's VLAN used in MRP PDUs transmitted on both ring ports. Use no-form to force untagged.
+DOC_CMD_DESC    = ##HELP_MRP_CONTROL_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_CONTROL_VLAN
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_control_vlan
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! control-vlan
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_CONTROL_VLAN
+
+! <vlan_id>
+CMD_VAR = vid
+RUNTIME =
+HELP    = The VLAN ID used in MRP PDUs on the ring ports. Use no-form to use untagged.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.vlan = vid;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no control-vlan
+HELP_MRP_NO_CONTROL_VLAN = Use untagged MRP PDUs on the ring ports.
+
+DOC_CMD_DESC    = ##HELP_MRP_NO_CONTROL_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_CONTROL_VLAN
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_control_vlan
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! control-vlan
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_CONTROL_VLAN
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.vlan = default_conf.vlan;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = recovery-profile {10ms | 30ms | 200ms | 500ms}
+
+HELP_MRP_RECOVERY_PROFILE = Select a recovery profile, adhering to the timing parameters of Table 59 and 60 of IEC 62439-2:2016
+DOC_CMD_DESC    = ##HELP_MRP_RECOVERY_PROFILE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_RECOVERY_PROFILE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_recovery_profile
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! recovery-profile
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_RECOVERY_PROFILE
+
+! 10ms
+CMD_VAR = has_10ms
+RUNTIME = MRP_ICLI_recovery_profile_10ms_supported
+HELP    = Use a 10 millisecond recovery profile.
+
+! 30ms
+CMD_VAR = has_30ms
+RUNTIME = MRP_ICLI_recovery_profile_30ms_supported
+HELP    = Use a 30 millisecond recovery profile.
+
+! 200ms
+CMD_VAR = has_200ms
+RUNTIME = MRP_ICLI_recovery_profile_200ms_supported
+HELP    = Use a 200 millisecond recovery profile.
+
+! 500ms
+CMD_VAR =
+RUNTIME =
+HELP    = Use a 500 millisecond recovery profile.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.recovery_profile = has_10ms  ? VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_10MS  :
+                            has_30ms  ? VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_30MS  :
+                            has_200ms ? VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_200MS :
+                                        VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_500MS;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no recovery-profile
+
+HELP_MRP_NO_RECOVERY_PROFILE = Select the default recovery profile.
+DOC_CMD_DESC    = ##HELP_MRP_NO_RECOVERY_PROFILE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_RECOVERY_PROFILE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_recovery_profile
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! recovery-profile
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_RECOVERY_PROFILE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.recovery_profile = default_conf.recovery_profile;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = mrm priority <uint16>
+
+HELP_MRP_MRM_PRIO = Select the MRM/MRA priority.
+DOC_CMD_DESC    = ##HELP_MRP_MRM_PRIO
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_MRM_PRIO
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_manager_priority
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! mrm
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_MRM
+
+! priority
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_MRM_PRIO
+
+! <uint16>
+CMD_VAR = prio
+RUNTIME =
+HELP    = If role is 'mrm', valid values are 0x0000, 0x1000-0x7000, 0x8000. If role is 'mra', valid values are 0x9000-0xF000, 0xFFFF. Smaller values give higher priority.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.mrm.prio = prio;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no mrm priority
+
+HELP_MRP_NO_MRM_PRIO = Set the MRM/MRA priority to its default
+DOC_CMD_DESC    = ##HELP_MRP_NO_MRM_PRIO
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_MRM_PRIO
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_manager_priority
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! mrm
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_MRM
+
+! priority
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_MRM_PRIO
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.mrm.prio = default_conf.mrm.prio;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = mrm react-on-link-change
+
+HELP_MRP_REACT_ON_LINK_CHANGE = Indicates whether the MRM reacts on MRP_LinkDown PDUs. Corresponds to the standard's MRP_REACT_ON_LINK_CHANGE
+DOC_CMD_DESC    = ##HELP_MRP_REACT_ON_LINK_CHANGE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_REACT_ON_LINK_CHANGE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_manager_react_on_link_change
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! mrm
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_MRM
+
+! react-on-link-change
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_REACT_ON_LINK_CHANGE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.mrm.react_on_link_change = true;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.mrm.react_on_link_change = false;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection role {mic | mim | none}
+
+HELP_MRP_IN_ROLE = Set the interconnection role of this node for this ring instance
+DOC_CMD_DESC     = ##HELP_MRP_IN_ROLE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_IN_ROLE
+DOC_CMD_EXAMPLE  =
+
+FUNC_NAME = mrp_in_role
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! role
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_ROLE
+
+! mic
+CMD_VAR = has_mic
+RUNTIME =
+HELP    = Set this node to be a Media redundancy Interconnection Client (MIC) for this ring.
+
+! mim
+CMD_VAR = has_mim
+RUNTIME =
+HELP    = Set this node to be the Media redundancy Interconnection Manager (MIM) for this ring.
+
+! none
+CMD_VAR =
+RUNTIME =
+HELP    = This node is not an interconnection node.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_role = has_mic ? VTSS_APPL_IEC_MRP_IN_ROLE_MIC :
+                   has_mim ? VTSS_APPL_IEC_MRP_IN_ROLE_MIM :
+                             VTSS_APPL_IEC_MRP_IN_ROLE_NONE;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection role
+
+HELP_MRP_NO_IN_ROLE = Disable interconnection functionality on this node. Corresponds to 'interconnection role none'
+DOC_CMD_DESC     = ##HELP_MRP_NO_IN_ROLE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_IN_ROLE
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_role
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! role
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_IN_ROLE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_role = default_conf.in_role;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection mode {link-check | ring-check}
+
+HELP_MRP_IN_MODE = Set the interconnection mode of this node for this ring instance
+DOC_CMD_DESC     = ##HELP_MRP_IN_MODE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_IN_MODE
+DOC_CMD_EXAMPLE  =
+
+FUNC_NAME = mrp_in_mode
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! mode
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_MODE
+
+! link-check
+CMD_VAR = has_lc
+RUNTIME =
+HELP    = Set this MIM/MIC node to operate in Link Check (LC) mode (uses link changes or MEP for topology discovery)
+
+! ring-check
+CMD_VAR =
+RUNTIME =
+HELP    = Set this MIM/MIC node to operate in Ring Check (RC) mode (uses MRP_InTest PDUs for topology discovery)
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_mode = has_lc ? VTSS_APPL_IEC_MRP_IN_MODE_LC : VTSS_APPL_IEC_MRP_IN_MODE_RC;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection mode
+
+HELP_MRP_NO_IN_MODE = Set the interconnection mode to its default
+DOC_CMD_DESC     = ##HELP_MRP_NO_IN_MODE
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_IN_MODE
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_mode
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! mode
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_IN_MODE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_mode = default_conf.in_mode;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection id <uint16>
+
+HELP_MRP_IN_ID  = Set an ID for this interconnection domain
+DOC_CMD_DESC    = ##HELP_MRP_IN_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_IN_ID
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_in_id
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! id
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_ID
+
+! <uint16>
+CMD_VAR = id
+RUNTIME =
+HELP    = Interconnection ID (0-65535)
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_id = id;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection id
+
+HELP_MRP_NO_IN_ID = Use a default ID for this interconnection domain
+DOC_CMD_DESC     = ##HELP_MRP_NO_IN_ID
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_IN_ID
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_id
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! id
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_IN_ID
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_id = default_conf.in_id;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection name <string1-240>
+
+HELP_MRP_IN_NAME   = Set a domain name for this media-redundancy interconnection instance for easy identification
+DOC_CMD_DESC    = ##HELP_MRP_IN_NAME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_IN_NAME
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_in_name
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! name
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_NAME
+
+! <string1-240>
+CMD_VAR = name
+RUNTIME =
+HELP    = Interconnection name (1-240 characters enclosed in double-quotes)
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_name[sizeof(conf.name) - 1] = '\0';
+    strncpy(conf.in_name, name, sizeof(conf.in_name) - 1);
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection name
+
+HELP_MRP_NO_IN_NAME = Clear the interconnection name of this media-redundancy instance
+DOC_CMD_DESC     = ##HELP_MRP_NO_IN_NAME
+DOC_CMD_DEFAULT  =
+DOC_CMD_USAGE    = ##HELP_MRP_NO_IN_NAME
+DOC_CMD_EXAMPLE  =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_name
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! name
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_IN_NAME
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    memcpy(conf.in_name, default_conf.in_name, sizeof(conf.in_name));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection interface <port_type_id>
+
+HELP_MRP_IN_INTERFACE = Assign an interface to the interconnection port
+DOC_CMD_DESC    = ##HELP_MRP_IN_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_IN_INTERFACE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_in_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_MRP_IN_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection interface
+
+HELP_MRP_NO_IN_INTERFACE = Unassign interconnection interface.
+DOC_CMD_DESC    = ##HELP_MRP_NO_IN_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_IN_INTERFACE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_interface
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_IN_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].ifindex = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].ifindex;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+
+HELP_MRP_IN_SF_TRIGGER = Choose whether the interconnection port's link state or a MEP installed on the interconnection port is used as signal-fail trigger
+DOC_CMD_DESC    = ##HELP_MRP_IN_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_IN_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_in_sf_trigger
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_SF_TRIGGER
+
+! link
+CMD_VAR = has_link
+RUNTIME =
+HELP    = Interconnection interface link state is used as signal-fail trigger
+
+! mep
+CMD_VAR =
+RUNTIME =
+HELP    = A MEP installed on the interconnection port is used as signal-fail trigger
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+
+    if (has_link) {
+        conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].sf_trigger = VTSS_APPL_IEC_MRP_SF_TRIGGER_LINK;
+    } else {
+        conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].sf_trigger = VTSS_APPL_IEC_MRP_SF_TRIGGER_MEP;
+        conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].mep.md     = md_name;
+        conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].mep.ma     = ma_name;
+        conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].mep.mepid  = mepid;
+    }
+
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection sf-trigger
+
+HELP_MRP_NO_IN_SF_TRIGGER = Set the interconnection port's signal fail trigger to default (link)
+
+DOC_CMD_DESC    = ##HELP_MRP_NO_IN_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_IN_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_sf_trigger
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_IN_SF_TRIGGER
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].sf_trigger = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].sf_trigger;
+    conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].mep        = default_conf.ring_port[VTSS_APPL_IEC_MRP_PORT_TYPE_INTERCONNECTION].mep;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection control-vlan <vlan_id>
+
+HELP_MRP_IN_CONTROL_VLAN = Set the media-redundancy instance's VLAN used in MRP PDUs transmitted on the interconnection port. Use no-form to force untagged.
+DOC_CMD_DESC    = ##HELP_MRP_IN_CONTROL_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_IN_CONTROL_VLAN
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_in_control_vlan
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! control-vlan
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_CONTROL_VLAN
+
+! <vlan_id>
+CMD_VAR = vid
+RUNTIME =
+HELP    = The VLAN ID used in MRP PDUs on the interconnection port. Use no-form to use untagged.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_vlan = vid;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection control-vlan
+HELP_MRP_NO_IN_CONTROL_VLAN = Use untagged MRP PDUs on the interconnection port.
+
+DOC_CMD_DESC    = ##HELP_MRP_NO_IN_CONTROL_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_IN_CONTROL_VLAN
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_control_vlan
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! control-vlan
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_CONTROL_VLAN
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_vlan = default_conf.in_vlan;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = interconnection recovery-profile {200ms | 500ms}
+
+HELP_MRP_IN_RECOVERY_PROFILE = Select an interconnection recovery profile, adhering to the timing parameters of Table 61 and 62 of IEC 62439-2:2016
+DOC_CMD_DESC    = ##HELP_MRP_IN_RECOVERY_PROFILE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_IN_RECOVERY_PROFILE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_in_recovery_profile
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! recovery-profile
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN_RECOVERY_PROFILE
+
+! 200ms
+CMD_VAR = has_200ms
+RUNTIME =
+HELP    = Use a 200 millisecond recovery profile.
+
+! 500ms
+CMD_VAR =
+RUNTIME =
+HELP    = Use a 500 millisecond recovery profile.
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_recovery_profile = has_200ms ? VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_200MS : VTSS_APPL_IEC_MRP_RECOVERY_PROFILE_500MS;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no interconnection recovery-profile
+
+HELP_MRP_NO_IN_RECOVERY_PROFILE = Select the default recovery profile for the interconnection
+DOC_CMD_DESC    = ##HELP_MRP_NO_IN_RECOVERY_PROFILE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_IN_RECOVERY_PROFILE
+DOC_CMD_EXAMPLE =
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+FUNC_NAME = mrp_no_in_recovery_profile
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! interconnection
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_IN
+
+! recovery-profile
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_IN_RECOVERY_PROFILE
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_default_get(&default_conf));
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.in_recovery_profile = default_conf.in_recovery_profile;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = admin-state {enable | disable}
+
+HELP_MRP_ADMIN_STATE = Enable or disable this media-redundancy instance
+DOC_CMD_DESC    = ##HELP_MRP_ADMIN_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_ADMIN_STATE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_admin_state
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+MODE_VAR  = inst
+
+! admin-state
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_ADMIN_STATE
+
+! enable
+CMD_VAR = has_enable
+RUNTIME =
+HELP    = Enable this MRP instance
+
+CMD_VAR =
+RUNTIME =
+HELP    = Disable this MRP instance
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_get(inst, &conf));
+    conf.admin_active = has_enable;
+    MRP_PRINT_RC(vtss_appl_iec_mrp_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = no media-redundancy {<uint> | all}
+
+HELP_MRP_NO_MRP = Delete a particular or all media-redundancy instances
+DOC_CMD_DESC    = ##HELP_MRP_NO_MRP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_NO_MRP
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_no_mrp
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_NO_MRP
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = MRP_ICLI_existing_instance_range
+HELP    = Delete a particular media-redundancy instance
+
+! all
+CMD_VAR = has_all
+RUNTIME =
+HELP    = Delete all media-redundancy instances
+
+VARIABLE_BEGIN
+    uint32_t next_inst;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        while (vtss_appl_iec_mrp_itr(&inst, &next_inst) == VTSS_RC_OK) {
+            // Delete this MRP instance
+            inst = next_inst;
+            MRP_PRINT_RC(vtss_appl_iec_mrp_conf_del(inst));
+        }
+    } else {
+       // Delete this MRP instance
+       MRP_PRINT_RC(vtss_appl_iec_mrp_conf_del(inst));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show media-redundancy [<range_list>] {status | statistics} [details]
+
+HELP_SHOW_MRP = Show the state or counters of one or more media-redundancy instances
+DOC_CMD_DESC    = ##HELP_SHOW_MRP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_SHOW_MRP
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_show_mrp
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_SHOW_MRP
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = MRP_ICLI_instance_range
+HELP    = List of media-redundancy instances to show
+
+! status
+CMD_VAR = has_status
+RUNTIME =
+HELP    = Show status
+
+! statistics
+CMD_VAR =
+RUNTIME =
+HELP    = Show statistics
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed status or statistics
+
+CODE_BEGIN
+    ICLI_RC(MRP_ICLI_show_mrp(session_id, inst_list, has_status, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear media-redundancy [<range_list>] statistics
+
+HELP_CLEAR_MRP = Clear the counters of one or more media-redundancy instances
+DOC_CMD_DESC    = ##HELP_CLEAR_MRP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CLEAR_MRP
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_clear_mrp
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_CLEAR_MRP
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = MRP_ICLI_instance_range
+HELP    = The range of media-redundancy instances.
+
+! statistics
+CMD_VAR =
+RUNTIME =
+HELP    = Clear MRP counters
+
+CODE_BEGIN
+    ICLI_RC(MRP_ICLI_statistics_clear(session_id, inst_list));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show media-redundancy timers
+
+HELP_MRP_DEBUG_TIMERS = Show current media-redundancy timers
+DOC_CMD_DESC    = ##HELP_MRP_DEBUG_TIMERS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_DEBUG_TIMERS
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_show_mrp_timers
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! timers
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_DEBUG_TIMERS
+
+CODE_BEGIN
+    void mrp_timer_debug_dump(uint32_t session_id, int32_t (*pr)(uint32_t session_id, const char *fmt, ...));
+    mrp_timer_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show media-redundancy capabilities
+
+HELP_MRP_SHOW_CAPABILITIES = Show media-redundancy capabilities
+DOC_CMD_DESC    = ##HELP_MRP_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_show_capabilities
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! capabilities
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_SHOW_CAPABILITIES
+
+CODE_BEGIN
+    ICLI_RC(MRP_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show media-redundancy history
+
+HELP_MRP_DEBUG_SHOW_HISTORY = Show media-redundancy state change history
+DOC_CMD_DESC    = ##HELP_MRP_DEBUG_SHOW_HISTORY
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_DEBUG_SHOW_HISTORY
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_show_history
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! history
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_DEBUG_SHOW_HISTORY
+
+CODE_BEGIN
+    void mrp_base_history_dump(uint32_t session_id, int32_t (*pr)(uint32_t session_id, const char *fmt, ...));
+    mrp_base_history_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug clear media-redundancy history
+
+HELP_MRP_DEBUG_CLEAR_HISTORY = Clear media-redundancy state change history
+DOC_CMD_DESC    = ##HELP_MRP_DEBUG_CLEAR_HISTORY
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_DEBUG_CLEAR_HISTORY
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_clear_history
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_CLEAR
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! history
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_DEBUG_CLEAR_HISTORY
+
+CODE_BEGIN
+    void mrp_base_history_clear(void);
+    mrp_base_history_clear();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show media-redundancy rules
+
+HELP_MRP_DEBUG_RULES = Show current media-redundancy-installed rules
+DOC_CMD_DESC    = ##HELP_MRP_DEBUG_RULES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_DEBUG_RULES
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_show_rules
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! rules
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_DEBUG_RULES
+
+CODE_BEGIN
+    void mrp_base_rules_dump(uint32_t session_id, int32_t (*pr)(uint32_t session_id, const char *fmt, ...));
+    mrp_base_rules_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show media-redundancy state
+
+HELP_MRP_DEBUG_STATE = Show current media-redundancy state
+DOC_CMD_DESC    = ##HELP_MRP_DEBUG_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MRP_DEBUG_STATE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = mrp_show_mrp_state
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! mrp
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP
+
+! state
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_MRP_DEBUG_STATE
+
+CODE_BEGIN
+    void mrp_base_state_dump(uint32_t session_id, int32_t (*pr)(uint32_t session_id, const char *fmt, ...));
+    mrp_base_state_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+

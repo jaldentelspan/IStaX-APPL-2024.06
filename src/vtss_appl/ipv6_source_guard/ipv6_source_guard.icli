@@ -1,0 +1,722 @@
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+INCLUDE_BEGIN
+#include "icli_api.h"
+#include "misc_api.h"
+#include "topo_api.h"
+#include "icli_porting_util.h"
+#include "vtss/appl/ipv6_source_guard.h"
+#include "ipv6_source_guard_api.h"
+#include "vtss_common_iterator.hxx"
+
+#define IP_SOURCE_GUARD_DYNAMIC_UNLIMITED       0XFFFF
+INCLUDE_END
+
+FUNCTION_BEGIN
+    
+static void ipv6_source_guard_icli_port_conf_set(u32 session_id, icli_stack_port_range_t *port_list, bool mode, u32 dynamic_entries) 
+{
+        u32             range_idx, cnt_idx;
+        vtss_usid_t     usid;
+        vtss_ifindex_t  ifindex;
+        mesa_port_no_t  uport;
+        vtss_appl_ipv6_source_guard_port_config_t port_conf;
+    
+    for (range_idx = 0; range_idx < port_list->cnt; range_idx++) {
+        usid = port_list->switch_range[range_idx].usid;
+
+        for (cnt_idx = 0; cnt_idx < port_list->switch_range[range_idx].port_cnt; cnt_idx++) {
+            uport = port_list->switch_range[range_idx].begin_uport + cnt_idx;
+
+            if (vtss_ifindex_from_usid_uport(usid, uport, &ifindex) != VTSS_RC_OK) 
+            {
+                ICLI_PRINTF("%% Unable to convert port to an ifindex\n");
+            }
+
+            if (vtss_appl_ipv6_source_guard_port_config_get(ifindex, &port_conf) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Unable to get current port configuration.\n");
+            }
+
+            if (dynamic_entries == 3) {
+                /* Enabling or disabling port. */
+                port_conf.enabled = mode;
+            } else {
+                /* Setting port maximum dynamic entries.*/
+                port_conf.max_dynamic_entries = dynamic_entries;
+            }
+
+            if (vtss_appl_ipv6_source_guard_port_config_set(ifindex, &port_conf) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Unable to change current port configuration.\n");
+            }
+        }
+    }
+}
+
+static void ipv6_source_guard_show_header(u32 session_id) {
+    char buf[120], *p;
+
+    p = &buf[0];
+    p += sprintf(p, "\nType     ");
+    p += sprintf(p, "Port                      ");
+    p += sprintf(p, "VLAN    ");    
+    p += sprintf(p, "IPv6 Address                          ");
+    p += sprintf(p, "MAC Address        ");
+    icli_parm_header(session_id, buf);
+}
+
+static void print_entry(
+    u32 session_id,
+    bool dynamic,
+    vtss_appl_ipv6_source_guard_entry_index_t index,
+    vtss_appl_ipv6_source_guard_entry_data_t data) 
+{
+    char buf[100];
+    vtss_ifindex_elm_t ife;
+
+    if (vtss_appl_ifindex_port_configurable(index.ifindex, &ife) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Could not resolve ifindex.\n");
+        return;
+    }
+    
+    if (dynamic) {
+        ICLI_PRINTF("%-9s", "Dynamic");
+    } else {
+        ICLI_PRINTF("%-9s", "Static");
+    }
+    ICLI_PRINTF("%-26s", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), buf));
+    if (index.vlan_id == 0) {
+        ICLI_PRINTF("%-5s   ", "None");
+    } else {
+        ICLI_PRINTF("%4d    ", index.vlan_id);
+    }
+    ICLI_PRINTF("%-36s  ", misc_ipv6_txt(&index.ipv6_addr, buf));
+    ICLI_PRINTF("%-15s\n", misc_mac_txt(data.mac_addr.addr, buf));
+}
+
+static void ipv6_source_guard_show_all_static_entries(u32 session_id) {
+    vtss_appl_ipv6_source_guard_entry_index_t next, *prev;
+    vtss_appl_ipv6_source_guard_entry_data_t data;
+
+    prev = NULL;
+    while (vtss_appl_ipv6_source_guard_static_entry_itr(prev, &next) == VTSS_RC_OK) {
+        
+        if (vtss_appl_ipv6_source_guard_static_entry_data_get(&next, &data) != VTSS_RC_OK) {
+            prev = &next;
+            continue;
+        }
+        print_entry(session_id, false, next, data);
+        prev = &next;
+    }
+
+}
+static void ipv6_source_guard_show_all_dynamic_entries(u32 session_id) {
+    vtss_appl_ipv6_source_guard_entry_index_t next, *prev;
+    vtss_appl_ipv6_source_guard_entry_data_t data;
+
+    prev = NULL;
+
+    while (vtss_appl_ipv6_source_guard_dynamic_entry_itr(prev, &next) == VTSS_RC_OK) {
+        
+        if (vtss_appl_ipv6_source_guard_dynamic_entry_data_get(&next, &data) != VTSS_RC_OK) {
+            prev = &next;
+            continue;
+        }
+        print_entry(session_id, true, next, data);
+        prev = &next;
+    }
+}
+static void ipv6_source_guard_show_interface_static_entries(u32 session_id, vtss_ifindex_t ifindex) {
+    vtss_appl_ipv6_source_guard_entry_index_t next, *prev;
+    vtss_appl_ipv6_source_guard_entry_data_t data;
+
+    prev = NULL;
+    while (vtss_appl_ipv6_source_guard_static_entry_itr(prev, &next) == VTSS_RC_OK) {
+        if (next.ifindex != ifindex) {
+            prev = &next;
+            continue;
+        }
+        if (vtss_appl_ipv6_source_guard_static_entry_data_get(&next, &data) != VTSS_RC_OK) {
+            prev = &next;
+            continue;
+        }
+        print_entry(session_id, false, next, data);
+        prev = &next;
+    }
+}
+static void ipv6_source_guard_show_interface_dynamic_entries(u32 session_id, vtss_ifindex_t ifindex) {
+    vtss_appl_ipv6_source_guard_entry_index_t next, *prev;
+    vtss_appl_ipv6_source_guard_entry_data_t data;
+
+    prev = NULL;
+
+    while (vtss_appl_ipv6_source_guard_dynamic_entry_itr(prev, &next) == VTSS_RC_OK) {
+        if (next.ifindex != ifindex) {
+            prev = &next;
+            continue;
+        }
+        if (vtss_appl_ipv6_source_guard_dynamic_entry_data_get(&next, &data) != VTSS_RC_OK) {
+            prev = &next;
+            continue;
+        }
+        print_entry(session_id, true, next, data);
+        prev = &next;
+    }
+}
+
+static BOOL ipv6_source_guard_help_print(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    uint32_t boardtype = fast_cap(MESA_CAP_MISC_CHIP_FAMILY);
+
+    switch (ask) {
+    case ICLI_ASK_HELP:
+        switch (boardtype) {
+        case MESA_CHIP_FAMILY_CARACAL:
+        case MESA_CHIP_FAMILY_OCELOT:
+            strncpy(runtime->help,
+                "Enables or disables the IPv6 Source Guard. "
+                "Please note: For Serval1, Caracal and Ocelot based systems you will have to manually change the "
+                 "'qos qce key' type to 'mac-ip-addr' for all ports where the source guard is enabled.\n",
+                ICLI_HELP_MAX_LEN);
+            break;
+        default:
+            strncpy(runtime->help, "Enables or disables the IPv6 Source Guard.\n", ICLI_HELP_MAX_LEN);
+            break;
+        }
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+HELP_IP         = Internet Protocol Version 6
+HELP_SHOW       = Show running system information
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = ipv6 verify source
+
+DOC_CMD_DESC    = Enable ipv6 source guard globally. No form disables the source guard globally. 
+DOC_CMD_DEFAULT = ipv6 source guard is disabled by default
+
+FUNC_NAME = ipv6_source_guard_global_conf
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##HELP_IP
+HELP = verify command
+HELP = source command
+
+RUNTIME =
+RUNTIME =
+RUNTIME = ipv6_source_guard_help_print
+
+VARIABLE_BEGIN
+    vtss_appl_ipv6_source_guard_global_config_t global_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    global_conf.enabled = true;
+    if (vtss_appl_ipv6_source_guard_global_config_set(&global_conf) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Could not enable ipv6 source guard.\n");
+    }
+CODE_END
+
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_ipv6_source_guard_global_config_t global_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    global_conf.enabled = false;
+    if (vtss_appl_ipv6_source_guard_global_config_set(&global_conf) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Could not disable ipv6 source guard.\n");
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = ipv6 verify source
+
+DOC_CMD_DESC    = Enable ipv6 source guard on current port interface. No form disables the source guard on the port interface. 
+DOC_CMD_DEFAULT = ipv6 source guard is disabled by default
+
+FUNC_NAME = ipv6_source_guard_port_conf
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##HELP_IP
+HELP = verify command
+HELP = source command
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ipv6_source_guard_icli_port_conf_set(session_id, port_list, true, 3);
+CODE_END
+
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    ipv6_source_guard_icli_port_conf_set(session_id, port_list, false, 3);
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = ipv6 source binding interface <port_type_id> [vlan <vlan_id>] <ipv6_ucast> <mac_ucast>
+
+DOC_CMD_DESC    = Creates a new static entry in binding table. No form of the command deletes a static entry from the table.
+
+FUNC_NAME = ipv6_source_guard_add_static_entry
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_type_id
+CMD_VAR =
+CMD_VAR = vlan_id
+CMD_VAR = ipv6_ucast
+CMD_VAR = mac_ucast
+
+HELP = ##HELP_IP
+HELP = source command
+HELP = IP source binding
+HELP = interface command
+HELP = Select a port id to configure
+HELP = VLAN command, optional
+HELP = Select a VLAN id to configure
+HELP = Select an IPv6 Address to configure, format xxxx::yyyy
+HELP = Select a MAC address to configure
+
+VARIABLE_BEGIN
+    vtss_appl_ipv6_source_guard_entry_index_t static_index;
+    vtss_appl_ipv6_source_guard_entry_data_t static_data;
+    mesa_rc rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_ifindex_from_port(port_type_id.isid, 
+        port_type_id.begin_iport, &static_index.ifindex) != VTSS_RC_OK) 
+    {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port_type_id.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+    static_index.ipv6_addr = ipv6_ucast;
+    static_index.vlan_id = vlan_id;
+    static_data.mac_addr = mac_ucast;
+    if ((rc = vtss_appl_ipv6_source_guard_static_entry_set(&static_index, &static_data)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", ipv6_source_guard_error_txt(rc));
+    }
+CODE_END
+
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_ipv6_source_guard_entry_index_t static_index;
+    vtss_appl_ipv6_source_guard_entry_data_t static_data;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    if (vtss_ifindex_from_port(port_type_id.isid, 
+        port_type_id.begin_iport, &static_index.ifindex) != VTSS_RC_OK) 
+    {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port_type_id.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+    static_index.ipv6_addr = ipv6_ucast;
+    static_index.vlan_id = vlan_id;
+    static_data.mac_addr = mac_ucast;
+    if (vtss_appl_ipv6_source_guard_static_entry_del(&static_index) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to delete static entry");
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = ipv6 verify source translate
+
+DOC_CMD_DESC    = Translate dynamic entries in binding table to static entries. 
+
+FUNC_NAME = ipv6_source_guard_translate_dynamic_entries
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##HELP_IP
+HELP = verify command
+HELP = source command
+HELP = translate command
+
+VARIABLE_BEGIN
+    vtss_appl_ipv6_source_guard_control_translate_t action;
+VARIABLE_END
+
+CODE_BEGIN
+    action.translate = true;
+    if (vtss_appl_ipv6_source_guard_control_translate_set(&action) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to translate dynamic entries.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = ipv6 verify source limit <0-2>
+
+DOC_CMD_DESC    = Set maximum number of dynamic clients on current port interface. 
+DOC_CMD_DEFAULT = Default is unlimited number of clients.
+
+FUNC_NAME = ipv6_source_guard_set_port_dynamic_limit
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = max_dynamic_clients
+
+HELP = ##HELP_IP
+HELP = verify command
+HELP = verify source
+HELP = limit command
+HELP = the number of max dynamic clients (0, 1 or 2)
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+     ipv6_source_guard_icli_port_conf_set(session_id, port_list, false, max_dynamic_clients);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = no ipv6 verify source limit
+
+DOC_CMD_DESC    = Set number of dynamic clients on current port to unlimited. 
+DOC_CMD_DEFAULT = Default is unlimited number of clients.
+
+FUNC_NAME = ipv6_source_guard_set_port_dynamic_unlimited
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = no command
+HELP = ##HELP_IP
+HELP = verify command
+HELP = verify source
+HELP = limit command
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ipv6_source_guard_icli_port_conf_set(session_id, port_list, false, IP_SOURCE_GUARD_DYNAMIC_UNLIMITED);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = show ipv6 verify source [interface <port_type_list>]
+
+DOC_CMD_DESC    = Show global and per port status of IPv6 source guard. 
+
+FUNC_NAME = show_ipv6_source_guard_status
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = interface_selected
+CMD_VAR = port_list
+
+HELP = ##HELP_SHOW
+HELP = ##HELP_IP
+HELP = verify command
+HELP = source command
+HELP = interface command
+HELP = Select a port list to view
+
+VARIABLE_BEGIN
+    int                                         cnt_idx;
+    u32                                         port_range;
+    vtss_ifindex_t                              ifindex, next, *prev;
+    vtss_ifindex_elm_t                          ife;
+    char                                        buf[80], *p;
+    vtss_appl_ipv6_source_guard_port_config_t   port_conf;
+    vtss_appl_ipv6_source_guard_global_config_t global_conf;
+    icli_switch_port_range_t                    switch_range;
+VARIABLE_END
+
+CODE_BEGIN
+    /* Show configuration of selected interfaces.*/
+    if (interface_selected) {
+        p = &buf[0];
+        p += sprintf(p, "\nPort                      ");
+        p += sprintf(p, "Port Mode    ");
+        p += sprintf(p, "Dynamic Entry Limit    ");
+        icli_parm_header(session_id, buf);
+        
+        for (port_range = 0; port_range < port_list->cnt; port_range++) {
+            switch_range = port_list->switch_range[port_range];
+
+            for (cnt_idx = 0; cnt_idx < switch_range.port_cnt; cnt_idx++) {
+                switch_range.begin_uport = port_list->switch_range[port_range].begin_uport + cnt_idx;
+                
+                ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(switch_range.usid, switch_range.begin_uport, 
+                                &ifindex), "%% Could not get ifindex.\n");
+                ICLI_RC_CHECK(vtss_appl_ipv6_source_guard_port_config_get(ifindex, &port_conf), 
+                                "%% Could not get port configuration.\n");
+                
+                ICLI_PRINTF("%-23s   ", icli_port_info_txt(switch_range.usid, switch_range.begin_uport, buf));
+                ICLI_PRINTF("%-8s     ", icli_bool_txt(port_conf.enabled));
+
+                if (port_conf.max_dynamic_entries == IP_SOURCE_GUARD_DYNAMIC_UNLIMITED) {
+                    ICLI_PRINTF("unlimited\n");
+                } else {
+                    ICLI_PRINTF("%u    \n", port_conf.max_dynamic_entries);
+                }  
+            }
+        }
+    /* Show global configuration and of all interfaces.*/  
+    } else {
+        ICLI_RC_CHECK(vtss_appl_ipv6_source_guard_global_config_get(&global_conf), 
+                        "%% Failed to get Ipv6 source guard configuration.\n");
+        ICLI_PRINTF("\nIPv6 Source Guard Mode : %s\n", icli_bool_txt(global_conf.enabled));
+
+        p = &buf[0];
+        p += sprintf(p, "\nPort                      ");
+        p += sprintf(p, "Port Mode    ");
+        p += sprintf(p, "Dynamic Entry Limit    ");
+        icli_parm_header(session_id, buf);
+
+        prev = NULL;
+        while(vtss_appl_ipv6_source_guard_port_conf_itr(prev, &next) == VTSS_RC_OK) {
+            ICLI_RC_CHECK(vtss_appl_ifindex_port_configurable(next, &ife), "%% Failed to resolve port ifindex.\n");
+            ICLI_RC_CHECK(vtss_appl_ipv6_source_guard_port_config_get(next, &port_conf), 
+                                "%% Could not get port configuration.\n");
+            
+            ICLI_PRINTF("%-23s   ", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), buf));
+            ICLI_PRINTF("%-8s     ", icli_bool_txt(port_conf.enabled));
+
+                if (port_conf.max_dynamic_entries == IP_SOURCE_GUARD_DYNAMIC_UNLIMITED) {
+                    ICLI_PRINTF("unlimited\n");
+                } else {
+                    ICLI_PRINTF("%u    \n", port_conf.max_dynamic_entries);
+                }  
+
+            prev = &next;
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND         = show ipv6 source binding [ dhcpv6-snooping | static ] [ interface <port_type_list> ]
+
+DOC_CMD_DESC    = Show entries, all, static or dynamic, in binding table per port. 
+
+FUNC_NAME = show_ipv6_source_guard_binding_table
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = dhcpv6_var
+CMD_VAR = static_var
+CMD_VAR = interface_var
+CMD_VAR = port_list
+
+HELP = ##HELP_SHOW
+HELP = ##HELP_IP
+HELP = source command
+HELP = binding command
+HELP = see dynamic entries learned from DHCPv6 shielding
+HELP = see static entries
+HELP = interface command
+HELP = Select a port list to view
+
+VARIABLE_BEGIN
+    icli_switch_port_range_t switch_range;
+    vtss_ifindex_t ifindex;
+    int cnt_idx;
+    u32 port_range;
+VARIABLE_END
+
+CODE_BEGIN
+
+    ipv6_source_guard_show_header(session_id);
+    
+    /* Show all entries for all ports. */
+    if (!dhcpv6_var && !static_var && !interface_var) {
+        ipv6_source_guard_show_all_static_entries(session_id);
+        ipv6_source_guard_show_all_dynamic_entries(session_id);
+    }
+
+    /* Show dynamic entries for selected ports.*/
+    else if (interface_var && dhcpv6_var) {
+
+        for (port_range = 0; port_range < port_list->cnt; port_range++) {
+            switch_range = port_list->switch_range[port_range];
+
+            for (cnt_idx = 0; cnt_idx < switch_range.port_cnt; cnt_idx++) {
+                switch_range.begin_uport = port_list->switch_range[port_range].begin_uport + cnt_idx;
+                
+                ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(switch_range.usid, switch_range.begin_uport, 
+                                &ifindex), "%% Could not get ifindex.\n");
+                
+                ipv6_source_guard_show_interface_dynamic_entries(session_id, ifindex);
+            }
+        }
+    }
+
+    /* Show dynamic entries for selected ports.*/
+    else if (interface_var && static_var) {
+        for (port_range = 0; port_range < port_list->cnt; port_range++) {
+            switch_range = port_list->switch_range[port_range];
+
+            for (cnt_idx = 0; cnt_idx < switch_range.port_cnt; cnt_idx++) {
+                switch_range.begin_uport = port_list->switch_range[port_range].begin_uport + cnt_idx;
+                
+                ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(switch_range.usid, switch_range.begin_uport, 
+                                &ifindex), "%% Could not get ifindex.\n");
+                
+                ipv6_source_guard_show_interface_static_entries(session_id, ifindex);
+            }
+        }
+    }
+
+    else if (interface_var) {
+        for (port_range = 0; port_range < port_list->cnt; port_range++) {
+            switch_range = port_list->switch_range[port_range];
+
+            for (cnt_idx = 0; cnt_idx < switch_range.port_cnt; cnt_idx++) {
+                switch_range.begin_uport = port_list->switch_range[port_range].begin_uport + cnt_idx;
+                
+                ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(switch_range.usid, switch_range.begin_uport, 
+                                &ifindex), "%% Could not get ifindex.\n");
+                
+                ipv6_source_guard_show_interface_static_entries(session_id, ifindex);
+                ipv6_source_guard_show_interface_dynamic_entries(session_id, ifindex);
+            }
+        }
+    }
+
+    else if (dhcpv6_var) {
+        ipv6_source_guard_show_all_dynamic_entries(session_id);
+    }
+
+    else if (static_var) {
+        ipv6_source_guard_show_all_static_entries(session_id);
+    }
+
+CODE_END
+
+CMD_END
+
+!==============================================================================

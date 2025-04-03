@@ -1,0 +1,206 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>RedBox NodesTable Overview</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="redbox_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_redbox_nt_overview.htm";
+var nodesTable, variables;
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(inst, err_msg, last)
+{
+    if (err_msg) {
+        alert("Instance " + inst + ": " + err_msg);
+    }
+
+    if (last) {
+        // Done with all of them. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_clear_button_click()
+/******************************************************************************/
+function on_clear_button_click(inst)
+{
+    var insts = [];
+
+    if (inst == 'all') {
+        variables.nt.forEach(function(key) {
+            insts.push([key.key, true]);
+        });
+    } else {
+        insts.push([inst, true]);
+    }
+
+    redbox_lib_json_submit("redbox.control.ntClear.set", insts, on_submit_done);
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // Numbers are colspan, rowspan
+    row = {fields: [
+              {type: "disp_hdr", params: ["Action",        1, 1]},
+              {type: "disp_hdr", params: ["Instance",      1, 1]},
+              {type: "disp_hdr", params: ["Mode",          1, 1, "64px"]},
+              {type: "disp_hdr", params: ["MAC Addresses", 1, 1, "122px"]},
+              {type: "disp_hdr", params: ["Wrong LAN",     1, 1]}]
+          };
+
+    table_rows.push(row);
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(inst, nt, conf, statu)
+{
+    var row;
+
+    if (statu && statu.OperState == "active") {
+        redbox_lib_disable_button_add("ClearButton_" + inst);
+        row = {fields: [
+                  {type: "button", params: ["Clear", "c", "ClearButton_" + inst, function() {on_clear_button_click(inst);}]},
+                  {type: "link",   params: ["cr", "redbox_nt_details.htm?inst=" + inst, inst]},
+                  {type: "text",   params: [conf ? redbox_lib_mode_map[conf.Mode] : "", "cl"]},
+                  {type: "digit",  params: [nt.MacCnt]},
+                  {type: "text",   params: [conf.Mode == "prpSan" ? nt.WrongLan ? "Yes" : "No" : "-"]}]
+              };
+    } else {
+        redbox_lib_disable_button_del("ClearButton_" + inst);
+        row = {fields: [
+                  {type: "digit",     params: [""]},
+                  {type: "digit",     params: [inst]},
+                  {type: "text",      params: [conf ? redbox_lib_mode_map[conf.Mode] : "", "cl"]},
+                  {type: "empty_row", params: [2, "Inactive"]}]
+              };
+    }
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows, inst_conf, inst_statu;
+
+    table_rows = new Array();
+    add_header(table_rows);
+
+    // Add data rows
+    Object.each(variables.nt, function(record) {
+        inst_conf  = redbox_lib_inst_get(variables.conf,  record.key);
+        inst_statu = redbox_lib_inst_get(variables.statu, record.key);
+        table_rows.push(add_row(record.key, record.val, inst_conf ? inst_conf.val : undefined, inst_statu ? inst_statu.val : undefined));
+    });
+
+    // Empty row
+    if (!variables.nt.length) {
+        table_rows.push({fields: [{type: "empty_row", params: [5, "No RedBox instances"]}]});
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Add table rows
+    nodesTable.addRows(add_rows());
+
+    // Update this dynamic table
+    nodesTable.update();
+
+    // Refresh timer
+    redbox_lib_autorefresh_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}, nt: {}};
+    redbox_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    nodesTable = new DynamicTable("nodesTableContent", "display");
+
+    redbox_lib_disable_button_add("autorefresh");
+    redbox_lib_disable_button_add("refresh_button");
+    redbox_lib_disable_button_add("clear_all_button");
+    requestUpdate();
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>RedBox NodesTable</h1>
+
+<div class="refreshbar">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh"   onclick="redbox_lib_on_autorefresh_click();">
+  <input type="button" id="refresh_button"   value="Refresh"   onClick="requestUpdate();              this.blur();">
+  <input type="button" id="clear_all_button" value="Clear All" onClick="on_clear_button_click('all'); this.blur();">
+  <img id="redbox_update" alt="" src="images/updating.gif">
+</div>
+
+<div id="nodesTableContent"/>
+
+</body>
+</html>
+

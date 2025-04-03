@@ -1,0 +1,976 @@
+commit 87b2e90887dde7e6058325116931ff4ec9ac2029
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Tue Nov 3 13:56:51 2020 +0100
+
+    1120-rip-show-status-json.patch
+
+diff --git a/babeld/babel_interface.c b/babeld/babel_interface.c
+index b7c01e7..c6ea1de 100644
+--- a/babeld/babel_interface.c
++++ b/babeld/babel_interface.c
+@@ -1251,7 +1251,7 @@ DEFUN (show_babel_parameters,
+     vty_out (vty, "    -- Babel running configuration --\n");
+     show_babel_main_configuration(vty);
+     vty_out (vty, "    -- distribution lists --\n");
+-    config_show_distribute(vty);
++    config_show_distribute(vty, NULL, 0);
+ 
+     return CMD_SUCCESS;
+ }
+diff --git a/lib/distribute.c b/lib/distribute.c
+index 25fcd92..c2c5758 100644
+--- a/lib/distribute.c
++++ b/lib/distribute.c
+@@ -27,6 +27,8 @@
+ #include "distribute.h"
+ #include "memory.h"
+ 
++#include <lib/json.h>
++
+ DEFINE_MTYPE_STATIC(LIB, DISTRIBUTE, "Distribute list")
+ DEFINE_MTYPE_STATIC(LIB, DISTRIBUTE_IFNAME, "Dist-list ifname")
+ DEFINE_MTYPE_STATIC(LIB, DISTRIBUTE_NAME, "Dist-list name")
+@@ -350,113 +352,199 @@ DEFUN (no_distribute_list,
+ }
+ 
+ static int distribute_print(struct vty *vty, char *tab[], int is_prefix,
+-			    enum distribute_type type, int has_print)
++			    enum distribute_type type, int has_print,
++			    const char *json_obj_name, json_object *json, uint8_t use_json)
+ {
+ 	if (tab[type]) {
+-		vty_out(vty, "%s %s%s", has_print ? "," : "",
+-			is_prefix ? "(prefix-list) " : "", tab[type]);
++		if (use_json) {
++			char str_buf[32];
++
++			snprintf(str_buf, sizeof(str_buf) - 1, "%sPrefixList",
++				 json_obj_name ? json_obj_name : "");
++			if (is_prefix) {
++				json_object_boolean_true_add(json, str_buf);
++			} else {
++				json_object_boolean_false_add(json, str_buf);
++			}
++
++			snprintf(str_buf, sizeof(str_buf) - 1, "%sAccessListName",
++			         json_obj_name ? json_obj_name : "");
++			json_object_string_add(json, str_buf, tab[type]);
++		} else{
++			vty_out(vty, "%s %s%s", has_print ? "," : "",
++				is_prefix ? "(prefix-list) " : "", tab[type]);
++		}
+ 		return 1;
+ 	}
+ 	return has_print;
+ }
+ 
+-int config_show_distribute(struct vty *vty)
++int config_show_distribute(struct vty *vty, json_object *json, uint8_t use_json)
+ {
+ 	unsigned int i;
+ 	int has_print = 0;
+ 	struct hash_backet *mp;
+ 	struct distribute *dist;
++	json_object *json_array_dist_in = NULL, *json_dist_in = NULL;
++	json_object *json_array_dist_out = NULL, *json_dist_out = NULL;
+ 
+ 	/* Output filter configuration. */
+ 	dist = distribute_lookup(NULL);
+-	vty_out(vty, "  Outgoing update filter list for all interface is");
++	if (!use_json) {
++		vty_out(vty, "  Outgoing update filter list for all interface is");
++	}
+ 	has_print = 0;
+ 	if (dist) {
+ 		has_print = distribute_print(vty, dist->list, 0,
+-					     DISTRIBUTE_V4_OUT, has_print);
++					     DISTRIBUTE_V4_OUT, has_print,
++					     "v4OutDist", json, use_json);
+ 		has_print = distribute_print(vty, dist->prefix, 1,
+-					     DISTRIBUTE_V4_OUT, has_print);
++					     DISTRIBUTE_V4_OUT, has_print,
++					     "v4OutDist", json, use_json);
+ 		has_print = distribute_print(vty, dist->list, 0,
+-					     DISTRIBUTE_V6_OUT, has_print);
++					     DISTRIBUTE_V6_OUT, has_print,
++					     "v6OutDist", json, use_json);
+ 		has_print = distribute_print(vty, dist->prefix, 1,
+-					     DISTRIBUTE_V6_OUT, has_print);
++					     DISTRIBUTE_V6_OUT, has_print,
++					     "v6OutDist", json, use_json);
+ 	}
+-	if (has_print)
+-		vty_out(vty, "\n");
+-	else
+-		vty_out(vty, " not set\n");
+ 
+-	for (i = 0; i < disthash->size; i++)
++	if (!use_json) {
++		if (has_print)
++			vty_out(vty, "\n");
++		else
++			vty_out(vty, " not set\n");
++	}
++
++	if (use_json) {
++		json_array_dist_out = json_object_new_array();
++	}
++
++	for (i = 0; i < disthash->size; i++) {
+ 		for (mp = disthash->index[i]; mp; mp = mp->next) {
+ 			dist = mp->data;
+ 			if (dist->ifname) {
+-				vty_out(vty, "    %s filtered by",
+-					dist->ifname);
++				if (use_json) {
++					json_dist_out = json_object_new_object();
++					json_object_int_add(json_dist_out, "hashSize", i);
++					json_object_string_add(json_dist_out, "ifName", dist->ifname);
++				} else {
++					vty_out(vty, "    %s filtered by",
++						dist->ifname);
++				}
++
+ 				has_print = 0;
+ 				has_print = distribute_print(vty, dist->list, 0,
+ 							     DISTRIBUTE_V4_OUT,
+-							     has_print);
++							     has_print,
++							     "v4",
++							     json_dist_out, use_json);
+ 				has_print = distribute_print(
+ 					vty, dist->prefix, 1, DISTRIBUTE_V4_OUT,
+-					has_print);
++					has_print, "v4", json_dist_out, use_json);
+ 				has_print = distribute_print(vty, dist->list, 0,
+ 							     DISTRIBUTE_V6_OUT,
+-							     has_print);
++							     has_print,
++							     "v6",
++							     json_dist_out, use_json);
+ 				has_print = distribute_print(
+ 					vty, dist->prefix, 1, DISTRIBUTE_V6_OUT,
+-					has_print);
+-				if (has_print)
+-					vty_out(vty, "\n");
+-				else
+-					vty_out(vty, " nothing\n");
++					has_print, "v4", json_dist_out, use_json);
++
++				if (use_json) {
++					json_object_array_add(json_array_dist_out, json_dist_out);
++				} else {
++					if (has_print)
++						vty_out(vty, "\n");
++					else
++						vty_out(vty, " nothing\n");
++				}
+ 			}
+ 		}
++	}
+ 
++	if (use_json) {
++		json_object_object_add(json, "outDistributeList", json_array_dist_out);
++	}
+ 
+ 	/* Input filter configuration. */
+ 	dist = distribute_lookup(NULL);
+-	vty_out(vty, "  Incoming update filter list for all interface is");
++	if (!use_json) {
++		vty_out(vty, "  Incoming update filter list for all interface is");
++	}
+ 	has_print = 0;
+ 	if (dist) {
+ 		has_print = distribute_print(vty, dist->list, 0,
+-					     DISTRIBUTE_V4_IN, has_print);
++					     DISTRIBUTE_V4_IN, has_print,
++					      "v4InDist", json, use_json);
+ 		has_print = distribute_print(vty, dist->prefix, 1,
+-					     DISTRIBUTE_V4_IN, has_print);
++					     DISTRIBUTE_V4_IN, has_print,
++					      "v4InDist", json, use_json);
+ 		has_print = distribute_print(vty, dist->list, 0,
+-					     DISTRIBUTE_V6_IN, has_print);
++					     DISTRIBUTE_V6_IN, has_print,
++					      "v6InDist", json, use_json);
+ 		has_print = distribute_print(vty, dist->prefix, 1,
+-					     DISTRIBUTE_V6_IN, has_print);
++					     DISTRIBUTE_V6_IN, has_print,
++					      "v6InDist", json, use_json);
+ 	}
+-	if (has_print)
+-		vty_out(vty, "\n");
+-	else
+-		vty_out(vty, " not set\n");
+ 
+-	for (i = 0; i < disthash->size; i++)
++	if (!use_json) {
++		if (has_print)
++			vty_out(vty, "\n");
++		else
++			vty_out(vty, " not set\n");
++	}
++
++	if (use_json) {
++		json_array_dist_in = json_object_new_array();
++	}
++
++	for (i = 0; i < disthash->size; i++) {
+ 		for (mp = disthash->index[i]; mp; mp = mp->next) {
+ 			dist = mp->data;
+ 			if (dist->ifname) {
+-				vty_out(vty, "    %s filtered by",
+-					dist->ifname);
++				if (use_json) {
++					json_dist_in = json_object_new_object();
++					json_object_int_add(json_dist_in, "hashSize", i);
++					json_object_string_add(json_dist_in, "ifName", dist->ifname);
++				} else {
++					vty_out(vty, "    %s filtered by",
++						dist->ifname);
++				}
+ 				has_print = 0;
+ 				has_print = distribute_print(vty, dist->list, 0,
+ 							     DISTRIBUTE_V4_IN,
+-							     has_print);
++							     has_print,
++							     "v4",
++							     json_dist_in, use_json);
+ 				has_print = distribute_print(
+ 					vty, dist->prefix, 1, DISTRIBUTE_V4_IN,
+-					has_print);
++					has_print, "v4", json_dist_in, use_json);
+ 				has_print = distribute_print(vty, dist->list, 0,
+ 							     DISTRIBUTE_V6_IN,
+-							     has_print);
++							     has_print,
++							     "v6",
++							     json_dist_in, use_json);
+ 				has_print = distribute_print(
+ 					vty, dist->prefix, 1, DISTRIBUTE_V6_IN,
+-					has_print);
+-				if (has_print)
+-					vty_out(vty, "\n");
+-				else
+-					vty_out(vty, " nothing\n");
++					has_print, "v6", json_dist_in, use_json);
++
++				if (use_json) {
++					json_object_array_add(json_array_dist_in, json_dist_in);
++				} else {
++					if (has_print)
++						vty_out(vty, "\n");
++					else
++						vty_out(vty, " nothing\n");
++				}
+ 			}
+ 		}
++	}
++
++	if (use_json) {
++		json_object_object_add(json, "inDistributeList", json_array_dist_in);
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/lib/distribute.h b/lib/distribute.h
+index 35c5e0d..b6abba1 100644
+--- a/lib/distribute.h
++++ b/lib/distribute.h
+@@ -25,6 +25,8 @@
+ #include "if.h"
+ #include "filter.h"
+ 
++#include <lib/json.h>
++
+ /* Disctirubte list types. */
+ enum distribute_type {
+ 	DISTRIBUTE_V4_IN,
+@@ -52,7 +54,7 @@ extern void distribute_list_add_hook(void (*)(struct distribute *));
+ extern void distribute_list_delete_hook(void (*)(struct distribute *));
+ extern struct distribute *distribute_lookup(const char *);
+ extern int config_write_distribute(struct vty *);
+-extern int config_show_distribute(struct vty *);
++extern int config_show_distribute(struct vty *, json_object *, uint8_t);
+ 
+ extern enum filter_type distribute_apply_in(struct interface *,
+ 					    struct prefix *);
+diff --git a/ripd/rip_interface.c b/ripd/rip_interface.c
+index 364e23c..6cba821 100644
+--- a/ripd/rip_interface.c
++++ b/ripd/rip_interface.c
+@@ -42,6 +42,8 @@
+ #include "ripd/rip_debug.h"
+ #include "ripd/rip_interface.h"
+ 
++#include <lib/json.h>
++
+ DEFINE_HOOK(rip_ifaddr_add, (struct connected * ifc), (ifc))
+ DEFINE_HOOK(rip_ifaddr_del, (struct connected * ifc), (ifc))
+ 
+@@ -1814,33 +1816,85 @@ static int rip_interface_config_write(struct vty *vty)
+ 	return 0;
+ }
+ 
+-int config_write_rip_network(struct vty *vty, int config_mode)
++int config_write_rip_network(struct vty *vty, int config_mode, json_object *json, uint8_t use_json)
+ {
+ 	unsigned int i;
+ 	char *ifname;
+ 	struct route_node *node;
++	json_object *json_array_addr = NULL, *json_addr = NULL;
++	json_object *json_array_intf = NULL, *json_intf = NULL;
++	json_object *json_array_neighbor = NULL, *json_neighbor = NULL;
+ 
+ 	/* Network type RIP enable interface statement. */
++	if (use_json) {
++		json_array_addr = json_object_new_array();
++	}
++
+ 	for (node = route_top(rip_enable_network); node;
+-	     node = route_next(node))
+-		if (node->info)
+-			vty_out(vty, "%s%s/%d\n",
+-				config_mode ? " network " : "    ",
+-				inet_ntoa(node->p.u.prefix4),
+-				node->p.prefixlen);
++	     node = route_next(node)) {
++		if (node->info) {
++			if (use_json) {
++				json_addr = json_object_new_object();
++				json_object_string_add(json_addr, "address", inet_ntoa(node->p.u.prefix4));
++				json_object_int_add(json_addr, "addressPrefixlen", node->p.prefixlen);
++				json_object_array_add(json_array_addr, json_addr);
++			} else {
++				vty_out(vty, "%s%s/%d\n",
++					config_mode ? " network " : "    ",
++					inet_ntoa(node->p.u.prefix4),
++					node->p.prefixlen);
++			}
++		}
++	}
++
++	if (use_json) {
++		json_object_object_add(json, "networkAddresses", json_array_addr);
++	}
+ 
+ 	/* Interface name RIP enable statement. */
+-	for (i = 0; i < vector_active(rip_enable_interface); i++)
+-		if ((ifname = vector_slot(rip_enable_interface, i)) != NULL)
+-			vty_out(vty, "%s%s\n",
+-				config_mode ? " network " : "    ", ifname);
++	if (use_json) {
++		json_array_intf = json_object_new_array();
++	}
++
++	for (i = 0; i < vector_active(rip_enable_interface); i++) {
++		if ((ifname = vector_slot(rip_enable_interface, i)) != NULL) {
++			if (use_json) {
++				json_intf = json_object_new_object();
++				json_object_string_add(json_intf, "ifName", ifname);
++				json_object_array_add(json_array_intf, json_intf);
++			} else {
++				vty_out(vty, "%s%s\n",
++					config_mode ? " network " : "    ", ifname);
++			}
++		}
++	}
++
++	if (use_json) {
++		json_object_object_add(json, "networkInterfaces", json_array_intf);
++	}
+ 
+ 	/* RIP neighbors listing. */
+-	for (node = route_top(rip->neighbor); node; node = route_next(node))
+-		if (node->info)
+-			vty_out(vty, "%s%s\n",
+-				config_mode ? " neighbor " : "    ",
+-				inet_ntoa(node->p.u.prefix4));
++	if (use_json) {
++		json_array_neighbor = json_object_new_array();
++	}
++
++	for (node = route_top(rip->neighbor); node; node = route_next(node)) {
++		if (node->info) {
++			if (use_json) {
++				json_neighbor = json_object_new_object();
++				json_object_string_add(json_neighbor, "address", inet_ntoa(node->p.u.prefix4));
++				json_object_array_add(json_array_neighbor, json_neighbor);
++			} else {
++				vty_out(vty, "%s%s\n",
++					config_mode ? " neighbor " : "    ",
++					inet_ntoa(node->p.u.prefix4));
++			}
++		}
++	}
++
++	if (use_json) {
++		json_object_object_add(json, "networkNeighbors", json_array_neighbor);
++	}
+ 
+ 	/* RIP passive interface listing. */
+ 	if (config_mode) {
+diff --git a/ripd/rip_peer.c b/ripd/rip_peer.c
+index ae62835..ccd3273 100644
+--- a/ripd/rip_peer.c
++++ b/ripd/rip_peer.c
+@@ -29,6 +29,8 @@
+ 
+ #include "ripd/ripd.h"
+ 
++#include <lib/json.h>
++
+ /* Linked list of RIP peer. */
+ struct list *peer_list;
+ 
+@@ -155,18 +157,39 @@ static char *rip_peer_uptime(struct rip_peer *peer, char *buf, size_t len)
+ 	return buf;
+ }
+ 
+-void rip_peer_display(struct vty *vty)
++void rip_peer_display(struct vty *vty, json_object *json, uint8_t use_json)
+ {
+ 	struct rip_peer *peer;
+ 	struct listnode *node, *nnode;
+ #define RIP_UPTIME_LEN 25
+ 	char timebuf[RIP_UPTIME_LEN];
++	json_object *json_array = NULL;
++
++	if (use_json) {
++		json_array = json_object_new_array();
++	}
+ 
+ 	for (ALL_LIST_ELEMENTS(peer_list, node, nnode, peer)) {
+-		vty_out(vty, "    %-16s %9d %9d %9d   %s\n",
+-			inet_ntoa(peer->addr), peer->recv_badpackets,
+-			peer->recv_badroutes, ZEBRA_RIP_DISTANCE_DEFAULT,
+-			rip_peer_uptime(peer, timebuf, RIP_UPTIME_LEN));
++		if (use_json) {
++			json_object *json_peer = json_object_new_object();
++			json_object *json_peer_entry = json_object_new_object();
++			json_object_int_add(json_peer, "recvBadPackets", peer->recv_badpackets);
++			json_object_int_add(json_peer, "recvBadRoutes", peer->recv_badroutes);
++			json_object_string_add(json_peer, "lastUpdate", rip_peer_uptime(peer, timebuf, RIP_UPTIME_LEN));
++			json_object_int_add(json_peer, "domain", peer->domain);
++			json_object_int_add(json_peer, "version", peer->version);
++			json_object_object_add(json_peer_entry, inet_ntoa(peer->addr), json_peer);
++			json_object_array_add(json_array, json_peer_entry);
++		} else {
++			vty_out(vty, "    %-16s %9d %9d %9d   %s\n",
++				inet_ntoa(peer->addr), peer->recv_badpackets,
++				peer->recv_badroutes, ZEBRA_RIP_DISTANCE_DEFAULT,
++				rip_peer_uptime(peer, timebuf, RIP_UPTIME_LEN));
++		}
++	}
++
++	if (use_json) {
++		json_object_object_add(json, "peers", json_array);
+ 	}
+ }
+ 
+diff --git a/ripd/rip_zebra.c b/ripd/rip_zebra.c
+index 29b2f88..d2c8fa9 100644
+--- a/ripd/rip_zebra.c
++++ b/ripd/rip_zebra.c
+@@ -33,6 +33,8 @@
+ #include "ripd/rip_debug.h"
+ #include "ripd/rip_interface.h"
+ 
++#include <lib/json.h>
++
+ /* All information about zebra. */
+ struct zclient *zclient = NULL;
+ 
+@@ -542,9 +544,14 @@ DEFUN (no_rip_default_information_originate,
+ 	return CMD_SUCCESS;
+ }
+ 
+-int config_write_rip_redistribute(struct vty *vty, int config_mode)
++int config_write_rip_redistribute(struct vty *vty, int config_mode, json_object *json, uint8_t use_json)
+ {
+ 	int i;
++	json_object *json_array = NULL, *json_redist = NULL;
++
++	if (!config_mode && use_json) {
++		json_array = json_object_new_array();
++	}
+ 
+ 	for (i = 0; i < ZEBRA_ROUTE_MAX; i++) {
+ 		if (i == zclient->redist_default
+@@ -552,8 +559,16 @@ int config_write_rip_redistribute(struct vty *vty, int config_mode)
+ 					 VRF_DEFAULT))
+ 			continue;
+ 
++		/* This API is called when 'show ip rip status' and 'show running-config'
++		 * The JSON output is needed only when the show status (config_mode = 0) */
+ 		if (!config_mode) {
+-			vty_out(vty, " %s", zebra_route_string(i));
++			if (use_json) {
++				json_redist = json_object_new_object();
++				json_object_string_add(json_redist, "protocolType", zebra_route_string(i));
++				json_object_array_add(json_array, json_redist);
++			} else {
++				vty_out(vty, " %s", zebra_route_string(i));
++			}
+ 			continue;
+ 		}
+ 
+@@ -579,6 +594,10 @@ int config_write_rip_redistribute(struct vty *vty, int config_mode)
+ 		}
+ 	}
+ 
++	if (!config_mode && use_json) {
++		json_object_object_add(json, "redistributes", json_array);
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/ripd/ripd.c b/ripd/ripd.c
+index dee27e2..f95a3a5 100644
+--- a/ripd/ripd.c
++++ b/ripd/ripd.c
+@@ -46,6 +46,8 @@
+ #include "ripd/rip_debug.h"
+ #include "ripd/rip_errors.h"
+ 
++#include <lib/json.h>
++
+ DEFINE_QOBJ_TYPE(rip)
+ 
+ /* UDP receive buffer size */
+@@ -3206,30 +3208,50 @@ uint8_t rip_distance_apply(struct rip_info *rinfo)
+ 	return 0;
+ }
+ 
+-static void rip_distance_show(struct vty *vty)
++static void rip_distance_show(struct vty *vty, json_object *json, uint8_t use_json)
+ {
+ 	struct route_node *rn;
+ 	struct rip_distance *rdistance;
+ 	int header = 1;
+ 	char buf[BUFSIZ];
++	json_object *json_array = NULL;
+ 
+-	vty_out(vty, "  Distance: (default is %d)\n",
+-		rip->distance ? rip->distance : ZEBRA_RIP_DISTANCE_DEFAULT);
++	if (use_json) {
++		json_array = json_object_new_array();
++	}
+ 
+-	for (rn = route_top(rip_distance_table); rn; rn = route_next(rn))
++	for (rn = route_top(rip_distance_table); rn; rn = route_next(rn)) {
+ 		if ((rdistance = rn->info) != NULL) {
+-			if (header) {
++			if (!use_json && header) {
+ 				vty_out(vty,
+ 					"    Address           Distance  List\n");
+ 				header = 0;
+ 			}
+-			sprintf(buf, "%s/%d", inet_ntoa(rn->p.u.prefix4),
+-				rn->p.prefixlen);
+-			vty_out(vty, "    %-20s  %4d  %s\n", buf,
+-				rdistance->distance,
+-				rdistance->access_list ? rdistance->access_list
+-						       : "");
++
++			if (use_json) {
++				json_object *json_distance = json_object_new_object();
++				json_object *json_rn = json_object_new_object();
++				char ipaddr_str_buf[BUFSIZ];
++				json_object_int_add(json_rn, "distance", rdistance->distance);
++				json_object_string_add(json_rn, "accessList", rdistance->access_list ? rdistance->access_list : "");
++				sprintf(ipaddr_str_buf, "%s/%d", inet_ntoa(rn->p.u.prefix4),
++					rn->p.prefixlen);
++				json_object_object_add(json_distance, ipaddr_str_buf, json_rn);
++				json_object_array_add(json_array, json_distance);
++			} else {
++				sprintf(buf, "%s/%d", inet_ntoa(rn->p.u.prefix4),
++					rn->p.prefixlen);
++				vty_out(vty, "    %-20s  %4d  %s\n", buf,
++					rdistance->distance,
++					rdistance->access_list ? rdistance->access_list
++							: "");
++			}
+ 		}
++	}
++
++	if (use_json) {
++		json_object_object_add(json, "distances", json_array);
++	}
+ }
+ 
+ DEFUN (rip_distance,
+@@ -3531,11 +3553,20 @@ DEFUN (show_ip_rip,
+ /* Vincent: formerly, it was show_ip_protocols_rip: "show ip protocols" */
+ DEFUN (show_ip_rip_status,
+        show_ip_rip_status_cmd,
+-       "show ip rip status",
++       "show ip rip status [{global|distribute|redistribute|interface|network|passive|peer|distance}] [json]",
+        SHOW_STR
+        IP_STR
+        "Show RIP routes\n"
+-       "IP routing protocol process parameters and statistics\n")
++       "IP routing protocol process parameters and statistics\n"
++       "Show RIP global information only\n"
++       "Show RIP distribute list information only\n"
++       "Show RIP redistribute list information only\n"
++       "Show RIP interface information only\n"
++       "Show RIP network information only\n"
++       "Show RIP passive interface information only\n"
++       "Show RIP peer information only\n"
++       "Show RIP distance information only\n"
++       JSON_STR)
+ {
+ 	struct vrf *vrf = vrf_lookup_by_id(VRF_DEFAULT);
+ 	struct interface *ifp;
+@@ -3543,95 +3574,232 @@ DEFUN (show_ip_rip_status,
+ 	extern const struct message ri_version_msg[];
+ 	const char *send_version;
+ 	const char *receive_version;
++	uint8_t uj = use_json(argc, argv);
++	json_object *json = NULL;
++	json_object *json_array_intf = NULL, *json_intf = NULL, *json_intf_entry = NULL;
++	int idx = 4;
++	int show_global = 0, show_dist_list = 0, show_redistribute = 0,
++	    show_interface = 0,	show_network = 0,
++	    show_passive = 0, show_peer = 0, show_distance = 0;
+ 
+ 	if (!rip)
+ 		return CMD_SUCCESS;
+ 
+-	vty_out(vty, "Routing Protocol is \"rip\"\n");
+-	vty_out(vty, "  Sending updates every %ld seconds with +/-50%%,",
+-		rip->update_time);
+-	vty_out(vty, " next due in %lu seconds\n",
+-		thread_timer_remain_second(rip->t_update));
+-	vty_out(vty, "  Timeout after %ld seconds,", rip->timeout_time);
+-	vty_out(vty, " garbage collect after %ld seconds\n", rip->garbage_time);
++	/* Check if the optional command is typed */
++	if (argv_find(argv, argc, "global", &idx)) {
++		show_global = 1;
++	} else if (argv_find(argv, argc, "distribute", &idx)) {
++		show_dist_list = 1;
++	} else if (argv_find(argv, argc, "redistribute", &idx)) {
++		show_redistribute = 1;
++	} else if (argv_find(argv, argc, "interface", &idx)) {
++		show_interface = 1;
++	} else if (argv_find(argv, argc, "network", &idx)) {
++		show_network = 1;
++	} else if (argv_find(argv, argc, "passive", &idx)) {
++		show_passive = 1;
++	} else if (argv_find(argv, argc, "peer", &idx)) {
++		show_peer = 1;
++	} else if (argv_find(argv, argc, "distance", &idx)) {
++		show_distance = 1;
++	} else {
++		show_global = show_dist_list = show_redistribute
++		= show_interface = show_network = show_passive = show_peer
++		= show_distance = 1;
++	}
++
++	if (uj) {
++		json = json_object_new_object();
++	}
++
++	if (show_global) {
++		if (uj) {
++			json_object_string_add(json, "routingProtocol", "rip");
++			json_object_int_add(json, "updateTime", rip->update_time);
++			json_object_int_add(json, "updateRemainTime", thread_timer_remain_second(rip->t_update));
++			json_object_int_add(json, "timeoutTime", rip->timeout_time);
++			json_object_int_add(json, "garbageTime", rip->garbage_time);
++			json_object_int_add(json, "globalRouteChanges", rip_global_route_changes);
++			json_object_int_add(json, "globalQueries", rip_global_queries);
++		} else {
++			vty_out(vty, "Routing Protocol is \"rip\"\n");
++			vty_out(vty, "  Sending updates every %ld seconds with +/-50%%,",
++				rip->update_time);
++			vty_out(vty, " next due in %lu seconds\n",
++				thread_timer_remain_second(rip->t_update));
++			vty_out(vty, "  Timeout after %ld seconds,", rip->timeout_time);
++			vty_out(vty, " garbage collect after %ld seconds\n", rip->garbage_time);
++		}
++	}
+ 
+ 	/* Filtering status show. */
+-	config_show_distribute(vty);
++	if (show_dist_list) {
++		config_show_distribute(vty, json, uj);
++	}
+ 
+ 	/* Default metric information. */
+-	vty_out(vty, "  Default redistribution metric is %d\n",
+-		rip->default_metric);
++	if (show_global) {
++		if (uj) {
++			json_object_int_add(json, "defaultMetric", rip->default_metric);
++		} else {
++			vty_out(vty, "  Default redistribution metric is %d\n",
++				rip->default_metric);
++		}
++	}
+ 
+ 	/* Redistribute information. */
+-	vty_out(vty, "  Redistributing:");
+-	config_write_rip_redistribute(vty, 0);
+-	vty_out(vty, "\n");
+-
+-	vty_out(vty, "  Default version control: send version %s,",
+-		lookup_msg(ri_version_msg, rip->version_send, NULL));
+-	if (rip->version_recv == RI_RIP_VERSION_1_AND_2)
+-		vty_out(vty, " receive any version \n");
+-	else
+-		vty_out(vty, " receive version %s \n",
+-			lookup_msg(ri_version_msg, rip->version_recv, NULL));
++	if (show_redistribute) {
++		if (!uj) {
++			vty_out(vty, "  Redistributing:");
++		}
++		config_write_rip_redistribute(vty, 0, json, uj);
++		if (!uj) {
++			vty_out(vty, "\n");
++		}
++	}
+ 
+-	vty_out(vty, "    Interface        Send  Recv   Key-chain\n");
++	if (show_global) {
++		if (uj) {
++			json_object_int_add(json, "versionSend", rip->version_send);
++			json_object_int_add(json, "versionRecv", rip->version_recv);
++		} else {
++			vty_out(vty, "  Default version control: send version %s,",
++				lookup_msg(ri_version_msg, rip->version_send, NULL));
++			if (rip->version_recv == RI_RIP_VERSION_1_AND_2)
++				vty_out(vty, " receive any version \n");
++			else
++				vty_out(vty, " receive version %s \n",
++					lookup_msg(ri_version_msg, rip->version_recv, NULL));
++		}
++	}
+ 
+-	FOR_ALL_INTERFACES (vrf, ifp) {
+-		ri = ifp->info;
++	if (show_interface) {
++		if (uj) {
++			json_array_intf = json_object_new_array();
++		} else {
++			vty_out(vty, "    Interface        Send  Recv   Key-chain\n");
++		}
+ 
+-		if (!ri->running)
+-			continue;
++		FOR_ALL_INTERFACES (vrf, ifp) {
++			ri = ifp->info;
+ 
+-		if (ri->enable_network || ri->enable_interface) {
+-			if (ri->ri_send == RI_RIP_UNSPEC)
+-				send_version =
+-					lookup_msg(ri_version_msg,
+-						   rip->version_send, NULL);
+-			else
+-				send_version = lookup_msg(ri_version_msg,
+-							  ri->ri_send, NULL);
++			if (!ri->running)
++				continue;
+ 
+-			if (ri->ri_receive == RI_RIP_UNSPEC)
+-				receive_version =
+-					lookup_msg(ri_version_msg,
+-						   rip->version_recv, NULL);
+-			else
+-				receive_version = lookup_msg(
+-					ri_version_msg, ri->ri_receive, NULL);
++			if (ri->enable_network || ri->enable_interface) {
++				if (ri->ri_send == RI_RIP_UNSPEC)
++					send_version =
++						lookup_msg(ri_version_msg,
++							   rip->version_send, NULL);
++				else
++					send_version = lookup_msg(ri_version_msg,
++								  ri->ri_send, NULL);
++
++				if (ri->ri_receive == RI_RIP_UNSPEC)
++					receive_version =
++						lookup_msg(ri_version_msg,
++							   rip->version_recv, NULL);
++				else
++					receive_version = lookup_msg(
++						ri_version_msg, ri->ri_receive, NULL);
++
++				if (uj) {
++					json_intf = json_object_new_object();
++					json_intf_entry = json_object_new_object();
++					json_object_string_add(json_intf, "sendVersion", send_version);
++					json_object_string_add(json_intf, "receiveVersion", receive_version);
++					json_object_string_add(json_intf, "keychain", ri->key_chain ? ri->key_chain : "");
++					json_object_int_add(json_intf, "ifStatRcvBadPackets", ri->recv_badpackets);
++					json_object_int_add(json_intf, "ifStatRcvBadRoutes", ri->recv_badroutes);
++					json_object_int_add(json_intf, "ifStatSentUpdates", ri->sent_updates);
++					json_object_int_add(json_intf, "passive", ri->passive);
++					json_object_int_add(json_intf, "authType", ri->auth_type);
++					json_object_object_add(json_intf_entry, ifp->name, json_intf);
++					json_object_array_add(json_array_intf, json_intf_entry);
++				} else {
++					vty_out(vty, "    %-17s%-3s   %-3s    %s\n", ifp->name,
++						send_version, receive_version,
++						ri->key_chain ? ri->key_chain : "");
++				}
++			}
++		}
+ 
+-			vty_out(vty, "    %-17s%-3s   %-3s    %s\n", ifp->name,
+-				send_version, receive_version,
+-				ri->key_chain ? ri->key_chain : "");
++		if (uj) {
++			json_object_object_add(json, "activeInterfaces", json_array_intf);
+ 		}
+ 	}
+ 
+-	vty_out(vty, "  Routing for Networks:\n");
+-	config_write_rip_network(vty, 0);
++	if (show_network) {
++		if (!uj) {
++			vty_out(vty, "  Routing for Networks:\n");
++		}
++		config_write_rip_network(vty, 0, json, uj);
++	}
+ 
+-	{
++	if (show_passive) {
+ 		int found_passive = 0;
++		json_object *json_array_pass_intf = NULL, *json_pass_intf = NULL;
++
++		if (uj) {
++			json_array_pass_intf = json_object_new_array();
++		}
++
+ 		FOR_ALL_INTERFACES (vrf, ifp) {
+ 			ri = ifp->info;
+ 
+ 			if ((ri->enable_network || ri->enable_interface)
+ 			    && ri->passive) {
+ 				if (!found_passive) {
+-					vty_out(vty,
+-						"  Passive Interface(s):\n");
++					if (!uj) {
++						vty_out(vty,
++							"  Passive Interface(s):\n");
++					}
+ 					found_passive = 1;
+ 				}
+-				vty_out(vty, "    %s\n", ifp->name);
++				if (uj) {
++					json_pass_intf = json_object_new_object();
++					json_object_string_add(json_pass_intf, "ifName", ifp->name);
++					json_object_array_add(json_array_pass_intf, json_pass_intf);
++				} else {
++					vty_out(vty, "    %s\n", ifp->name);
++				}
+ 			}
+ 		}
++
++		if (uj) {
++			json_object_object_add(json, "activePassiveInterfaces", json_array_pass_intf);
++		}
+ 	}
+ 
+-	vty_out(vty, "  Routing Information Sources:\n");
+-	vty_out(vty,
+-		"    Gateway          BadPackets BadRoutes  Distance Last Update\n");
+-	rip_peer_display(vty);
++	if (!uj) {
++		vty_out(vty, "  Routing Information Sources:\n");
++		vty_out(vty,
++				"    Gateway          BadPackets BadRoutes  Distance Last Update\n");
++	}
+ 
+-	rip_distance_show(vty);
++	if (show_peer) {
++		rip_peer_display(vty, json, uj);
++	}
++
++	/* Default distance information. */
++	if (show_global) {
++		if (uj) {
++			json_object_int_add(json, "distanceDefault", rip->distance ? rip->distance : ZEBRA_RIP_DISTANCE_DEFAULT);
++		} else {
++			vty_out(vty, "  Distance: (default is %d)\n",
++				rip->distance ? rip->distance : ZEBRA_RIP_DISTANCE_DEFAULT);
++		}
++	}
++
++	if (show_distance) {
++		rip_distance_show(vty, json, uj);
++	}
++
++	if (uj) {
++		vty_out(vty, "%s\n", json_object_to_json_string_ext(json,
++						JSON_C_TO_STRING_PRETTY));
++		json_object_free(json);
++	}
+ 
+ 	return CMD_SUCCESS;
+ }
+@@ -3673,13 +3841,13 @@ static int config_write_rip(struct vty *vty)
+ 		}
+ 
+ 		/* Redistribute configuration. */
+-		config_write_rip_redistribute(vty, 1);
++		config_write_rip_redistribute(vty, 1, NULL, 0);
+ 
+ 		/* RIP offset-list configuration. */
+ 		config_write_rip_offset_list(vty);
+ 
+ 		/* RIP enabled network and interface configuration. */
+-		config_write_rip_network(vty, 1);
++		config_write_rip_network(vty, 1, NULL, 0);
+ 
+ 		/* RIP default metric configuration */
+ 		if (rip->default_metric != RIP_DEFAULT_METRIC_DEFAULT)
+diff --git a/ripd/ripd.h b/ripd/ripd.h
+index 784b064..a47e626 100644
+--- a/ripd/ripd.h
++++ b/ripd/ripd.h
+@@ -26,6 +26,8 @@
+ #include "nexthop.h"
+ #include "rip_memory.h"
+ 
++#include <lib/json.h>
++
+ /* RIP version number. */
+ #define RIPv1                            1
+ #define RIPv2                            2
+@@ -396,15 +398,15 @@ extern void rip_interface_multicast_set(int, struct connected *);
+ extern void rip_distribute_update_interface(struct interface *);
+ extern void rip_if_rmap_update_interface(struct interface *);
+ 
+-extern int config_write_rip_network(struct vty *, int);
++extern int config_write_rip_network(struct vty *, int, json_object *, uint8_t);
+ extern int config_write_rip_offset_list(struct vty *);
+-extern int config_write_rip_redistribute(struct vty *, int);
++extern int config_write_rip_redistribute(struct vty *, int, json_object *, uint8_t);
+ 
+ extern void rip_peer_init(void);
+ extern void rip_peer_update(struct sockaddr_in *, uint8_t);
+ extern void rip_peer_bad_route(struct sockaddr_in *);
+ extern void rip_peer_bad_packet(struct sockaddr_in *);
+-extern void rip_peer_display(struct vty *);
++extern void rip_peer_display(struct vty *, json_object *, uint8_t);
+ extern struct rip_peer *rip_peer_lookup(struct in_addr *);
+ extern struct rip_peer *rip_peer_lookup_next(struct in_addr *);
+ 
+diff --git a/ripngd/ripngd.c b/ripngd/ripngd.c
+index 214ee72..d159132 100644
+--- a/ripngd/ripngd.c
++++ b/ripngd/ripngd.c
+@@ -2078,7 +2078,7 @@ DEFUN (show_ipv6_ripng_status,
+ 		ripng->garbage_time);
+ 
+ 	/* Filtering status show. */
+-	config_show_distribute(vty);
++	config_show_distribute(vty, NULL, 0);
+ 
+ 	/* Default metric information. */
+ 	vty_out(vty, "  Default redistribution metric is %d\n",

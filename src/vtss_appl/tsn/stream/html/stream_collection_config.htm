@@ -1,0 +1,406 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Stream Collection Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="stream_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_stream_collection_config.htm";
+
+// Global variables
+var configTable, variables, new_stream_collection_id, post_cnt, err_msg_shown;
+
+/******************************************************************************/
+// on_del_submit_done()
+/******************************************************************************/
+function on_del_submit_done(responseText, stream_collection_id)
+{
+    var msg;
+
+    if (responseText && responseText.error) {
+        if (responseText.error.message) {
+            msg = responseText.error.message;
+        } else if (responseText.error.code) {
+            msg = responseText.error.code;
+        }
+    }
+
+    if (msg) {
+        alert(msg);
+        return;
+    }
+
+    // Still here? Then only remove the deleted row from the table, so that we
+    // don't have to refresh everything. New rows will still be there.
+    configTable.delRow("_", "DeleteButton_" + stream_collection_id);
+}
+
+/******************************************************************************/
+// on_del_button_click()
+/******************************************************************************/
+function on_del_button_click()
+{
+    var elm_ids = this.id.split("_"), stream_collection_id;
+
+    if (elm_ids[0] == "newDeleteButton") {
+        configTable.delNewRow("_", this.id);
+    } else {
+        stream_collection_id = elm_ids[1];
+        requestJsonDoc("stream.config.collectionConf.del", [stream_collection_id], on_del_submit_done, stream_collection_id, true /* always call us back - unless redirecting */);
+    }
+}
+
+/******************************************************************************/
+// on_add_button_click()
+/******************************************************************************/
+function on_add_button_click()
+{
+    row = add_row(new_stream_collection_id, globals.coll_default_conf, undefined);
+    configTable.addNewRow(row);
+
+    // Put focus on the new row's collection ID.
+    $("newStreamCollectionId_" + new_stream_collection_id).focus();
+    new_stream_collection_id++;
+}
+
+/******************************************************************************/
+// validate_range()
+/******************************************************************************/
+function validate_range(fld_name, min, max, msg, val)
+{
+    return isWithinRange(fld_name, min, max, msg, undefined, val) ? true : false;
+}
+
+/******************************************************************************/
+// on_submit_done()
+// The map callback variable contains two keys: "stream_collection_id" and
+// a field identifier that we can set focus to if something goes wrong.
+/******************************************************************************/
+function on_submit_done(responseText, map)
+{
+    var fld, msg;
+
+    if (post_cnt <= 0) {
+        alert("That's odd. post_cnt = " + post_cnt + ", result = " + result + ", stream_collection_id = " + map.stream_collection_id);
+        requestUpdate();
+        return;
+    }
+
+    if (responseText && responseText.error) {
+        if (responseText.error.message) {
+            msg = responseText.error.message;
+        } else if (responseText.error.code) {
+            msg = responseText.error.code;
+        }
+    }
+
+    if (msg) {
+        // Set focus on the collection's Stream ID List field (we only know this
+        // for existing collections).
+        fld = $(map.fld_id);
+        if (fld) {
+            fld.focus();
+        }
+
+        // Make sure not to refresh the page.
+        err_msg_shown = true;
+        alert("Stream Collection ID " + map.stream_collection_id + ": " + msg);
+    }
+
+    post_cnt--;
+
+    if (!err_msg_shown && post_cnt === 0) {
+        // Done with all of them. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_save_button_click()
+/******************************************************************************/
+function on_save_button_click()
+{
+    var json, key, keys, res, error, existing_coll, new_coll, val, stream_collection_id, stream_collection_fld_id, elm_ids;
+
+    // Get the full form that we are about to submit.
+    json = html2Json(tablesForm);
+
+    keys = Object.keys(json);
+
+    // Convert to what is expected by the JSON call.
+    existing_coll = [];
+    new_coll      = [];
+
+    // Validate input
+    error = false;
+    keys.forEach(function(key) {
+        if (error || key.includes("DeleteButton_")) {
+            // Skip remainder of this function if an error has been encountered
+            // or it's the DeleteButton we are currently processing.
+            // Unfortunately, I can't see a way to completely exit this
+            // forEach() immediately if an error has been seen.
+        } else if (key.includes("newStreamCollectionId_")) {
+            // New stream collection.
+            val = [];
+            if (validate_range(key, 1, globals.coll_capabilities.InstanceMax, "Stream Collection IDs", val)) {
+                stream_collection_id = val[0];
+                stream_collection_fld_id = key;
+            } else {
+                error = true;
+            }
+        } else if (key.includes("StreamIdList_")) {
+            val = {};
+            if (stream_lib_list_to_ids(key, val, globals.capabilities.InstanceMax, globals.coll_capabilities.StreamsPerCollectionMax)) {
+                // val now contains a uniquified and sorted array of the stream
+                // IDs.
+                if (key.includes("newStreamIdList_")) {
+                     // The stream collection ID was what the user had typed in
+                     // earlier. We also save the field name, so that we can put
+                     // focus on it in case the ID is already used.
+                     new_coll.push({"key": stream_collection_id, "val": val, "id": stream_collection_fld_id});
+                } else {
+                     // Stream collection ID is embedded in the key
+                     elm_ids = key.split("_");
+                     existing_coll.push({"key": parseInt(elm_ids[1], 10), "val": val, "id": "StreamIdList_" + elm_ids[1]});
+                }
+            } else {
+                error = true;
+            }
+        } else {
+            alert("Unexpected JSON key: " + key);
+        }
+    });
+
+    if (error) {
+        return;
+    }
+
+    // If we are still here, we need to check whether the user has made new
+    // stream collections with existing IDs.
+    error = false;
+    new_coll.forEach(function(map, idx) {
+        if (error) {
+            // Gotta get out of here
+        } else if (stream_lib_inst_get(existing_coll, map.key)) {
+            // Make the field active.
+            $(map.id).focus();
+            alert("The new Stream Collection ID (" + map.key + ") already exists");
+            error = true;
+        } else {
+            // Not found in the existing map. See if user has duplicated new
+            // IDs.
+            new_coll.forEach(function(map2, idx2) {
+                if (map2.key == map.key && idx2 != idx) {
+                    alert("The same Stream Collection ID (" + map.key + ") specified twice");
+                    error = true;
+                }
+            });
+        }
+    });
+
+    if (error) {
+        return;
+    }
+
+    // Time to update.
+    // First append the new_coll array to existing_coll, so that we only need to
+    // loop once.
+    existing_coll.push.apply(existing_coll, new_coll);
+
+    // Since we can post a variable number of items, we need to count them first
+    // so that the on_submit_done() function knows when to refresh the page.
+    post_cnt = existing_coll.length;
+    err_msg_shown = false;
+
+    existing_coll.forEach(function(map, idx) {
+        // Always use stream.config.collectionConf.add(), because
+        // stream.config.collectionConf.set() starts by reading the current
+        // configuration, which might not exist.
+        // We also request to be called back unless redirecting, so that we can
+        // show a possible error code and if everything went OK, we can refresh
+        // the page.
+        requestJsonDoc("stream.config.collectionConf.add", [map.key, map.val], on_submit_done, {"stream_collection_id": map.key, "fld_id": map.id}, true /* always call us back - unless redirecting */);
+    });
+}
+
+/******************************************************************************/
+// on_reset_button_click()
+/******************************************************************************/
+function on_reset_button_click()
+{
+    configTable.resetEvent();
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // Numbers are colspan, rowspan
+    row = {fields: [
+             {type: "disp_hdr", params: ["Action",               1, 1]},
+             {type: "disp_hdr", params: ["Stream Collection ID", 1, 1]},
+             {type: "disp_hdr", params: ["Stream ID List",       1, 1]},
+             {type: "disp_hdr", params: ["Attached Clients",     1, 1, "150px"]},
+             {type: "disp_hdr", params: ["Warnings",             1, 1]}]
+          };
+
+    table_rows.push(row);
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(stream_collection_id, coll_conf, coll_statu)
+{
+    var row, stream_collection_id_row, new_str;
+
+    if (coll_statu) {
+        // Add existing stream collection.
+        new_str = "";
+        stream_collection_id_row = {type: "text", params: [stream_collection_id, "cr"]};
+    } else {
+        // New stream collection
+        new_str = "new";
+        stream_collection_id_row = {type: "input", params: [0, "cr", "newStreamCollectionId_" + stream_collection_id]};
+    }
+
+    row = {
+        fields: [
+            {type: "button", params: ["Delete", "c", new_str + "DeleteButton_" + stream_collection_id, on_del_button_click]},
+            stream_collection_id_row,
+            {type: "input", params: [stream_lib_ids_to_list(coll_conf), "cl", new_str + "StreamIdList_" + stream_collection_id]},
+            {type: "text",  params: [stream_lib_collection_attached_clients_to_str(coll_statu), "cl"]},
+            {type: "image", params: ["c", stream_lib_oper_warnings_to_image(coll_statu), stream_lib_collection_oper_warnings_to_str(coll_statu)]}]
+    };
+
+    if (coll_statu) {
+        // This is an existing row. We can identify it my setting a key called
+        // 'idx' to stream_collection_id. This allows us to call delRow() if the
+        // user hits the Delete button, and only delete the row without
+        // refreshing the rest of the table.
+        row.idx = stream_collection_id;
+    } else {
+        // This is a new row. We can identify it by setting a key called
+        // 'new_idx' to stream_collection_id. This allows us to call delNewRow()
+        // if the user hits the Delete button.
+        row.new_idx = stream_collection_id;
+    }
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows = new Array();
+
+    // Add table header
+    add_header(table_rows);
+
+    // Add one row per stream collection
+    Object.each(variables.coll_conf, function(record, idx) {
+        table_rows.push(add_row(record.key, record.val, variables.coll_statu[idx].val));
+    });
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    new_stream_collection_id = 0;
+
+    // Add table rows
+    var table_rows = add_rows();
+    configTable.addRows(table_rows);
+
+    // Update this dynamic table
+    configTable.update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    // Make sure to get rid of old new-rows.
+    configTable.restore();
+
+    variables = {coll_conf: {}, coll_statu: {}};
+    stream_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    configTable = new DynamicTable("streamCollectionTableContent", "config");
+
+    globals = {capabilities: {}, coll_capabilities: {}, coll_default_conf: {}};
+    stream_lib_json_request(globals, requestUpdate);
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>Stream Collection Configuration</h1>
+
+<div class="refreshbar">
+  <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();"/>
+  <img id="update" alt="" src="images/updating.gif"/>
+</div>
+
+<form id="tablesForm" action="">
+  <div id="streamCollectionTableContent"></div>
+</form>
+
+<p>
+  <input type="button" value="Add"   onclick="on_add_button_click();">
+  <input type="button" value="Save"  onclick="on_save_button_click();">
+  <input type="button" value="Reset" onclick="on_reset_button_click();">
+</p>
+
+</body>
+</html>
+

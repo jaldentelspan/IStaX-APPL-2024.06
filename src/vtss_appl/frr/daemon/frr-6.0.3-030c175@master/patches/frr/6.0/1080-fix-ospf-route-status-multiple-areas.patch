@@ -1,0 +1,123 @@
+commit 467912ca55ebb34d87b015b5b8ed00a29e03e6f2
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Mon Oct 12 09:21:43 2020 +0200
+
+    6.0-1080
+
+diff --git a/ospfd/ospf_vty.c b/ospfd/ospf_vty.c
+index c1cf9dfec..7ac538936 100644
+--- a/ospfd/ospf_vty.c
++++ b/ospfd/ospf_vty.c
+@@ -9271,7 +9271,7 @@ static void show_ip_ospf_route_network(struct vty *vty, struct ospf *ospf,
+ 	struct ospf_route * or ;
+ 	struct listnode *pnode, *pnnode;
+ 	struct ospf_path *path;
+-	json_object *json_route = NULL, *json_nexthop_array = NULL,
++	json_object *json_route_array = NULL, *json_route = NULL, *json_nexthop_array = NULL,
+ 		    *json_nexthop = NULL;
+ 
+ 	if (!json)
+@@ -9286,9 +9286,10 @@ static void show_ip_ospf_route_network(struct vty *vty, struct ospf *ospf,
+ 		memset(buf1, 0, sizeof(buf1));
+ 		prefix2str(&rn->p, buf1, sizeof(buf1));
+ 
+-		json_route = json_object_new_object();
+ 		if (json) {
+-			json_object_object_add(json, buf1, json_route);
++			json_route_array = json_object_new_array();
++			json_route = json_object_new_object();
++			json_object_object_add(json, buf1, json_route_array);
+ 			json_object_to_json_string_ext(
+ 				json, JSON_C_TO_STRING_NOSLASHESCAPE);
+ 		}
+@@ -9406,8 +9407,8 @@ static void show_ip_ospf_route_network(struct vty *vty, struct ospf *ospf,
+ 				}
+ 			}
+ 		}
+-		if (!json)
+-			json_object_free(json_route);
++		if (json)
++			json_object_array_add(json_route_array, json_route);
+ 	}
+ 	if (!json)
+ 		vty_out(vty, "\n");
+@@ -9422,7 +9423,7 @@ static void show_ip_ospf_route_router(struct vty *vty, struct ospf *ospf,
+ 	struct listnode *pnode;
+ 	struct listnode *node;
+ 	struct ospf_path *path;
+-	json_object *json_route = NULL, *json_nexthop_array = NULL,
++	json_object *json_route_array = NULL, *json_route = NULL, *json_nexthop_array = NULL,
+ 		    *json_nexthop = NULL;
+ 
+ 	if (!json)
+@@ -9435,13 +9436,10 @@ static void show_ip_ospf_route_router(struct vty *vty, struct ospf *ospf,
+ 		int flag = 0;
+ 		char buf1[19];
+ 
+-		json_route = json_object_new_object();
+ 		if (json) {
++			json_route_array = json_object_new_array();
+ 			snprintf(buf1, 19, "%s/32", inet_ntoa(rn->p.u.prefix4));
+-
+-			json_object_object_add(json, buf1,
+-					       json_route);
+-			json_object_string_add(json_route, "routeType", "R ");
++			json_object_object_add(json, buf1, json_route_array);
+ 		} else {
+ 			vty_out(vty, "R    %-15s    ",
+ 				inet_ntoa(rn->p.u.prefix4));
+@@ -9455,6 +9453,8 @@ static void show_ip_ospf_route_router(struct vty *vty, struct ospf *ospf,
+ 
+ 			/* Show path. */
+ 			if (json) {
++				json_route = json_object_new_object();
++				json_object_string_add(json_route, "routeType", "R ");
+ 				json_object_int_add(json_route, "cost",
+ 						    or->cost);
+ 				json_object_string_add(
+@@ -9547,9 +9547,9 @@ static void show_ip_ospf_route_router(struct vty *vty, struct ospf *ospf,
+ 					}
+ 				}
+ 			}
++			if (json)
++				json_object_array_add(json_route_array, json_route);
+ 		}
+-		if (!json)
+-			json_object_free(json_route);
+ 	}
+ 	if (!json)
+ 		vty_out(vty, "\n");
+@@ -9563,7 +9563,7 @@ static void show_ip_ospf_route_external(struct vty *vty, struct ospf *ospf,
+ 	struct ospf_route *er;
+ 	struct listnode *pnode, *pnnode;
+ 	struct ospf_path *path;
+-	json_object *json_route = NULL, *json_nexthop_array = NULL,
++	json_object *json_route_array = NULL, *json_route = NULL, *json_nexthop_array = NULL,
+ 		    *json_nexthop = NULL;
+ 
+ 	if (!json)
+@@ -9578,9 +9578,11 @@ static void show_ip_ospf_route_external(struct vty *vty, struct ospf *ospf,
+ 
+ 		snprintf(buf1, 19, "%s/%d", inet_ntoa(rn->p.u.prefix4),
+ 			 rn->p.prefixlen);
+-		json_route = json_object_new_object();
++
+ 		if (json) {
+-			json_object_object_add(json, buf1, json_route);
++			json_route_array = json_object_new_array();
++			json_route = json_object_new_object();
++			json_object_object_add(json, buf1, json_route_array);
+ 			json_object_to_json_string_ext(
+ 				json, JSON_C_TO_STRING_NOSLASHESCAPE);
+ 		}
+@@ -9676,8 +9678,8 @@ static void show_ip_ospf_route_external(struct vty *vty, struct ospf *ospf,
+ 				}
+ 			}
+ 		}
+-		if (!json)
+-			json_object_free(json_route);
++		if (json)
++			json_object_array_add(json_route_array, json_route);
+ 	}
+ 	if (!json)
+ 		vty_out(vty, "\n");

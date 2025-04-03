@@ -1,0 +1,258 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+    
+    Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+    
+    Unpublished rights reserved under the copyright laws of the United States of
+    America, other countries and international treaties. Permission to use, copy,
+    store and modify, the software and its source code is granted but only in
+    connection with products utilizing the Microsemi switch and PHY products.
+    Permission is also granted for you to integrate into other products, disclose,
+    transmit and distribute the software only in an absolute machine readable
+    format (e.g. HEX file) and only in or with products utilizing the Microsemi
+    switch and PHY products.  The source code of the software may not be
+    disclosed, transmitted or distributed without the prior written permission of
+    Microsemi.
+    
+    This copyright notice must appear in any copy, modification, disclosure,
+    transmission or distribution of the software.  Microsemi retains all
+    ownership, copyright, trade secret and proprietary rights in the software and
+    its source code, including all modifications thereto.
+    
+    THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+    WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+    ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+    WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+    NON-INFRINGEMENT.
+    
+  -->
+<html>  
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>Power over Ethernet Status</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript">
+    // Help page magic
+    var help_page = "/help/help_poe_status.htm";
+
+    var timerID;
+
+    // Global variables
+    var myDynamicTable;
+    var myNameMap;
+    var gotStatus;
+    var gotConfig;
+    var recvStatus;
+    var recvConfig;
+
+    function getPortNumber(key) {
+        var i;
+        for (i=0; i<myNameMap.length; i++) {
+            if (myNameMap[i].key == key) {
+                return myNameMap[i].val;
+            }
+        }
+        return "undefined";
+    }
+
+    /* Add table header */
+    function addHeader(table_rows) {
+        var row = {
+            fields: [
+            { type: "disp_hdr", params: ["Port"] },
+            { type: "disp_hdr", params: ["PD Class"] },
+            { type: "disp_hdr", params: ["Power Requested"] },
+            { type: "disp_hdr", params: ["Power Allocated"] },
+            { type: "disp_hdr", params: ["Power Used"] },
+            { type: "disp_hdr", params: ["Current Used"] },
+            { type: "disp_hdr", params: ["Priority"] },
+            { type: "disp_hdr", params: ["Port Status"] }
+            ]
+        };
+        table_rows.push(row);
+    }
+
+    function pdClass(classA, classB) {
+        if ((classA == 12) && (classB == 12)) { // no class was assigned
+            return "-";
+        }
+
+        if (classA == 12) { // only class B
+                return classB;
+        }
+
+        if (classB == 12) { // only class A
+                return classA;
+        }
+
+        return (classA + " - " + classB); // class A and B
+    }
+
+    var statusMapping =
+        [
+            [ "unknownState"  , "unknown"        ],
+            [ "budgetExceeded", "budget exceeded"],
+            [ "noPdDetected"  , "---"            ],
+            [ "pdOn"          , "on"             ],
+            [ "pdOverloaded"  , "overload"       ],
+            [ "notSupported"  , "not supported"  ],
+            [ "disabled"      , "disabled"       ],
+            [ "shutdown"      , "shutdown"       ],
+            [ "pdFault"       , "pd fault"       ],
+            [ "pseFault"      , "pse fault"      ]
+          ];
+
+    var priorityMapping =
+          [ [ "low", "Low" ], [ "high", "High" ], [ "critical", "Critical" ] ];
+
+    function mapText(val,map) {
+        var i;
+        for (i=0; i<map.length; i++) {
+            if (map[i][0] == val) {
+                return map[i][1];
+            }
+        }
+        return "Undefined";
+    }
+
+    /* Add a single row in the dynamic table.
+    * Notice:
+    * Except for the general usage, this function also can be a callback function
+    * which is registed by addNewRowButton().
+    * In this case, the value of parameter "key" is an integer number (start from 1),
+    * it identify the new row index for the entry and the value of parameter "val"
+    * is null.
+    */
+    function addRow(key, val, config) {
+        var row_affix = myDynamicTable.getRowPrefixs("rowKeyPrefix") + rowKey2Id(key);
+        // console.log("addRow", key, val, config);
+        var row = {
+            fields: [ { type: "text", params: [getPortNumber(key), "cr"] },
+                      { type: "text", params: [pdClass(val.PDClassAltA, val.PDClassAltB), "cr"] },
+                      { type: "text", params: [(val.PowerRequested/1000)+" [W]", "cr"] },    // power requested mw
+                      { type: "text", params: [(val.PowerAllocated/1000)+" [W]", "cr"] },    // power allocated mw
+                      { type: "text", params: [(val.PowerConsumption/1000)+" [W]", "cr"] },  // power used mw
+                      { type: "text", params: [(val.CurrentConsumption)+" [mA]", "cr"] },
+                      { type: "text", params: [mapText(config.Priority, priorityMapping), "cr"] },
+                      { type: "text", params: [mapText(val.CurrentState, statusMapping), "cr"] }
+                    ]
+        };
+
+        return row;
+    }
+
+    /* Add table rows in the dynamic table */
+    function addRows(recvStatus, recvConfig) {
+        var row, empty_colspan = 4;
+        var table_rows = new Array();
+        // console.log("addRows", recvStatus, recvConfig);
+        var row_id;
+        // Add table header
+        addHeader(table_rows);
+
+        // Add single row
+        for (row_id=0; row_id<recvStatus.length; row_id++) {
+            table_rows.push(addRow(recvStatus[row_id].key, recvStatus[row_id].val, recvConfig[row_id].val));
+        }
+
+        return table_rows;
+    }
+
+    /* Process the received JSON data */
+    function processUpdate(recv_json, name) {
+        // Ignore the process if no data is received
+        if (!recv_json) {
+            alert("processUpdate() failed: Get dynamic data failed.");
+            return;
+        }
+
+        if (name == "status") {
+            recvStatus = recv_json;
+            gotStatus = true;
+        }
+
+        if (name == "config") {
+            recvConfig = recv_json;
+            gotConfig = true;
+        }
+
+        if (!gotStatus || !gotConfig) {
+            return; // Not yet ready to process data
+        }
+
+        // Add table rows
+        var table_rows = addRows(recvStatus, recvConfig);
+        myDynamicTable.addRows(table_rows);
+
+        // Update this dynamic table
+        myDynamicTable.update();
+
+        var autorefresh = $('autorefresh');
+        if (autorefresh && autorefresh.checked) {
+            if (timerID) {
+                clearTimeout(timerID);
+            }
+            timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+        }
+
+    }
+
+    function processNameMap(recv_json, name) {
+        myNameMap = recv_json;
+        requestUpdate();
+    }
+
+    /* Update the received HTML request */
+    function requestUpdate() {
+        // Restore table content
+        // console.log("requestUpdate");
+        myDynamicTable.restore();
+
+        gotStatus = false;
+        gotConfig = false;
+
+        requestJsonDoc("poe.status.interface.get", null, processUpdate, "status");
+        requestJsonDoc("poe.config.interface.get", null, processUpdate, "config");
+    }
+
+    //------------------------------------------------------------------------------
+    // chkRefresh()
+    //------------------------------------------------------------------------------
+    function chkRefresh(fld) {
+        if (!fld.checked) {
+            if (timerID) {
+                clearTimeout(timerID);
+            }
+            timerID = null;
+        } else {
+        requestUpdate();
+        }
+    }
+
+
+    /* Initialize resores when HTML document is ready */
+    window.addEvent('domready', function () {
+        // Create a from with table body for receive/transmit JSON data
+        // console.log("domready1");
+        myDynamicTable = new DynamicTable("myTableContent", "display");
+
+        requestJsonDoc("port.namemap.get", null, processNameMap, "namemap");
+    });
+    </script>
+  </head>
+  
+  <body class="content">
+    <h1>Power Over Ethernet Status </h1>
+    <div class="refreshbar">
+      <label for="autorefresh">Auto-refresh</label>
+      <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);" checked>
+      <input type="button" value="Refresh" onClick='requestUpdate(); this.blur();'>
+      <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+  </body>
+</html>

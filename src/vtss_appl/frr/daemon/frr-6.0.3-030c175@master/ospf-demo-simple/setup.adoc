@@ -1,0 +1,297 @@
+Simple OSPF Demo setup
+======================
+
+This article will document how to do a simple demo setup using the Quagga MFI
+layer, running om MSCC switches.
+
+NOTE: All switches in the network is connected to a mangement VLAN using port 1,
+configured as access vlan 1. All networks are prefixed 24.
+
+Network overview
+----------------
+
+Following is an illustratio of the physical network created in this demo. All L3
+switches is Jr2-24 switches with Quagga, all hosts are normal Linux machines
+(this demo uses Luton10 boards running Linux).
+
+                            +---------------+
+                            |   Host-1      |
+                            |               |
+                            |IP: 50.0.0.1/24|
+                            |GW: 50.0.0.5   |
+                            +------(-)------+
+                                    ^
+                                    |
+                                    |
+                                    v
+              +--------------------(-)---------------------+
+              |               Port: gi 1/5                 |
+              |               Vlan (access): 50            |
+              |               IP address: 50.0.0.5         |
+              |                                            |
+              |                                            |
+              |               L3-SWITCH-1                  |
+              |                                            |
+              |                                            |
+              |Port: gi 1/3            Port: gi 1/4        |
+              |Vlan (access): 40       Vlan (access): 10   |
+              |IP address: 40.0.0.3    IP address: 10.0.0.4|
+              +-----(-)---------------------(-)------------+
+                     ^                       ^
+                     |                       |
+                     |                       |
+                     v                       |
+              +-----(-)------------+         |
+              |Port: gi 1/4        |         v
+              |Vlan (access): 40   |  +-----(-)------------+
+              |IP address: 40.0.0.4|  |Port: gi 1/3        |
+              |                    |  |Vlan (access): 10   |
+              |                    |  |IP address: 10.0.0.3|
+              |    L3-SWITCH-2     |  |                    |
+              |                    |  |                    |
+              |                    |  |    L3-SWITCH-3     |
+              |Port: gi 1/3        |  |                    |
+              |Vlan (access): 30   |  |                    |
+              |IP address: 30.0.0.3|  |Port: gi 1/4        |
+              +-----(-)------------+  |Vlan (access): 20   |
+                     ^                |IP address: 20.0.0.4|
+                     |                +-----(-)------------+
+                     |                       ^
+                     |                       |
+                     |                       |
+                     v                       v
+              +-----(-)---------------------(-)------------+
+              |Port: gi 1/4            Port: gi 1/3        |
+              |Vlan (access): 30       Vlan (access): 20   |
+              |IP address: 30.0.0.4    IP address: 20.0.0.3|
+              |                                            |
+              |                                            |
+              |               L3-SWITCH-4                  |
+              |                                            |
+              |                                            |
+              |               Port: gi 1/5                 |
+              |               Vlan (access): 60            |
+              |               IP address: 60.0.0.5         |
+              +--------------------(-)---------------------+
+                                    ^
+                                    |
+                                    |
+                                    v
+                            +------(-)------+
+                            |   Host-2      |
+                            |               |
+                            |IP: 60.0.0.1/24|
+                            |GW: 60.0.0.5   |
+                            +---------------+
+
+Configurations
+--------------
+
+Notice that only directly connected routes are configured (associated to an OSPF
+area), routes to the remaining part of the network is distributed by OSPF.
+
+icli configuration is applied as normal, ospfd configuration is applied through
+the Quagga OSPFd shell. The Quagga OSPFd shell can be reached by telnet on port
+2604 (the zebra shell is at 2601).
+
+=== L3-SWITCH-1
+
+==== WebStaX/icli configurations
+
+----
+vlan 1,10,40,50
+ip routing
+
+interface GigabitEthernet 1/1
+ no spanning-tree
+
+interface GigabitEthernet 1/3
+ switchport access vlan 40
+ no spanning-tree
+
+interface GigabitEthernet 1/4
+ switchport access vlan 10
+ no spanning-tree
+
+interface GigabitEthernet 1/5
+ switchport access vlan 50
+ no spanning-tree
+
+interface vlan 1
+ ip address dhcp
+
+interface vlan 10
+ ip address 10.0.0.4 255.255.255.0
+
+interface vlan 40
+ ip address 40.0.0.3 255.255.255.0
+
+interface vlan 50
+ ip address 50.0.0.5 255.255.255.0
+----
+
+==== OSPFD-Quagga configurations
+
+----
+router ospf
+ passive-interface vtss.vlan.50
+ network 10.0.0.0/24 area 0.0.0.0
+ network 40.0.0.0/24 area 0.0.0.0
+ network 50.0.0.0/24 area 0.0.0.0
+----
+
+
+=== L3-SWITCH-2
+
+==== WebStaX/icli configurations
+
+----
+vlan 1,30,40
+ip routing
+
+interface GigabitEthernet 1/1
+ no spanning-tree
+
+interface GigabitEthernet 1/3
+ switchport access vlan 30
+ no spanning-tree
+
+interface GigabitEthernet 1/4
+ switchport access vlan 40
+ no spanning-tree
+
+interface vlan 1
+ ip address dhcp
+
+interface vlan 30
+ ip address 30.0.0.3 255.255.255.0
+
+interface vlan 40
+ ip address 40.0.0.4 255.255.255.0
+
+----
+
+==== OSPFD-Quagga configurations
+
+----
+router ospf
+ network 30.0.0.0/24 area 0.0.0.0
+ network 40.0.0.0/24 area 0.0.0.0
+----
+
+=== L3-SWITCH-3
+
+==== WebStaX/icli configurations
+
+----
+vlan 1,10,20
+
+ip routing
+
+interface GigabitEthernet 1/1
+ no spanning-tree
+
+interface GigabitEthernet 1/3
+ switchport access vlan 10
+ no spanning-tree
+
+interface GigabitEthernet 1/4
+ switchport access vlan 20
+ no spanning-tree
+
+interface vlan 1
+ ip address dhcp
+
+interface vlan 10
+ ip address 10.0.0.3 255.255.255.0
+
+interface vlan 20
+ ip address 20.0.0.4 255.255.255.0
+----
+
+==== OSPFD-Quagga configurations
+
+----
+router ospf
+ network 10.0.0.0/24 area 0.0.0.0
+ network 20.0.0.0/24 area 0.0.0.0
+----
+
+=== L3-SWITCH-4
+
+==== WebStaX/icli configurations
+
+----
+vlan 1,20,30,60
+
+ip routing
+
+interface GigabitEthernet 1/1
+ no spanning-tree
+
+interface GigabitEthernet 1/3
+ switchport access vlan 20
+ no spanning-tree
+
+interface GigabitEthernet 1/4
+ switchport access vlan 30
+ no spanning-tree
+
+interface vlan 1
+ ip address dhcp
+
+interface vlan 20
+ ip address 20.0.0.3 255.255.255.0
+
+interface vlan 30
+ ip address 30.0.0.4 255.255.255.0
+
+interface vlan 60
+ ip address 60.0.0.5 255.255.255.0
+----
+
+==== OSPFD-Quagga configurations
+
+----
+router ospf
+ network 20.0.0.0/24 area 0.0.0.0
+ network 30.0.0.0/24 area 0.0.0.0
+ network 60.0.0.0/24 area 0.0.0.0
+----
+
+=== Host-1
+
+==== WebStaX/icli configurations
+
+----
+vlan 1
+ip route 0.0.0.0 0.0.0.0 50.0.0.5
+interface vlan 1
+ ip address 50.0.0.1 255.255.255.0
+----
+
+=== Host-2
+
+==== WebStaX/icli configurations
+
+----
+vlan 1
+ip route 0.0.0.0 0.0.0.0 60.0.0.5
+interface vlan 1
+ ip address 60.0.0.1 255.255.255.0
+----
+
+== Verification
+
+- Verify that the two hosts can ping each other.
+- Try the various ospf status commands in the quagga/ospf shell on the 4 routes
+  (`show ip ospf`, `show ip ospf neighbor`, etc)
+- Try disconnect one or more cables in the network, and see how OSPF finds a new
+  path through the network (if possible). Be patient as it takes approximate 1
+  minutes before the changes are done.
+
+
+
+
+
+

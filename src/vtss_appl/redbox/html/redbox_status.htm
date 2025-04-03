@@ -1,0 +1,183 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>RedBox Status</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="redbox_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_redbox_status.htm";
+var statusTable, variables;
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // 1st row (numbers are colspan, rowspan)
+    row = {fields: [
+              {type: "disp_hdr", params: ["Instance",                 1, 2]},
+              {type: "disp_hdr", params: ["Mode",                     1, 2]},
+              {type: "disp_hdr", params: ["Interfaces",               3, 1]},
+              {type: "disp_hdr", params: ["Configurational Warnings", 1, 2]},
+              {type: "disp_hdr", params: ["Notifications",            1, 2]}]
+         };
+
+    table_rows.push(row);
+
+    row = {fields: [
+              // Interfaces
+              {type: "disp_hdr", params: ["Port A", 1, 1]},
+              {type: "disp_hdr", params: ["Port B", 1, 1]},
+              {type: "disp_hdr", params: ["Port C", 1, 1]}]
+          };
+
+    table_rows.push(row);
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(inst, statu, conf)
+{
+    var row;
+
+    if (statu && statu.OperState == "active") {
+        row = {fields: [
+                  {type: "text",  params: [inst, "c"]},
+                  {type: "digit", params: [redbox_lib_mode_map[conf.Mode]]},
+
+                  // Interfaces
+                  {type: "text",  params: [redbox_lib_port_to_str(conf.PortA),  "cl"]},
+                  {type: "text",  params: [redbox_lib_port_to_str(conf.PortB),  "cl"]},
+                  {type: "text",  params: [redbox_lib_port_to_str(statu.PortC), "cl"]},
+
+                  // Configurational warnings
+                  {type: "image", params: ["c", redbox_lib_oper_state_to_image(statu), redbox_lib_oper_state_to_str(statu)]},
+
+                  // Notifications
+                  {type: "image", params: ["c", redbox_lib_notif_to_image(statu), redbox_lib_notif_to_str(statu)]}]
+              };
+    } else {
+        row = {fields: [
+                  {type: "text",      params: [inst, "c"]},
+                  {type: "empty_row", params: [6, "Inactive"]}]
+              };
+    }
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows, inst_conf;
+
+    table_rows = new Array();
+    add_header(table_rows);
+
+    // Add data rows
+    Object.each(variables.statu, function(record) {
+        inst_conf = redbox_lib_inst_get(variables.conf, record.key);
+        table_rows.push(add_row(record.key, record.val, inst_conf ? inst_conf.val : undefined));
+    });
+
+    // Empty row
+    if (!variables.statu.length) {
+        table_rows.push({fields: [{type: "empty_row", params: [7, "No RedBox instances"]}]});
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Add table rows
+    statusTable.addRows(add_rows());
+
+    // Update this dynamic table
+    statusTable.update();
+
+    // Refresh timer
+    redbox_lib_autorefresh_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}};
+    redbox_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    statusTable = new DynamicTable("statusTableContent", "display");
+
+    redbox_lib_disable_button_add("autorefresh");
+    redbox_lib_disable_button_add("refresh_button");
+    requestUpdate();
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>RedBox Status</h1>
+
+<div class="refreshbar">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="redbox_lib_on_autorefresh_click();">
+  <input type="button" id="refresh_button" value="Refresh"   onClick="requestUpdate(); this.blur();">
+  <img id="redbox_update" alt="" src="images/updating.gif">
+</div>
+
+<div id="statusTableContent"></div>
+
+</body>
+</html>
+

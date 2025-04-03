@@ -1,0 +1,59 @@
+commit 2bcccb93a31665f435170c9e8fd23910abee3742
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Wed Oct 28 11:56:46 2020 +0100
+
+    1150-fix-rip-clean-do-peer-clean.patch
+
+diff --git a/ripd/rip_peer.c b/ripd/rip_peer.c
+index e1e8025..06f0098 100644
+--- a/ripd/rip_peer.c
++++ b/ripd/rip_peer.c
+@@ -107,6 +107,24 @@ static struct rip_peer *rip_peer_get(struct in_addr *addr)
+ 	return peer;
+ }
+ 
++void rip_peer_clean(void)
++{
++	struct rip_peer *peer;
++	struct listnode *node, *nnode;
++
++	for (ALL_LIST_ELEMENTS(peer_list, node, nnode, peer)) {
++		if (peer) {
++			if (peer->t_timeout) {
++				thread_cancel(peer->t_timeout);
++			}
++			listnode_delete(peer_list, peer);
++			rip_peer_free(peer);
++		}
++	}
++	return;
++}
++
++
+ void rip_peer_update(struct sockaddr_in *from, uint8_t version)
+ {
+ 	struct rip_peer *peer;
+diff --git a/ripd/ripd.c b/ripd/ripd.c
+index bbbfc95..585ac2e 100644
+--- a/ripd/ripd.c
++++ b/ripd/ripd.c
+@@ -3682,6 +3682,7 @@ void rip_clean(void)
+ 	rip_interfaces_clean();
+ 	rip_distance_reset();
+ 	rip_redistribute_clean();
++	rip_peer_clean();
+ }
+ 
+ static void rip_if_rmap_update(struct if_rmap *if_rmap)
+diff --git a/ripd/ripd.h b/ripd/ripd.h
+index 03f5ef7..62976fb 100644
+--- a/ripd/ripd.h
++++ b/ripd/ripd.h
+@@ -433,6 +433,7 @@ extern void rip_peer_bad_packet(struct sockaddr_in *);
+ extern void rip_peer_display(struct vty *, json_object *, bool);
+ extern struct rip_peer *rip_peer_lookup(struct in_addr *);
+ extern struct rip_peer *rip_peer_lookup_next(struct in_addr *);
++extern void rip_peer_clean(void);
+ 
+ extern void rip_info_free(struct rip_info *);
+ extern struct rip_distance *rip_distance_new(void);

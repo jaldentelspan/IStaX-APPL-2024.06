@@ -1,0 +1,581 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>QoS Egress Port Scheduler and Shaper Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/qos_util.js"></script>
+ <script type="text/javascript">
+
+// Help page
+var help_page = "/help/help_qos_map_rule.htm";
+
+var timerID;
+var timeOut = settingsRefreshInterval();
+
+var idx = 0;
+var idx_key1         = idx++;
+var idx_key2         = idx++;
+var idx_action_cos   = idx++;
+var idx_action_dpl   = idx++;
+var idx_action_pcp   = idx++;
+var idx_action_dei   = idx++;
+var idx_action_dscp  = idx++;
+var idx_action_cosid = idx++;
+
+function UpdateIdxs()
+{
+    idx = 0;
+    if (pageMapType === 0) {
+        idx_key1         = idx++;
+        idx_key2         = idx++;
+        idx_action_cos   = idx++;
+        idx_action_dpl   = idx++;
+        idx_action_pcp   = idx++;
+        idx_action_dei   = idx++;
+        idx_action_dscp  = idx++;
+        idx_action_cosid = idx++;
+    } else {
+        idx_key1        = idx++;
+        idx_key2        = idx++;
+        idx_action_pcp  = idx++;
+        idx_action_dei  = idx++;
+        idx_action_dscp = idx++;
+    }
+}
+
+var pageMapType = 0;
+var pageSelectMapId = 0;
+var pageArgs = searchArgs(window.location.search);
+var pageArgsName = 'selectMapType';
+if (pageArgs[pageArgsName]) {
+    pageMapType = parseInt(pageArgs[pageArgsName], 10);
+}
+pageArgsName = 'selectMapId';
+if (pageArgs[pageArgsName]) {
+    pageSelectMapId = parseInt(pageArgs[pageArgsName], 10);
+}
+
+var style_width = "100%";
+var mapDataTable = Array("mapData1", "mapData2");
+
+var rowwidth;
+if (pageMapType === 0) {
+    rowwidth = [9, 8];
+} else {
+    rowwidth = [6, 6];
+}
+
+var mapType;
+if (pageMapType === 0) {
+    mapType = "Ingress";
+} else {
+    mapType = "Egress";
+}
+
+var ruleKey;
+if (pageMapType === 0) {
+    ruleKey = ["PCP - DEI", "DSCP"];
+} else {
+    ruleKey = ["CoS ID - DPL", "DSCP - DPL"];
+}
+
+function updateHelpPage()
+{
+    help_page = "/help/help_qos_map_rule.htm?selectMapType=" + pageMapType;
+}
+
+function addOption(frag, value, text, selected)
+{
+    var option = document.createElement('option');
+    option.value = value;
+    option.appendChild(document.createTextNode(text));
+    if (selected) {
+        option.selected = true;
+    }
+    frag.appendChild(option);
+}
+
+function updateMapIdSelector(map_list)
+{
+    var frag = document.createDocumentFragment();
+    var i;
+    for (i = 0; i < map_list.length; i++) {
+        var map_id = parseInt(map_list[i], 10);
+        addOption(frag, map_id, mapType + " Map " + map_id, (map_id == pageSelectMapId));
+    }
+    addFragment(frag, "mapIdSel", true);
+}
+
+function ruleEdit1()
+{
+    // Format       : [mapConfigFlag]/[selectMapId]
+    // <Edit>       :               1/[map_id]
+    // <Delete>     :               2/[map_id]
+    // <Delete All> :               3/
+    // <Add New>    :               4/
+
+    document.location.href = "qos_map_rule_edit.htm?selectMapType=" + pageMapType + "&selectMapId=" + pageSelectMapId + "&ruleEditFlag=3&selectKeyType=1&selectRuleId1=" + this.value;
+}
+
+function ruleEdit2()
+{
+    // Format       : [mapConfigFlag]/[selectMapId]
+    // <Edit>       :               1/[map_id]
+    // <Delete>     :               2/[map_id]
+    // <Delete All> :               3/
+    // <Add New>    :               4/
+
+    document.location.href = "qos_map_rule_edit.htm?selectMapType=" + pageMapType + "&selectMapId=" + pageSelectMapId + "&ruleEditFlag=3&selectKeyType=2&selectRuleId2=" + this.value;
+}
+
+function ruleAddNew()
+{
+    // Format       : [mapConfigFlag]/[selectMapId]
+    // <Edit>       :               1/[map_id]
+    // <Delete>     :               2/[map_id]
+    // <Delete All> :               3/
+    // <Add New>    :               4/
+
+    document.location.href = "qos_map_rule_edit.htm?selectMapType=" + pageMapType + "&selectMapId=" + pageSelectMapId + "&ruleEditFlag=4&selectKeyType=" + this.value;
+}
+
+// Predeclare processUpdate(). This makes JSLint happy.
+var processUpdate;
+
+function addImageInline(frag, style, src, text, idx, click)
+{
+    var field = document.createElement('img');
+    var pval = text.split(" ");
+    field.id = pval[pval.length - 1] + "_" + (idx > 0 ? idx : 0);
+    field.src = src;
+    field.border = 0;
+    field.value = idx;
+    if (click) {
+        field.onclick = click;
+    }
+    field.title = field.alt = text;
+    frag.appendChild(field);
+    return field;
+}
+
+function CreateTableHeader(frag, ref)
+{
+    var tr, td;
+
+    switch(ref) {
+    case "mapData1":
+        if (pageMapType === 0) {
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "Key", "hdrc", 2);
+            addTextHeaderCell(tr, "Action", "hdrc", 7);
+            addTextHeaderCell(tr, " ", "hdrc", 1, 2);
+            frag.appendChild(tr);       // Add row to fragment
+
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "PCP", "hdrc");
+            addTextHeaderCell(tr, "DEI", "hdrc");
+            addTextHeaderCell(tr, "CoS", "hdrc");
+            addTextHeaderCell(tr, "DPL", "hdrc");
+            addTextHeaderCell(tr, "PCP", "hdrc");
+            addTextHeaderCell(tr, "DEI", "hdrc");
+            addTextHeaderCell(tr, "DSCP", "hdrc");
+            addTextHeaderCell(tr, "CoS ID", "hdrc");
+            frag.appendChild(tr);       // Add row to fragment
+        } else {
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "Key", "hdrc", 2);
+            addTextHeaderCell(tr, "Action", "hdrc", 4);
+            addTextHeaderCell(tr, " ", "hdrc", 1, 2);
+            frag.appendChild(tr);       // Add row to fragment
+
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "CoS ID", "hdrc");
+            addTextHeaderCell(tr, "DPL", "hdrc");
+            addTextHeaderCell(tr, "PCP", "hdrc");
+            addTextHeaderCell(tr, "DEI", "hdrc");
+            addTextHeaderCell(tr, "DSCP", "hdrc");
+            frag.appendChild(tr);       // Add row to fragment
+        }
+        break;
+    case "mapData2":
+        if (pageMapType === 0) {
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "Key", "hdrc");
+            addTextHeaderCell(tr, "Action", "hdrc", 7);
+            addTextHeaderCell(tr, " ", "hdrc", 1, 2);
+            frag.appendChild(tr);       // Add row to fragment
+
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "DSCP", "hdrc");
+            addTextHeaderCell(tr, "CoS", "hdrc");
+            addTextHeaderCell(tr, "DPL", "hdrc");
+            addTextHeaderCell(tr, "PCP", "hdrc");
+            addTextHeaderCell(tr, "DEI", "hdrc");
+            addTextHeaderCell(tr, "DSCP", "hdrc");
+            addTextHeaderCell(tr, "CoS ID", "hdrc");
+            frag.appendChild(tr);       // Add row to fragment
+        } else {
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "Key", "hdrc", 2);
+            addTextHeaderCell(tr, "Action", "hdrc", 4);
+            addTextHeaderCell(tr, " ", "hdrc", 1, 2);
+            frag.appendChild(tr);       // Add row to fragment
+
+            tr = CreateStyledElement("tr", "config_header");
+            addTextHeaderCell(tr, "DSCP", "hdrc");
+            addTextHeaderCell(tr, "DPL", "hdrc");
+            addTextHeaderCell(tr, "PCP", "hdrc");
+            addTextHeaderCell(tr, "DEI", "hdrc");
+            addTextHeaderCell(tr, "DSCP", "hdrc");
+            frag.appendChild(tr);       // Add row to fragment
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+function addRowControlCol(tr, values, ref, idx, first, last)
+{
+    var container = document.createElement("td");
+    var value;
+
+    switch (ref) {
+    case "mapData1":
+        //edit
+        if (pageMapType === 0) {
+            value = String(parseInt(values[idx_key1], 10) + 8 * parseInt(values[idx_key2], 10));
+            addImageInline(container, "cl", "images/edit.gif", "Edit Map", value, ruleEdit1);
+        } else {
+            value = String(parseInt(values[idx_key1], 10) + 8 * parseInt(values[idx_key2], 10));
+            addImageInline(container, "cl", "images/edit.gif", "Edit Map", value, ruleEdit1);
+        }
+        //del
+        if (pageMapType === 0) {
+            value = String(parseInt(values[idx_key1], 10) + 8 * parseInt(values[idx_key2], 10));
+            addImageInline(container, "cl", "images/del.gif", "Delete Map", value,
+                           function () {loadXMLDoc('/config/qos_map_rule?selectMapType=0&selectMapId=' + pageSelectMapId + "&ruleConfigFlag=2" + "&selectRuleId1=" + this.value, processUpdate);});
+            tr.appendChild(container);
+        } else {
+            value = String(parseInt(values[idx_key1], 10) + 8 * parseInt(values[idx_key2], 10));
+            addImageInline(container, "cl", "images/del.gif", "Delete Map", value,
+                           function () {loadXMLDoc('/config/qos_map_rule?selectMapType=1&selectMapId=' + pageSelectMapId + "&ruleConfigFlag=2" + "&selectRuleId1=" + this.value, processUpdate);});
+            tr.appendChild(container);
+        }
+        break;
+    case "mapData2":
+        //edit
+        if (pageMapType === 0) {
+            value = values[idx_key1];
+            addImageInline(container, "cl", "images/edit.gif", "Edit Map", value, ruleEdit2);
+        } else {
+            value = String(parseInt(values[idx_key1], 10) + 64 * parseInt(values[idx_key2], 10));
+            addImageInline(container, "cl", "images/edit.gif", "Edit Map", value, ruleEdit2);
+        }
+        //del
+        if (pageMapType === 0) {
+            value = values[idx_key1];
+            addImageInline(container, "cl", "images/del.gif", "Delete Map", value,
+                           function () {loadXMLDoc('/config/qos_map_rule?selectMapType=0&selectMapId=' + pageSelectMapId + "&ruleConfigFlag=2" + "&selectRuleId2=" + this.value, processUpdate);});
+            tr.appendChild(container);
+        } else {
+            value = String(parseInt(values[idx_key1], 10) + 64 * parseInt(values[idx_key2], 10));
+            addImageInline(container, "cl", "images/del.gif", "Delete Map", value,
+                           function () {loadXMLDoc('/config/qos_map_rule?selectMapType=1&selectMapId=' + pageSelectMapId + "&ruleConfigFlag=2" + "&selectRuleId2=" + this.value, processUpdate);});
+            tr.appendChild(container);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+function addRow(frag, values, ref, idx, first, last)
+{
+    var tr, td, i;
+
+    switch (ref) {
+    case "mapData1":
+        if (pageMapType === 0) {
+            tr = CreateStyledElement("tr", idx % 2 ? "config_odd" : "config_even");
+            td = CreateStyledElement("td", "cr");
+            addTextCell(tr, parseInt(values[idx_key1], 10), "c");
+            addTextCell(tr, parseInt(values[idx_key2], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_cos], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_dpl], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_pcp], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_dei], 10), "c");
+            addTextCell(tr, configQosDscpNames[parseInt(values[idx_action_dscp], 10)], "c");
+            addTextCell(tr, parseInt(values[idx_action_cosid], 10), "c");
+        } else {
+            tr = CreateStyledElement("tr", idx % 2 ? "config_odd" : "config_even");
+            td = CreateStyledElement("td", "cr");
+            addTextCell(tr, parseInt(values[idx_key1], 10), "c");
+            addTextCell(tr, parseInt(values[idx_key2], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_pcp], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_dei], 10), "c");
+            addTextCell(tr, configQosDscpNames[parseInt(values[idx_action_dscp], 10)], "c");
+        }
+        break;
+    case "mapData2":
+        if (pageMapType === 0) {
+            tr = CreateStyledElement("tr", idx % 2 ? "config_odd" : "config_even");
+            td = CreateStyledElement("td", "cr");
+            addTextCell(tr, configQosDscpNames[parseInt(values[idx_key1], 10)], "cl");
+            addTextCell(tr, parseInt(values[idx_action_cos - 1], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_dpl - 1], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_pcp - 1], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_dei - 1], 10), "c");
+            addTextCell(tr, configQosDscpNames[parseInt(values[idx_action_dscp - 1], 10)], "c");
+            addTextCell(tr, parseInt(values[idx_action_cosid - 1], 10), "c");
+        } else {
+            tr = CreateStyledElement("tr", idx % 2 ? "config_odd" : "config_even");
+            td = CreateStyledElement("td", "cr");
+            addTextCell(tr, configQosDscpNames[parseInt(values[idx_key1], 10)], "cl");
+            addTextCell(tr, parseInt(values[idx_key2], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_pcp], 10), "c");
+            addTextCell(tr, parseInt(values[idx_action_dei], 10), "c");
+            addTextCell(tr, configQosDscpNames[parseInt(values[idx_action_dscp], 10)], "c");
+        }
+        break;
+    default:
+        break;
+    }
+
+    addRowControlCol(tr, values, ref, idx, first, last);
+    frag.appendChild(tr);   // Add row to fragment
+}
+
+/* Format:
+ * info           :== <map_type>#<map_id>#<map_list>#<rules>
+ *   rules        :== <rule>|<rule>
+ *     rule       :== <rule 1>;<rule 2>;<rule 3>;<rule 4>;...<rule n> // List of currentloy defined rules (might be empty)
+ *       rule x   :== <key>/<action>
+ *         key    :== <par1>/<par2> (pcp-dei, dscp, cosid-dpl, dscp-dpl)
+ *         action :== <act1>/<act2>/...  (cos/dpl/pcp/dei/dscp/cosid OR pcp/dei/dscp)
+ *
+ * map_type           :== 0..1 // Ingress, Egress
+ * map_id             :== 0..VTSS_APPL_QOS_INGRESS_MAP_MAX or 0..VTSS_APPL_QOS_EGRESS_MAP_MAX
+ * map_list           :== 0/1/...n       // List of In/Egress Map IDs
+ */
+processUpdate = function(req, ref)
+{
+    var frag, tbody, tr, td, img;
+
+    if (req.responseText) {
+        var cfg = req.responseText.split("#");
+
+        pageMapType = parseInt(cfg[0], 10);
+        if (pageMapType === 0) {
+            UpdateId("displayMapType", "Ingress");
+        } else {
+            UpdateId("displayMapType", "Egress");
+        }
+        updateHelpPage();
+
+        pageSelectMapId = parseInt(cfg[1], 10);
+        var map_list = cfg[2].split("/");
+        updateMapIdSelector(map_list);
+        UpdateId("displayMapId", "" + pageSelectMapId);
+        UpdateIdxs();
+
+        var rules = cfg[3].split("|");
+        for (var i = 0; i < mapDataTable.length; i++) {
+            frag = document.createDocumentFragment();
+            ref = mapDataTable[i];
+            CreateTableHeader(frag, ref);
+
+            if (rules[i]) {
+                var mapConfig = rules[i].split(";");
+                var first = 1;
+                for (var j = 0; j < mapConfig.length; j++) {
+                    if (mapConfig[j]) {
+                        var pval = mapConfig[j].split("/");
+                        addRow(frag, pval, ref, j, first, mapConfig[j + 1] ? 0 : 1);
+                        first = 0;
+                    }
+                }
+                // Last Row - for new
+                tr = document.createElement("tr");
+                td = document.createElement("td");
+                td.setAttribute("colSpan", rowwidth[i]);
+                tr.appendChild(td); // Add col to row
+                td = document.createElement("td");
+                img = addImageInline(td, "cl",  "images/add.gif", "Add New Map", i + 1, ruleAddNew);
+                tr.appendChild(td); // Add col to row
+                frag.appendChild(tr);   // Add row to fragment
+            } else { //no Maps exist
+                tbody = document.getElementById(ref);
+                if (tbody) {
+                    // Last Row - for new
+                    tr = document.createElement("tr");
+                    td = document.createElement("td");
+                    td.setAttribute("colSpan", rowwidth[i]);
+                    tr.appendChild(td); // Add col to row
+                    td = document.createElement("td");
+                    img = addImageInline(td, "cl",  "images/add.gif", "Add New Map", i + 1, ruleAddNew);
+                    tr.appendChild(td); // Add col to row
+                    frag.appendChild(tr);   // Add row to fragment
+                }
+            }
+            UpdateId("displayMapData" + (i + 1), ruleKey[i]);
+            tbody = document.getElementById(ref);
+            clearChildNodes(tbody);
+            if (!tbody.appendChild(frag)) { // Add Frag to table body
+                alert("This browser doesn't support dynamic tables.");
+            }
+        }
+    } else {
+        goBack();
+    }
+
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+};
+
+function requestUpdate() {
+    var url = "/config/qos_map_rule?selectMapType=" + pageMapType + "&selectMapId=" + pageSelectMapId;
+    loadXMLDoc(url, processUpdate);
+}
+
+function MapIdSelect(sel)
+{
+    pageSelectMapId = sel.options[sel.selectedIndex].value;
+    requestUpdate();
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        requestUpdate();
+    }
+}
+
+function requestRemoveAll()
+{
+    // Format       : [selectMapType]/[selectMapId]/[ruleConfigFlag]/[selectRule1]/[selectRule2]
+        // <Edit>       :                /     [map_id]/               1/   [rule_id1]/   [rule_id2]
+        // <Delete>     :                /     [map_id]/               2/   [rule_id1]/   [rule_id2]
+        // <Delete All> :                /     [map_id]/               3/   [rule_id1]/   [rule_id2]
+        // <Add New>    :                /     [map_id]/               4/   [rule_id1]/   [rule_id2]
+    if (!confirm("All rules will be reset to defaults.\nDo you want to proceed anyway?")) {
+        return false;
+    }
+    var url="/config/qos_map_rule?selectMapType=" + pageMapType + "&selectMapId=" + pageSelectMapId + "&ruleConfigFlag=3";
+    loadXMLDoc(url, processUpdate);
+    return true;
+}
+
+function goBack()
+{
+    if (pageMapType === 0) {
+        document.location.href = "qos_ingress_map.htm";
+    } else {
+        document.location.href = "qos_egress_map.htm";
+    }
+}
+
+</script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<div class="refreshbar">
+  <form action="#">
+  <select id="mapIdSel" onchange="MapIdSelect(this);">
+    <option value="0">0</option>
+  </select>
+  </form>
+  <form action="#">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+  <input type="button"   value="Refresh"    id="refresh"     onclick="requestUpdate();    this.blur();">
+  <input type="button"   value="Remove All" id="removeall"   onclick="requestRemoveAll(); this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+ </form>
+</div>
+
+<form id="qosMapRule" method="POST" action="/config/qos_map_rule">
+
+<h1>QoS Map Rules - <span id="displayMapType"></span> Map <span id="displayMapId"></span></h1>
+
+<h1>Rules with Key <span id="displayMapData1"></span></h1>
+<table summary="QoS Map Rules Type 1" class="display">
+  <tbody id="mapData1">
+  </tbody>
+</table>
+<br>
+
+<h1>Rules with Key <span id="displayMapData2"></span></h1>
+<table summary="QoS Map Rules Type 2" class="display">
+ <tbody id="mapData2">
+ </tbody>
+</table>
+
+<p>
+ <input type="button" value="Back" onclick="goBack();">
+</p>
+
+</form>
+
+<!-- IE caching bug -->
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</body>
+</html>
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

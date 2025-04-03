@@ -1,0 +1,435 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>RedBox Configuration Help</title>
+ <link href="/lib/help.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="/lib/config.js"></script>
+ <script type="text/javascript" src="/lib/mootools-core.js"></script>
+ <script type="text/javascript" src="/lib/dynforms.js"></script>
+ <script type="text/javascript" src="/lib/ajax.js"></script>
+ <script type="text/javascript" src="/lib/spom.js"></script>
+ <script type="text/javascript" src="/lib/format.js"></script>
+ <script type="text/javascript" src="/lib/json.js"></script>
+ <script type="text/javascript" src="../redbox_lib.js"></script>
+ <script type="text/javascript" language="JavaScript">
+
+var globals;
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    // On-the-fly-update all min/max/default fields.
+    $("InstCntMax").innerHTML             = globals.capabilities.InstCntMax;
+    $("NtAgeTimeMin").innerHTML           = globals.capabilities.NtAgeTimeMin;
+    $("NtAgeTimeMax").innerHTML           = globals.capabilities.NtAgeTimeMax;
+    $("PntAgeTimeMin").innerHTML          = globals.capabilities.PntAgeTimeMin;
+    $("PntAgeTimeMax").innerHTML          = globals.capabilities.PntAgeTimeMax;
+    $("DdAgeTimeMin").innerHTML           = globals.capabilities.DdAgeTimeMin;
+    $("DdAgeTimeMax").innerHTML           = globals.capabilities.DdAgeTimeMax;
+    $("SvFrameIntervalMin").innerHTML     = globals.capabilities.SvFrameIntervalMin;
+    $("SvFrameIntervalMax").innerHTML     = globals.capabilities.SvFrameIntervalMax;
+    $("NtAgeTimeDefault").innerHTML       = globals.default_conf.NtAgeTime;
+    $("PntAgeTimeDefault").innerHTML      = globals.default_conf.PntAgeTime;
+    $("DdAgeTimeDefault").innerHTML       = globals.default_conf.DdAgeTime;
+    $("SvVlanDefault").innerHTML          = globals.default_conf.SvVlan;
+    $("SvPcpDefault").innerHTML           = globals.default_conf.SvPcp;
+    $("SvDmacLsbDefault").innerHTML       = redbox_lib_d2h(globals.default_conf.SvDmacLsb, 2);
+    $("SvFrameIntervalDefault").innerHTML = globals.default_conf.SvFrameInterval;
+    $("SvXlatPrpToHsrDefault").innerHTML  = globals.default_conf.SvXlatPrpToHsr ? "checked" : "unchecked";
+    $("SvXlatHsrToPrpDefault").innerHTML  = globals.default_conf.SvXlatPrpToHsr ? "checked" : "unchecked";
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    var str;
+
+    globals = {capabilities: {}, default_conf: {}};
+    redbox_lib_json_request(globals, on_globals_received);
+
+    // Possible configurational warnings
+    str = "<ul>";
+
+    Object.values(redbox_lib_oper_warnings_map).forEach(function(val) {
+        if (val != "None") {
+            str += "<li>" + val + "</" + "li>"; // Trick to avoid Tidy error
+        }
+    });
+
+    str += "</" + "ul>"; // Trick to avoid Tidy error
+
+    $("oper_warnings").innerHTML = str;
+});
+ </script>
+</head>
+
+<body>
+<h1>RedBox Configuration Help</h1>
+
+<p>This page allows the user to inspect and modify the current <a
+href="glossary.htm#RedBox" class="glossary">RedBox</a> configurations.</p>
+
+There is one row per possible RedBox instance. A RedBox instance must be created
+before it is configurable. The buttons in the Action column allow for this.
+
+<dl>
+  <dt>Action</dt>
+  <dd>
+    To create a given RedBox instance, press the Create button. Already created
+    RedBox instances can be deleted with a click on the Delete button.<br/>
+    Notice that the click itself doesn't change the underlying configuration.
+    Only when the Save button is clicked, will the configuration take effect.
+  </dd>
+
+  <dt>Instance</dt>
+  <dd>
+    Identifies the RedBox instance number.
+  </dd>
+
+  <dt>Enable</dt>
+  <dd>
+    Enables or disables a given RedBox instance. If enabling, a click on the
+    Save button causes software to perform additional checks before actually
+    enabling the RedBox instance in hardware. If a check fails, the user will
+    get notified.<br/>
+
+    If disabling, the RedBox instance is removed entirely from hardware.
+  </dd>
+
+  <!-- Don't delete the anchor. It may be referred to from other pages -->
+  <dt><a name="mode">Mode</a></dt>
+  <dd>
+     A RedBox may run in one of four different modes:
+     <ul>
+       <li>PRP-SAN</li>
+       <li>HSR-SAN</li>
+       <li>HSR-PRP</li>
+       <li>HSR-HSR</li>
+     </ul>
+
+     In PRP-<a href="glossary.htm#RedBox-SAN" class="glossary">SAN</a> mode, the
+     two <a href="glossary.htm#LRE" class="glossary">LRE</a> ports (Port A and
+     Port B) are connected to the PRP network's LAN A and LAN B, respectively.
+     Port C corresponds to the remaining ports in the switch core and makes up
+     the 'gateway' to the SAN network. Port C is also known as the interlink
+     port.<br/>
+
+     In HSR-SAN mode, the two LRE ports (Port A and Port B) connect to the HSR
+     ring and the switch core (Port C) connects to the SAN network.<br/>
+
+     In HSR-PRP mode, the two LRE ports connect to the HSR ring managed by this
+     RedBox instance and Port C connects to a PRP network - either LAN A or LAN
+     B.<br/>
+
+     In HSR-HSR mode, the two LRE ports connect to the HSR ring managed by this
+     RedBox instance and Port C connects to another RedBox' Port C. You may
+     think of the connection between the two RedBoxes as a wire. The other
+     RedBox may or may not be located on the same device as this RedBox.
+  </dd>
+
+  <dt>Port A</dt>
+  <dd>
+    Select the physical interface that constitues LRE Port A. A given physical
+    port can serve only one specific RedBox instance. The drop-down box lists
+    only those interfaces that the corresponding RedBox supports.<br/>
+
+    It is possible to 'serialize' two or more RedBoxes by utilizing a special
+    port called 'Neighbor'. With this interface, an internal connection is made
+    to connect one RedBox to another, freeing up two physical ports on the
+    device for other purposes.<br/>
+
+    RedBox instance 1's Port A does not have a Neighbor option, because there
+    is no RedBox 'to the left' of RedBox #1. Likewise, RedBox instance
+    <span id="InstCntMax">?</span>'s Port B does not have a Neighbor option,
+    because there is no RedBox 'to the right' of the last RedBox instance.
+  </dd>
+
+  <dt>Port B</dt>
+  <dd>
+    Select the physical interface that constitues LRE Port B. See description of
+    Port A for details.
+  </dd>
+
+  <dt>Net ID</dt>
+  <dd>
+    The Net ID (called 'NetId' in IEC-62439-3) is a number between 1 and 7 and
+    is used in HSR-PRP and HSR-HSR modes, only.<br/>
+
+    The Net ID is along with the LAN ID ('LanId' in IEC-62439-3) used to form
+    the 4-bit Path ID ('PathId' in IEC-62439-3), which is used in frames
+    transmitted to the RedBox' HSR ring.<br/>
+
+    In the other direction, it is used to prevent frames originated by this
+    RedBox to return to the interlink and the PRP network (in HSR-PRP mode) or
+    accompanying HSR RedBox (in HSR-HSR mode), by a method known as Net ID
+    filtering: Frames arriving on the LRE ports carrying the same Net ID as the
+    RedBox is configured with will be filtered towards Port C.
+  </dd>
+
+  <dt>LAN ID</dt>
+  <dd>
+    The LAN ID (called 'LanId' in IEC-62439-3) is used in HSR-PRP mode, only. It
+    tells the RedBox whether the PRP-side of the RedBox is connected to LAN A or
+    LAN B. In this way, the RedBox can convert the <a
+    href="glossary.htm#HSR-tag" class="glossary">HSR tag</a> in frames arriving
+    on LRE ports to a correct <a href="glossary.htm#RCT"
+    class="glossary">RCT</a> before it is sent to the PRP network.
+  </dd>
+
+  <dt>NodesTable Age Time</dt>
+  <dd>
+    The NodesTable keeps track of source MAC addresses (SMACs) of frames
+    received on LRE ports.<br/>
+
+    In PRP-SAN mode, the NodesTable is used to identify a node either as a SAN
+    or a DAN (DANP). The first time a given SMAC is seen on an LRE port, it is
+    marked as a SAN, so the frames coming from the interlink and destined to
+    that MAC address will be sent to one LRE port, only. If the same SMAC is
+    seen on both Port A and Port B - or a supervision frame is received for that
+    MAC address, the entry will be marked as a DAN, so that frames destined to
+    that MAC address and coming from the interlink will have an RCT added and
+    will be sent to both Port A and Port B. Frames arriving on LRE ports with
+    same &lt;SMAC, RCT.SeqNr&gt; tuple are subject to duplicate discarding.<br/>
+
+    In HSR modes (HSR-SAN, HSR-PRP, and HSR-HSR), the NodesTable serves a
+    slightly different purpose. The first time a given SMAC is seen on an LRE
+    port, that MAC address is added to the NodesTable as a DAN (SANs do not
+    exist on HSR rings in Mode H). Frames destined to that MAC address coming
+    from the interlink are always sent to both Port A and Port B with an HSR
+    tag, and frames arriving on both Port A and Port B are subject to duplicate
+    discarding based on the &lt;SMAC, HSR.SeqNr&gt; tuple.<br/>
+
+    The NodesTable Age Time determines the number of seconds a given entry
+    resides in the NodesTable after it was last seen on Port A or Port B.<br/>
+
+    Valid range is
+    <span id="NtAgeTimeMin">?</span> - <span id="NtAgeTimeMax">?</span> seconds
+    with a default of <span id="NtAgeTimeDefault">?</span> seconds.
+  </dd>
+
+  <dt>ProxyNodeTable Age Time</dt>
+  <dd>
+    The ProxyNodeTable keeps track of source MAC addresses (SMACs) of frames
+    received on the interlink port (Port C).<br/>
+
+    In PRP-SAN and HSR-SAN mode, all nodes in the ProxyNodeTable are considered
+    SANs, and frames coming from the LRE ports and leaving the interlink port
+    will have the RCT (PRP-SAN) or HSR tag (HSR-SAN) removed.<br/>
+
+    In HSR-PRP mode, a node in the ProxyNodeTable can either be a SAN or a
+    DAN (DANP). A supervision frame sent by a DANP in the PRP network will cause
+    the entry type to change from a SAN to a DAN. Once it is identified as a
+    DAN, subsequent frames arriving from the DANP must carry an RCT. If not,
+    those frames will be discarded by the RedBox and only forwarded in the PRP
+    network.<br/>
+
+    The ProxyNodeTable Age Time determines the number of seconds a given entry
+    resides in the ProxyNodeTable after it was last seen on the interlink port.
+    <br/>
+
+    Valid range is
+    <span id="PntAgeTimeMin">?</span> - <span id="PntAgeTimeMax">?</span>
+    seconds with a default of <span id="PntAgeTimeDefault">?</span> seconds.
+  </dd>
+
+  <dt>Duplicate Discard Age Time</dt>
+  <dd>
+    The Duplicate Discard Age Time determines how long the RedBox shall wait for
+    a copy of &lt;SMAC, SeqNr&gt; before the RedBox considers all copies
+    received and forgets the entry.<br/>
+
+    Valid range is
+    <span id="DdAgeTimeMin">?</span> - <span id="DdAgeTimeMax">?</span>
+    milliseconds with a default of <span id="DdAgeTimeDefault">?</span>
+    milliseconds.
+  </dd>
+
+  <dt>Supervision Frames VLAN ID</dt>
+  <dd>
+    The RedBox sends - towards the LRE ports - supervision frames on behalf of
+    SANs connected to the switch core side of the RedBox in PRP-SAN, HSR-SAN,
+    and HSR-PRP mode.<br/>
+
+    This field chooses the VLAN ID with which these supervision frames are
+    sent. If using the value 0, the RedBox sends with the interlink port's
+    native VLAN ID (the Port VLAN ID).<br/>
+
+    The RedBox software knows whether to actually tag the supervision frames
+    based on the interlink port's tagging configuration. It also knows whether
+    the interlink port is a member of the VLAN ID, and if not, it refrains from
+    sending supervision frames.<br/>
+
+    Notice: The RedBox hardware only supports recognizing HSR tags behind VLAN
+    tags with a TPID of 0x8100 (C-tag), so if the interlink port is configured
+    to VLAN tag with another TPID, the software sends with that TPID but
+    receiving RedBoxes may not understand this as a VLAN tag, so it will not be
+    able to find the HSR tag behind it, which may cause such frames to be
+    discarded. This goes for all sorts of frames, not only supervision frames.
+    <br/>
+
+    Valid range is 0 - 4095 with a default of <span id="SvVlanDefault">?</span>.
+  </dd>
+
+  <dt>Supervision Frames PCP</dt>
+  <dd>
+    Whenever the RedBox software determines that a frames should be transmitted
+    VLAN tagged, it also inserts a <a href="glossary.htm#PCP"
+    class="glossary">PCP</a> value into the VLAN tag. This value comes from this
+    configuration.<br/>
+
+    Notice, that even the native VLAN may have to be transmitted tagged, so the
+    PCP value may also matter when the VLAN ID is set to 0.<br/>
+
+    Valid range is 0 - 7 with a default of <span id="SvPcpDefault">?</span>.
+  </dd>
+
+  <dt>Supervision Frames DMAC LSByte</dt>
+  <dd>
+    This field controls the value used in the least significant byte of the
+    destination MAC address used in supervision frames sent by the RedBox, that
+    is the 'xx' of <tt>01:15:4E:00:01:xx</tt>.<br/>
+
+    A network operator can identify certain parts of the network through the use
+    of different values of this field.<br/>
+
+    Upon reception of supervision frames, the RedBox ignores the LSbyte.<br/>
+
+    Valid range is 0x00 - 0xFF with a default of
+    <span id="SvDmacLsbDefault">?</span>.
+  </dd>
+
+  <dt>Supervision Frames Interval</dt>
+  <dd>
+    The interval with which supervision frames are sent by this RedBox. To
+    avoid bursting of supervision frames, the first frame sent on behalf of a
+    SAN is transmitted after a random number of milliseconds between 0 and this
+    value. Subsequent supervision frames for a given SAN are transmitted this
+    value seconds apart.<br/>
+
+    Valid range is
+    <span id="SvFrameIntervalMin">?</span> - <span
+    id="SvFrameIntervalMax">?</span> seconds with a default of
+    <span id="SvFrameIntervalDefault">?</span> seconds.
+  </dd>
+
+  <dt>Supervision Frames PRP-to-HSR</dt>
+  <dd>
+    This field is only used in HSR-PRP mode.<br/>
+
+    When checked, supervision frames from the PRP network are software forwarded
+    as HSR supervision frames to the HSR ring.<br/>
+
+    When unchecked, supervision frames from the PRP network are hardware
+    forwarded without modifications to the HSR ring.<br/>
+
+    Especially older HSR-capable equipment that only supports supervision frames
+    of the HSR type require this option to be checked.<br/>
+
+    Except for changing the supervision frame type from PRP-Duplicate-Discard
+    or PRP-Duplicate-Accept to HSR when software forwarding, more checks are
+    done on the supervision frame, such as checks for correct RCT, correct DMAC
+    (except for least significant byte), correct TLV1.MAC, and correct TLV2.MAC.
+    These checks cannot be performed when hardware forwarding the frames.<br/>
+
+    Default is <span id="SvXlatPrpToHsrDefault">?</span id>.
+  </dd>
+
+  <dt><a name="hsr-to-prp">Supervision Frames HSR-to-PRP</a></dt>
+  <dd>
+    This field is only used in HSR-PRP mode.<br/>
+
+    When checked, supervision frames from the HSR ring are software forwarded
+    as PRP-Duplicate-Discard supervision frames to the PRP network.<br/>
+
+    When unchecked, supervision frames from the HSR ring are hardware forwarded
+    without modifications to the PRP network.<br/>
+
+    Especially older PRP-capable equipment that only supports supervision frames
+    of the PRP type require this option to be checked.<br/>
+
+    Except for changing the supervision frame type from HSR to
+    PRP-Duplicate-Discard when software forwarding, more checks are done on the
+    supervision frame, such as checks for correct HSR tag, correct DMAC
+    (except for least significant byte), correct TLV1.MAC, and correct TLV2.MAC.
+    These checks cannot be performed when hardware forwarding the frames.<br/>
+
+    Default is <span id="SvXlatHsrToPrpDefault">?</span id>.
+  </dd>
+
+  <dt><a name="oper_state">Operational State</a></dt>
+  <dd>
+    This shows the current operational state of a RedBox instance.<br/>
+
+    A color indicates the state as follows:
+    <ul>
+      <li>
+         <img src="../images/led-off.gif" alt="gray"/>:
+         The instance is not created or not enabled
+       </li>
+
+      <li>
+        <img src="../images/led-up.gif" alt="green"/>:
+        The instance is enabled with no configurational warnings
+      </li>
+
+      <li>
+        <img src="../images/led-yellow.gif" alt="yellow"/>:
+        The instance is enabled, but there are configurational warnings
+      </li>
+
+      <li>
+        <img src="../images/led-down.gif" alt="down"/>:
+        The instance is enabled, but an internal error has occurred. See console
+        or crashlog for details
+      </li>
+    </ul>
+
+    When yellow, hover the mouse over the image to see a list of
+    configurational warnings. The possible warnings are as follows:
+    <span id="oper_warnings">?</span><br/>
+
+    It is highly recommended to have a green color on enabled instances.<br/>
+
+    It is important to notice that not all configuration errors can be detected
+    by the RedBox software.
+  </dd>
+</dl>
+
+<h2>Buttons</h2>
+<p><input type="button" value="Save">: Click to save changes.</p>
+<p><input type="button" value="Reset">: Click to undo any changes made locally and revert to previously saved values.</p>
+<p><input type="button" value="Refresh">: Refresh the page with current configuration and status. Local changes will be lost.</p>
+
+</body>
+</html>
+

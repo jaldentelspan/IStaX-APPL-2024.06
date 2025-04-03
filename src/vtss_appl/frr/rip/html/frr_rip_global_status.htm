@@ -1,0 +1,247 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>OSPF Global Status</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_rip_global_status.htm";
+
+// Global variables
+var timerID; // For auto-refresh button
+
+var myDynamicTable; // For dynamic table
+
+var oTVerType = Array("version 1", "version 2", "Default");
+var oVVerType = Array("v1", "v2", "default");
+
+var VerType = {
+    "v1": "Version 1",
+    "v2": "Version 2",
+    "default": "Default"
+};
+
+var RedistType = {
+    "true": "Enable",
+    "false": "Disable"
+};
+
+/* Send the HTML request */
+function sendRequest() {
+    requestJsonDoc("rip.status.general.get", null, requestUpdate, "statu");
+}
+
+/* Clear RIP process */
+function clearRipProcess() {
+    if (confirm("RIP process will be reset.\nDo you want to proceed anyway?")) {
+        requestJsonDoc("rip.control.globals.set", [{ "ReloadProcess": true }]);
+        milliSleep(500); // Made a little bit delay here to wait the RIP re-processing
+        sendRequest();
+    }
+}
+
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 1;
+    var table_rows = new Array();
+
+    if(!recv_json.RouterModeIsEnabled) {
+        table_rows = [
+            {
+                fields: [
+                    { type: "text", params: ["Status Information", "param_label", 2] }
+                ]
+            },
+            {
+                fields: [
+                    { type: "text", params: ["RIP Router Mode", "displaytext"]},
+                    { type: "text", params: ["Disabled", "cr"] }
+                ]
+            }
+        ];
+        return table_rows;
+    }
+
+    table_rows = [
+        {
+            fields: [
+                { type: "text", params: ["Status Information", "param_label", 2] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Version", "displaytext"]},
+                { type: "text", params: [VerType[recv_json.version], "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Update Timer", "displaytext"]},
+                { type: "text", params: [recv_json.UpdateTimer + " secs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Invalid Timer", "displaytext"]},
+                { type: "text", params: [recv_json.InvalidTimer + " secs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Garbage-Collection Timer", "displaytext"]},
+                { type: "text", params: [recv_json.GarbageCollectionTimer + " secs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Next Update Time", "displaytext"]},
+                { type: "text", params: [recv_json.NextUpdateTime + " secs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Redistribute Default Metric", "displaytext"]},
+                { type: "text", params: [recv_json.RedistDefMetric , "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Redistribute Connected", "displaytext"] },
+                { type: "text", params: [RedistType[recv_json.IsRedistributeConnected], "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Redistribute Static", "displaytext"] },
+                { type: "text", params: [RedistType[recv_json.IsRedistributeStatic], "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Redistribute OSPF", "displaytext"] },
+                { type: "text", params: [RedistType[recv_json.IsRedistributeOSPF], "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Administrative Distance", "displaytext"]},
+                { type: "text", params: [recv_json.AdminDistance, "cr"] }
+            ]
+        }
+    ];
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected OSPF instance ID
+    // or equals the default configuration.
+    var myConf = Array();
+    myConf = recv_json;
+
+    // Save the received JSON data (both of the original and filted)
+    myDynamicTable.saveRecvJson(name, myConf);
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("rip.status.general.get", null, processUpdate, "status");
+}
+
+function checkRefresh(fld) {
+    if (fld.checked) {
+        sendRequest();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+/* Initialize resources when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+
+    // This table requires two JSON data(status/ospfInstanceIdInfo).
+    // To ensure the completed data, we request the configured data after the
+    // instance data is received and it is requested only one time.
+    sendRequest();
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>RIP Global Status</h1>
+    <div class="refreshbar">
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        <input type="button" value="Clear RIP Process" onClick='clearRipProcess(); this.blur();'> &nbsp;&nbsp;&nbsp;&nbsp;
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="checkRefresh(this);">
+        <input type="button" value="Refresh" onClick='sendRequest(); this.blur();'>
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+    <p>&nbsp;</p>
+</body>
+
+</html>

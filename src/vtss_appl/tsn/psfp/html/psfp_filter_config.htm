@@ -1,0 +1,604 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>PSFP Stream Filter Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="psfp_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_psfp_filter_config.htm";
+
+// Global variables
+var configTable, globals, variables, new_filter_id;
+
+/******************************************************************************/
+// on_del_submit_done()
+/******************************************************************************/
+function on_del_submit_done(filter_id, error_msg, last)
+{
+    if (error_msg) {
+        alert(error_msg);
+        return;
+    }
+
+    // Only remove the deleted row from the table, so that we don't have to
+    // refresh everything. New rows will still be there.
+    configTable.delRow("_", "DeleteButton_" + filter_id);
+}
+
+/******************************************************************************/
+// on_del_button_click()
+/******************************************************************************/
+function on_del_button_click()
+{
+    var elm_ids = this.id.split("_"), filter_id;
+
+    if (elm_ids[0] == "newDeleteButton") {
+        configTable.delNewRow("_", this.id);
+    } else {
+        filter_id = elm_ids[1];
+        psfp_lib_json_submit("psfp.config.filter.del", [[filter_id]], on_del_submit_done);
+    }
+}
+
+/******************************************************************************/
+// on_add_button_click()
+/******************************************************************************/
+function on_add_button_click()
+{
+    row = add_row(new_filter_id, globals.filter_default_conf, undefined);
+    configTable.addNewRow(row);
+
+    enable_disable_row_update("new", new_filter_id);
+
+    // Put focus on the new row's ID.
+    $("newFilterId_" + new_filter_id).focus();
+    new_filter_id++;
+}
+
+/******************************************************************************/
+// field_is_hidden()
+// Found this on Stackoverflow.
+/******************************************************************************/
+function field_is_hidden(fld)
+{
+    return fld.offsetParent === null;
+}
+
+/******************************************************************************/
+// field_is_active()
+/******************************************************************************/
+function field_is_active(fld)
+{
+    return !fld.disabled && !field_is_hidden(fld);
+}
+
+/******************************************************************************/
+// validate_fld()
+// Returns 0 if fld_name not found.
+// Returns 1 if fld_name found, but is disabled.
+// Returns 2 if fld_name found and is enabled.
+/******************************************************************************/
+function validate_fld(fld_name)
+{
+    var fld;
+
+    fld = $(fld_name);
+
+    if (!fld) {
+        alert("Internal error: Unable to find field called " + fld_name);
+        return 0;
+    }
+
+    if (!field_is_active(fld)) {
+        // Don't check disabled or hidden fields, the caller's caller has made
+        // sure to set fields not used in this mode to their defaults in order
+        // not to have the JSON parser throw up.
+        return 1;
+    }
+
+    return 2;
+}
+
+/******************************************************************************/
+// validate_range()
+/******************************************************************************/
+function validate_range(inst, name, min, max, msg, val)
+{
+    var fld_name, result, elm_ids;
+
+    fld_name = name + "_" + inst;
+    result = validate_fld(fld_name);
+
+    if (result === 0) {
+        // Couldn't find the field.
+        return false;
+    } else if (result === 1) {
+        // Field is inactive. Use defaults.
+        elm_ids = name.split("new");
+        elm_ids = elm_ids.length === 1 ? elm_ids[0] : elm_ids[1];
+        val[0] = globals.filter_default_conf[elm_ids];
+        return true;
+    } else {
+        return isWithinRange(fld_name, min, max, msg, undefined, val) ? true : false;
+    }
+}
+
+/******************************************************************************/
+// validate()
+/******************************************************************************/
+function validate(inst, old, result)
+{
+    var val, prefix = old ? "" : "new";
+
+    if (!old) {
+        // New instance. Validate what the user has input.
+        val = [];
+        if (!validate_range(inst, "newFilterId", 0, globals.capabilities.FilterInstanceCntMax - 1, "Stream Filter ID", val)) {
+            return false;
+        }
+
+        result.FilterId = val[0];
+    } else {
+        result.FilterId = parseInt(inst, 10);
+    }
+
+    val = [];
+    if (!validate_range(inst, prefix + "StreamId", 1, globals.capabilities.StreamIdMax, "Stream ID", val)) {
+        return false;
+    }
+
+    result.StreamId = val[0];
+
+    val = [];
+    if (!validate_range(inst, prefix + "StreamCollectionId", 1, globals.capabilities.StreamCollectionIdMax, "Stream Collection ID", val)) {
+        return false;
+    }
+
+    result.StreamCollectionId = val[0];
+
+    val = [];
+    if (!validate_range(inst, prefix + "FlowMeterId", 0, globals.capabilities.FlowMeterInstanceCntMax - 1, "Flow Meter ID", val)) {
+        return false;
+    }
+
+    result.FlowMeterId = val[0];
+
+    val = [];
+    if (!validate_range(inst, prefix + "GateId", 0, globals.capabilities.GateInstanceCntMax - 1, "Stream Gate ID", val)) {
+        return false;
+    }
+
+    result.GateId = val[0];
+
+    val = [];
+    if (!validate_range(inst, prefix + "MaxSDUSize", 0, 20000, "Maximum SDU Size", val)) {
+        return false;
+    }
+
+    result.MaxSDUSize = val[0];
+    result.BlockDueToOversizeFrameEnable = $(prefix + "BlockDueToOversizeFrameEnable_" + inst).checked;
+
+    return true;
+}
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(filter_id, error_msg, last)
+{
+    if (error_msg) {
+        alert(error_msg);
+        return;
+    }
+
+    if (last) {
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_save_button_click()
+/******************************************************************************/
+function on_save_button_click()
+{
+    var json, key, keys, error, old_ids, new_ids, old_conf, new_conf, submit_conf, val, elm_ids, id;
+
+    // Get the full form that we are about to submit.
+    json = html2Json(tablesForm);
+
+    if (!json) {
+        // Nothing to post
+        return;
+    }
+
+    keys = Object.keys(json);
+
+    // Find all existing and new IDs. We use a map to overwrite as we progress
+    // in the search.
+    old_ids = {};
+    new_ids = {};
+
+    keys.forEach(function(key) {
+        elm_ids = key.split("_");
+        id      = parseInt(elm_ids[1], 10);
+
+        if (elm_ids[0].includes("new")) {
+            new_ids[id] = true;
+        } else {
+            old_ids[id] = true;
+        }
+    });
+
+    // Validate old input
+    old_conf = [];
+    keys = Object.keys(old_ids);
+    error = false;
+    keys.forEach(function(key) {
+        if (error) {
+            // Do nothing, except for letting the loop run out.
+        } else {
+            var result = {};
+            if (!validate(key, true, result)) {
+                error = true;
+            }
+
+            old_conf.push({"key": result.FilterId, "val": result});
+        }
+    });
+
+    if (error) {
+        return;
+    }
+
+    // Validate new input
+    new_conf = [];
+    keys = Object.keys(new_ids);
+    error = false;
+    keys.forEach(function(key) {
+        if (error) {
+            // Do nothing, except for letting the loop run out.
+        } else {
+            var result = {};
+            if (!validate(key, false, result)) {
+                error = true;
+            }
+
+            new_conf.push({"key": result.FilterId, "val": result, "id": "newFilterId_" + key});
+        }
+    });
+
+    if (error) {
+        return;
+    }
+
+    // If we are still here, we need to check whether the user has made new
+    // filters with existing IDs.
+    error = false;
+    new_conf.forEach(function(map, idx) {
+        if (error) {
+            // Gotta get out of here
+        } else if (psfp_lib_inst_get(old_conf, map.key)) {
+            // Make the field active.
+            $(map.id).focus();
+            alert("The new Stream Filter ID (" + map.key + ") already exists");
+            error = true;
+        } else {
+            // Not found in the existing map. See if user has duplicated new
+            // IDs.
+            new_conf.forEach(function(map2, idx2) {
+                if (map2.key == map.key && idx2 != idx) {
+                    alert("The same Stream Filter ID (" + map.key + ") specified twice");
+                    $(map2.id).focus();
+                    error = true;
+                }
+            });
+        }
+    });
+
+    if (error) {
+        return;
+    }
+
+    // Time to update.
+    // First append the new_conf array to old_conf, so that we can update in one
+    // go
+    old_conf.push.apply(old_conf, new_conf);
+
+    // Convert it to what psfp_lib_json_submit likes.
+    submit_conf = [];
+    old_conf.forEach(function(map, idx) {
+        submit_conf.push([map.key, map.val]);
+    });
+
+    // We use the add() function, because the set() function requires the ID to
+    // exist.
+    psfp_lib_json_submit("psfp.config.filter.add", submit_conf, on_submit_done);
+}
+
+/******************************************************************************/
+// on_reset_button_click()
+/******************************************************************************/
+function on_reset_button_click()
+{
+    configTable.resetEvent();
+
+    // Also update enable/disable
+    enable_disable_update();
+}
+
+/******************************************************************************/
+// on_stream_type_change()
+/******************************************************************************/
+function on_stream_type_change(new_str, filter_id)
+{
+    var fld;
+
+    fld = $(new_str + "StreamType_" + filter_id);
+
+    if (!fld) {
+        // Not visible yet
+        return;
+    }
+
+    $(new_str + "StreamId_"           + filter_id).disabled = fld.value != "0";
+    $(new_str + "StreamCollectionId_" + filter_id).disabled = fld.value == "0";
+}
+
+/******************************************************************************/
+// on_flow_meter_id_enable_click()
+/******************************************************************************/
+function on_flow_meter_id_enable_click(new_str, filter_id)
+{
+    var fld;
+
+    fld = $(new_str + "FlowMeterIdEnable_" + filter_id);
+
+    if (!fld) {
+        // Not visible yet
+        return;
+    }
+
+    $(new_str + "FlowMeterId_" + filter_id).disabled = !fld.checked;
+}
+
+/******************************************************************************/
+// on_gate_id_enable_click()
+/******************************************************************************/
+function on_gate_id_enable_click(new_str, filter_id)
+{
+    var fld;
+
+    fld = $(new_str + "GateIdEnable_" + filter_id);
+
+    if (!fld) {
+        // Not visible yet
+        return;
+    }
+
+    $(new_str + "GateId_" + filter_id).disabled = !fld.checked;
+}
+
+/******************************************************************************/
+// enable_disable_row_update()
+/******************************************************************************/
+function enable_disable_row_update(new_str, filter_id)
+{
+    on_stream_type_change(        new_str, filter_id);
+    on_flow_meter_id_enable_click(new_str, filter_id);
+    on_gate_id_enable_click(      new_str, filter_id);
+}
+
+/******************************************************************************/
+// enable_disable_update()
+/******************************************************************************/
+function enable_disable_update()
+{
+    var elems, i, fld_name, elm_ids, new_str;
+
+    elems = document.getElementsByTagName("*");
+    for (i = 0; i < elems.length; i++) {
+        if (elems[i].id.indexOf("StreamType_") !== -1) {
+            fld_name = elems[i].id;
+            elm_ids = fld_name.split("_");
+            if (elm_ids[0] == "newStreamType") {
+                new_str = "new";
+            } else {
+                new_str = "";
+            }
+
+            enable_disable_row_update(new_str, elm_ids[1]);
+        }
+    }
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Delete"]},
+        {type: "disp_hdr", params: ["Stream Filter ID"]},
+        {type: "disp_hdr", params: ["Stream Type"]},
+        {type: "disp_hdr", params: ["Stream ID"]},
+        {type: "disp_hdr", params: ["Stream Collection ID"]},
+        {type: "disp_hdr", params: ["Flow Meter Enable"]},
+        {type: "disp_hdr", params: ["Flow Meter ID"]},
+        {type: "disp_hdr", params: ["Stream Gate Enable"]},
+        {type: "disp_hdr", params: ["Stream Gate ID"]},
+        {type: "disp_hdr", params: ["Maximum SDU Size"]},
+        {type: "disp_hdr", params: ["Block Oversize Frame Enable"]},
+        {type: "disp_hdr", params: ["Warnings"]}]
+    });
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(filter_id, conf, statu)
+{
+    var row, id_row, new_str;
+
+    if (statu) {
+        // Existing flow meter
+        new_str = "";
+        id_row = {type: "text", params: [filter_id, "cr"]};
+    } else {
+        // New flow meter
+        new_str = "new";
+        id_row = {type: "input", params: ["", "cr", "newFilterId_" + filter_id, 4, 4, "103px"]};
+    }
+
+    row = {fields: [
+        {type: "button", params: ["Delete", "c", new_str + "DeleteButton_" + filter_id, on_del_button_click]},
+        id_row,
+        {type: "select", params: [["Stream", "Stream Collection"], [0, 1], conf.StreamCollectionId === 0 ? 0 : 1, "cl", new_str + "StreamType_" + filter_id, undefined, undefined, undefined, function() {on_stream_type_change(new_str, filter_id);}]},
+        {type: "input",  params: [conf.StreamId           === 0 ? "" : conf.StreamId,           "cr", new_str + "StreamId_"           + filter_id]},
+        {type: "input",  params: [conf.StreamCollectionId === 0 ? "" : conf.StreamCollectionId, "cr", new_str + "StreamCollectionId_" + filter_id]},
+        {type: "chkbox", params: [conf.FlowMeterId != psfp_lib_flow_meter_id_none, "c",  new_str + "FlowMeterIdEnable_" + filter_id, function() {on_flow_meter_id_enable_click(new_str, filter_id);}]},
+        {type: "input",  params: [conf.FlowMeterId == psfp_lib_flow_meter_id_none ? "" : conf.FlowMeterId, "cr", new_str + "FlowMeterId_"       + filter_id, 8, 8]},
+        {type: "chkbox", params: [conf.GateId      != psfp_lib_gate_id_none,            "c",  new_str + "GateIdEnable_"      + filter_id, function() {on_gate_id_enable_click(new_str, filter_id);}]},
+        {type: "input",  params: [conf.GateId      == psfp_lib_gate_id_none       ? "" : conf.GateId,      "cr", new_str + "GateId_"            + filter_id, 8, 8]},
+        {type: "input",  params: [conf.MaxSDUSize,         "cr", new_str + "MaxSDUSize_"        + filter_id, 14, 5]},
+        {type: "chkbox", params: [conf.BlockDueToOversizeFrameEnable, "c", new_str + "BlockDueToOversizeFrameEnable_" + filter_id]},
+        {type: "image",  params: ["c", psfp_lib_filter_warnings_to_image(statu), psfp_lib_filter_warnings_to_str(statu)]}]
+    };
+
+    if (statu) {
+        // This is an existing row. We can identify it my setting a key called
+        // 'idx' to filter_id. This allows us to call delRow() if the user hits
+        // the Delete button, and only delete the row without refreshing the
+        // rest of the table.
+        row.idx = filter_id;
+    } else {
+        // This is a new row. We can identify it by setting a key called
+        // 'new_idx' to filter_id. This allows us to call delNewRow() if the
+        // user hits the Delete button.
+        row.new_idx = filter_id;
+    }
+
+    psfp_lib_disable_button_add(new_str + "DeleteButton_" + filter_id);
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows = new Array();
+
+    // Add table header
+    add_header(table_rows);
+
+    // Add one row per filter ID.
+    Object.each(variables.filter_conf, function(record, idx) {
+        table_rows.push(add_row(record.key, record.val, variables.filter_statu[idx].val));
+    });
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    var table_rows;
+
+    new_filter_id = 0;
+
+    // Add table rows
+    table_rows = add_rows();
+    configTable.addRows(table_rows);
+
+    // Update this dynamic table
+    configTable.update();
+
+    enable_disable_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    // Make sure to get rid of old new-rows.
+    configTable.restore();
+
+    variables = {filter_conf: {}, filter_statu: {}};
+    psfp_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    configTable = new DynamicTable("FilterTableContent", "config");
+
+    psfp_lib_disable_button_add("refresh_button");
+    psfp_lib_disable_button_add("save_button");
+
+    globals = {capabilities: {}, filter_default_conf: {}};
+    psfp_lib_json_request(globals, requestUpdate);
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>PSFP Stream Filter Configuration</h1>
+
+<div class="refreshbar">
+  <input type="button" id="refresh_button" value="Refresh" onclick="requestUpdate(); this.blur();"/>
+  <img id="psfp_update" alt="" src="images/updating.gif">
+</div>
+
+<form id="tablesForm" action="">
+  <div id="FilterTableContent"></div>
+</form>
+
+<p>
+  <input type="button"                  value="Add"   onclick="on_add_button_click();"/>
+  <input type="button" id="save_button" value="Save"  onclick="on_save_button_click();"/>
+  <input type="button"                  value="Reset" onclick="on_reset_button_click();"/>
+</p>
+
+</body>
+</html>
+

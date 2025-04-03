@@ -1,0 +1,250 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>DHCP Server Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript" src="lib/deviceid.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_dhcp_server_mode.htm";
+
+var reqObject;
+
+var vlan_frag;
+var vlan_id          = 0;
+var vlan_cnt         = 0;
+var vlan_static_cnt  = 0;
+var vlan_add_max_cnt = 8;
+
+var tr_id_prefix = "vlan_tr_";
+
+var oTMode = Array("Disabled", "Enabled");
+var oVMode = Array(0, 1);
+
+var delete_style_width = "6em";
+var txt_style_width    = "10em";
+var input_style_width  = "4em";
+
+function CreateRangeTableHeader( frag )
+{
+    var tr;
+
+    tr = CreateStyledElement("tr", "config_header");
+
+    addTextHeaderCell(tr, "VLAN", "hdrc");
+    addTextHeaderCell(tr, "Enabled", "hdrc");
+
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+function addVlanRow(frag, index, vid, enabled)
+{
+    var tr;
+
+    tr = CreateStyledElement("tr", index % 2 ? "config_even" : "config_odd");
+    addTextCell(tr, vid, "cl");
+    addCheckBoxCell(tr, parseInt(enabled, 10), "c", "vlan_mode_" + vid);
+
+    // Add row to fragment
+    frag.appendChild( tr );
+}
+
+function processUpdate( req, ref )
+{
+    var i, n, configData, vlan_list, tbody;
+
+    if ( req.responseText === null ) {
+        return;
+    }
+
+    if ( reqObject != req ) {
+        reqObject = req;
+    }
+
+    //
+    //  Format: <global_mode>|<vlan_list>
+    //      <global_mode>   : 0 - disabled, 1 - enabled
+    //      <vlan_list>     : 1,3,5-9,1000
+    //
+
+    // get mode and list
+    configData = req.responseText.split("|");
+
+	// Global Mode
+    UpdateIdSelect("global_mode", oTMode, oVMode, parseInt(configData[0], 10));
+
+    // VLAN Enabled Setting
+    vlan_frag = document.createDocumentFragment();
+
+    // create header
+    CreateRangeTableHeader( vlan_frag );
+
+	// <vlan_list>
+    vlan_list = configData[1].split(",");
+    for(i = 0, n = 0; i < vlan_list.length; i++) {
+        vid = vlan_list[i].split(":")[0];
+        enabled = vlan_list[i].split(":")[1];
+        addVlanRow(vlan_frag, ++n, vid, enabled);
+    }
+
+    // Add Frag to table body
+    tbody = document.getElementById("vlanData");
+    clearChildNodes( tbody );
+    if ( ! tbody.appendChild(vlan_frag) ) {
+        alert("This browser doesn't support dynamic tables.");
+    }
+}
+
+function resetForm()
+{
+    processUpdate(reqObject, "");
+}
+
+function requestUpdate()
+{
+    loadXMLDoc("/config/dhcp_server_mode", processUpdate, "");
+}
+
+function checkForm( form )
+{
+    var     i, fld_low, fld_high;
+
+    // check format
+    for ( i = 1; i <= vlan_add_max_cnt; i++ ) {
+        fld_low = document.getElementById("vlan_low_" + i);
+        if ( fld_low === null ) {
+            continue;
+        }
+
+        if ( fld_low.value !== "" ) {
+            if ( ! isInt(fld_low.value) ) {
+                GiveAlert("Invalid VLAN ID, "+fld_low.value+". VLAN ID must be an integer.", fld_low);
+                return false;
+            }
+        }
+
+        fld_high = document.getElementById("vlan_high_" + i);
+        if ( fld_high.value !== "" ) {
+            if ( ! isInt(fld_high.value) ) {
+                GiveAlert("Invalid VLAN ID, "+fld_high.value+". VLAN ID must be an integer.", fld_high);
+                return false;
+            }
+        }
+
+        if ( fld_low.value === "" && fld_high.value === "" ) {
+            continue;
+        }
+
+        if ( fld_low.value === "" && fld_high.value !== "" ) {
+            fld_low.value = fld_high.value;
+        }
+
+        if ( fld_low.value !== "" && fld_high.value === "" ) {
+            fld_high.value = fld_low.value;
+        }
+
+        if ( fld_low.value < 1 || fld_low.value > 4095 ) {
+            GiveAlert("Invalid VLAN ID, "+fld_low.value+". VLAN valid range is 1 to 4095.", fld_low);
+            return false;
+        }
+
+        if ( fld_high.value < 1 || fld_high.value > 4095 ) {
+            GiveAlert("Invalid VLAN ID, "+fld_high.value+". VLAN valid range is 1 to 4095.", fld_high);
+            return false;
+        }
+
+        if ( parseInt(fld_low.value, 10) > parseInt(fld_high.value, 10) ) {
+            GiveAlert("Low VLAN "+fld_low.value+" can not be larger than high VLAN "+fld_high.value+".", fld_low);
+            return false;
+        }
+    }
+
+    return true; // Feed the chickens and go home
+}
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<form method="POST" action="/config/dhcp_server_mode" onsubmit="return checkForm(this);">
+
+<h1>DHCP Server Mode Configuration</h1>
+
+<h2>Global Mode</h2>
+
+<table summary="Configuration" cellspacing="0" class="config">
+ <tr class="config">
+  <td class="param_label">Mode</td>
+  <td class="cl"><select id="global_mode" name="global_mode"><option value=0>Disabled</option><option value=1>Enabled</option></select></td>
+ </tr>
+</table>
+
+<br>
+
+<h2>VLAN Mode</h2>
+
+<table id="vlanTable" summary="DHCP Server Configuration" cellspacing="0" class="config">
+ <tbody id="vlanData">
+ </tbody>
+</table>
+
+<br>
+
+<p>
+<input type="submit" value="Save">
+<input type="button" value="Reset" onclick="resetForm();">
+<!--
+    When no input data and press Save button, the page will display "The webpage cannot be found"
+    because "400 Bad Request".
+    So, to avoid no any input data when no checkbox is checked and no new range is added,
+    this dummy will be sent.
+-->
+<input type="hidden" name="dummy">
+</p>
+
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

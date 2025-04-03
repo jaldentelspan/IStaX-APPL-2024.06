@@ -1,0 +1,286 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>TAS SDU Configuration</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="tsn_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_tsn_port_tas_max_sdu.htm";
+
+var myPortInfo, myCapabilities, myDynamicTable;
+var oTPort = Array(), oVPort = Array();
+
+function isValidSdu(fld_id, start_text)
+{
+    // Default values
+    var minval  = myCapabilities.TasMinSdu;
+    var maxval  = myCapabilities.TasMaxSdu;
+    var val;
+
+    if(!start_text) {
+      start_text = fld_id; // What else to do?
+    }
+
+    var fld = document.getElementById(fld_id);
+    if(!fld) {
+        // Programming error
+        return GiveAlert("No such field: " + fld_id, fld);
+    }
+
+    val = fld.value;
+
+    if(!isInt(val) || ((val < minval || val > maxval) && parseInt(val,10) !== 0)) {
+        return GiveAlert(start_text + " must be an integer value between " + minval + " and " + maxval  + " or 0.", fld);
+    } else {
+        return true;
+    }
+}
+
+function addSduRow(key, queue)
+{
+    var port = key[0].split(" ")[1].split("/")[1];
+    var intrfc = key[0].split(" ")[0];
+    var row = {
+        fields:[
+                {type:"text",   params:[oTPort[oVPort.indexOf(key[0])], "cr"]},
+                {type:"input",  params:[queue[0], "cr", "q0_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q0_" + intrfc + port, "Q0"]}},
+                {type:"input",  params:[queue[1], "cr", "q1_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q1_" + intrfc + port, "Q1"]}},
+                {type:"input",  params:[queue[2], "cr", "q2_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q2_" + intrfc + port, "Q2"]}},
+                {type:"input",  params:[queue[3], "cr", "q3_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q3_" + intrfc + port, "Q3"]}},
+                {type:"input",  params:[queue[4], "cr", "q4_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q4_" + intrfc + port, "Q4"]}},
+                {type:"input",  params:[queue[5], "cr", "q5_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q5_" + intrfc + port, "Q5"]}},
+                {type:"input",  params:[queue[6], "cr", "q6_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q6_" + intrfc + port, "Q6"]}},
+                {type:"input",  params:[queue[7], "cr", "q7_" + intrfc + port, 6,6],
+                                validate:{func:isValidSdu, params:["q7_" + intrfc + port, "Q7"]}}
+        ]
+    };
+    return row;
+}
+
+function addHeader(table_rows)
+{
+    var row;
+
+    row = {fields:[
+             {type:"disp_hdr", params:["Port",1 ,2]},
+             {type:"disp_hdr", params:["Max SDU Size",8]}
+             ]
+          };
+    table_rows.push(row);
+
+    row = {fields:[
+             {type:"disp_hdr", params:["Q0"]},
+             {type:"disp_hdr", params:["Q1"]},
+             {type:"disp_hdr", params:["Q2"]},
+             {type:"disp_hdr", params:["Q3"]},
+             {type:"disp_hdr", params:["Q4"]},
+             {type:"disp_hdr", params:["Q5"]},
+             {type:"disp_hdr", params:["Q6"]},
+             {type:"disp_hdr", params:["Q7"]}
+             ]
+          };
+    table_rows.push(row);
+}
+
+function addRows(recv_json)
+{
+    var table_rows = new Array();
+    var queue = new Array();
+    var previous = 1;
+    var prev_key;
+
+    // Add table header
+    addHeader(table_rows);
+
+    Object.each(recv_json, function(record) {
+        var interface_val = record.key[0];
+        var port_no = interface_val.split(" ")[1].split("/")[1];
+        var queue_id = record.key[1];
+        if (port_no == previous) {
+            queue[queue_id] = record.val.MaxSDU;
+        } else {
+            table_rows.push(addSduRow(prev_key, queue));
+            queue[queue_id] = record.val.MaxSDU;
+        }
+        previous = port_no;
+        prev_key = record.key; 
+    });
+    table_rows.push(addSduRow(prev_key, queue));
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson("config", recv_json);
+
+    myDynamicTable.addRows(addRows(recv_json));
+    // Update this dynamic table
+    myDynamicTable.update();
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+                                { text: "*", className: "c" },
+                                { name: "q0_" },
+                                { name: "q1_" },
+                                { name: "q2_" },
+                                { name: "q3_" },
+                                { name: "q4_" },
+                                { name: "q5_" },
+                                { name: "q6_" },
+                                { name: "q7_" }
+                                ]);
+
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+
+    // This table requires one JSON data.
+    requestJsonDoc("tsn.config.interface.tas.maxSdu.get", null, processUpdate);
+}
+
+function submitForms()
+{
+    var set_performed = 0;
+    // Validate row data
+    if (!myDynamicTable.validate()) {
+        return;
+    }
+    var recv_json = myDynamicTable.getRecvJson("config");
+    var json_obj = {"MaxSDU":0}; // Define structure for JSON requests. Value will be assigned in the Object.each loop
+
+    resetPending(); // Prepare for JSON requests
+    Object.each(recv_json, function(record) {
+        var port = record.key[0].split(" ")[1].split("/")[1];
+        var intrfc = record.key[0].split(" ")[0];
+        var qNum = record.key[1];
+        json_obj["MaxSDU"] = $("q" + qNum + "_" + intrfc + port).value;
+        if (record.val.MaxSDU != json_obj["MaxSDU"]) {
+            set_performed = 1;
+            var submit_json = [record.key[0], record.key[1], json_obj];
+            incrementPending();
+            requestJsonDoc("tsn.config.interface.tas.maxSdu.set", submit_json, decrementPending);
+        }
+    });
+    if (set_performed) {
+        // Wait until all json requests have returned, but max 1000 ms.
+        requestUpdateWhenDone(1000);
+    }
+}
+
+function resetForms()
+{
+    myDynamicTable.resetEvent();
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get capabilities failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myCapabilities && myPortInfo) {
+        requestUpdate();
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a form with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config");
+    requestJsonDoc("tsn.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+});
+
+ </script>
+</head>
+
+<body class="content">
+<h1>TAS SDU Configuration</h1>
+
+<div class="refreshbar">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+<p>
+<input type="submit" value="Save" onclick="submitForms();">
+<input type="reset" value="Reset" onclick="resetForms();">
+</p>
+
+</body>
+</html>

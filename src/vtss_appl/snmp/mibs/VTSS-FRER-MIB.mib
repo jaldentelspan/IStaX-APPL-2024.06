@@ -1,0 +1,1437 @@
+-- *****************************************************************
+-- FRER-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-FRER-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Counter64 FROM SNMPv2-SMI
+    Integer32 FROM SNMPv2-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    TruthValue FROM SNMPv2-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSPortList FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    ;
+
+vtssFrerMib MODULE-IDENTITY
+    LAST-UPDATED "202402010000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "Private MIB for Frame Replication and Elimination for Reliability,
+         FRER."
+    REVISION    "202402010000Z"
+    DESCRIPTION
+        "Added support for Stream Collections and pop of outer VLAN tag in
+         generator mode"
+    REVISION    "202311100000Z"
+    DESCRIPTION
+        "Added StreamIdMax to capabilities"
+    REVISION    "202308290000Z"
+    DESCRIPTION
+        "Added number of ingress stream matches in generation mode"
+    REVISION    "202212190000Z"
+    DESCRIPTION
+        "Added one more capability, indicating the maximum supported number of
+         egress interfaces"
+    REVISION    "202202230000Z"
+    DESCRIPTION
+        "PSFP and FRER can now use same stream IDs, causing one less operational
+         warning"
+    REVISION    "202009020000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 157 }
+
+
+VTSSFrerFrerMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines whether FRER runs in generation or recovery
+         mode."
+    SYNTAX      INTEGER { generation(0), recovery(1) }
+
+VTSSFrerOperState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Operational state of a FRER instance"
+    SYNTAX      INTEGER { disabled(0), active(1), internalError(2) }
+
+VTSSFrerRecoveryAlg ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the chosen recovery algorithm."
+    SYNTAX      INTEGER { vector(0), match(1) }
+
+vtssFrerMibObjects OBJECT IDENTIFIER
+    ::= { vtssFrerMib 1 }
+
+vtssFrerCapabilities OBJECT IDENTIFIER
+    ::= { vtssFrerMibObjects 1 }
+
+vtssFrerCapabilitiesInstanceMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of creatable FRER instances.This value is 0 if FRER is
+         not supported on this platform."
+    ::= { vtssFrerCapabilities 1 }
+
+vtssFrerCapabilitiesMstreamMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of creatable member streams."
+    ::= { vtssFrerCapabilities 2 }
+
+vtssFrerCapabilitiesCstreamMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of creatable compound streams."
+    ::= { vtssFrerCapabilities 3 }
+
+vtssFrerCapabilitiesResetTimeoutMsecMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum value to configure for reset timer (in milliseconds)."
+    ::= { vtssFrerCapabilities 4 }
+
+vtssFrerCapabilitiesResetTimeoutMsecMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum value to configure for reset timer (in milliseconds)."
+    ::= { vtssFrerCapabilities 5 }
+
+vtssFrerCapabilitiesHistorylenMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum history length (when using vector recovery algorithm)."
+    ::= { vtssFrerCapabilities 6 }
+
+vtssFrerCapabilitiesHistorylenMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum history length (when using vector recovery algorithm)."
+    ::= { vtssFrerCapabilities 7 }
+
+vtssFrerCapabilitiesLaErrDifferenceMin OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum allowed sequence number distance used in latent error
+         detection."
+    ::= { vtssFrerCapabilities 8 }
+
+vtssFrerCapabilitiesLaErrDifferenceMax OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum allowed sequence number distance used in latent error
+         detection."
+    ::= { vtssFrerCapabilities 9 }
+
+vtssFrerCapabilitiesLaErrPeriodMsecMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum configurable latent error period in milliseconds."
+    ::= { vtssFrerCapabilities 10 }
+
+vtssFrerCapabilitiesLaErrPeriodMsecMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum configurable latent error period in milliseconds."
+    ::= { vtssFrerCapabilities 11 }
+
+vtssFrerCapabilitiesLaErrPathsMin OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum allowed number of paths used in latent error detection."
+    ::= { vtssFrerCapabilities 12 }
+
+vtssFrerCapabilitiesLaErrPathsMax OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum allowed number of paths used in latent error detection.."
+    ::= { vtssFrerCapabilities 13 }
+
+vtssFrerCapabilitiesLaErrResetPeriodMsecMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum configurable latent error reset period in milliseconds."
+    ::= { vtssFrerCapabilities 14 }
+
+vtssFrerCapabilitiesLaErrResetPeriodMsecMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum configurable latent error reset period in milliseconds."
+    ::= { vtssFrerCapabilities 15 }
+
+vtssFrerCapabilitiesEgressPortCntMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of egress ports."
+    ::= { vtssFrerCapabilities 16 }
+
+vtssFrerCapabilitiesStreamIdMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum value of a Stream ID."
+    ::= { vtssFrerCapabilities 17 }
+
+vtssFrerCapabilitiesStreamCollectionIdMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum value of a Stream Collection ID."
+    ::= { vtssFrerCapabilities 18 }
+
+vtssFrerConfig OBJECT IDENTIFIER
+    ::= { vtssFrerMibObjects 2 }
+
+vtssFrerConfigTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSFrerConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is the FRER instance configuration table."
+    ::= { vtssFrerConfig 1 }
+
+vtssFrerConfigEntry OBJECT-TYPE
+    SYNTAX      VTSSFrerConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a FRER instance"
+    INDEX       { vtssFrerConfigId }
+    ::= { vtssFrerConfigTable 1 }
+
+VTSSFrerConfigEntry ::= SEQUENCE {
+    vtssFrerConfigId                    Integer32,
+    vtssFrerConfigMode                  VTSSFrerFrerMode,
+    vtssFrerConfigFrerVlan              VTSSUnsigned16,
+    vtssFrerConfigEgressPorts           VTSSPortList,
+    vtssFrerConfigAlgorithm             VTSSFrerRecoveryAlg,
+    vtssFrerConfigHistoryLen            Unsigned32,
+    vtssFrerConfigResetTimeoutMsec      Unsigned32,
+    vtssFrerConfigTakeNoSequence        TruthValue,
+    vtssFrerConfigIndividualRecovery    TruthValue,
+    vtssFrerConfigTerminate             TruthValue,
+    vtssFrerConfigLaErrDetection        TruthValue,
+    vtssFrerConfigLaErrDifference       Unsigned32,
+    vtssFrerConfigLaErrPeriodMsec       Unsigned32,
+    vtssFrerConfigLaErrPaths            Unsigned32,
+    vtssFrerConfigLaErrResetPeriodMsec  Unsigned32,
+    vtssFrerConfigAdminActive           TruthValue,
+    vtssFrerConfigStreamId0             Unsigned32,
+    vtssFrerConfigStreamId1             Unsigned32,
+    vtssFrerConfigStreamId2             Unsigned32,
+    vtssFrerConfigStreamId3             Unsigned32,
+    vtssFrerConfigStreamId4             Unsigned32,
+    vtssFrerConfigStreamId5             Unsigned32,
+    vtssFrerConfigStreamId6             Unsigned32,
+    vtssFrerConfigStreamId7             Unsigned32,
+    vtssFrerConfigStreamCollectionId    Unsigned32,
+    vtssFrerConfigIngressOuterTagPop    TruthValue,
+    vtssFrerConfigAction                VTSSRowEditorState
+}
+
+vtssFrerConfigId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The FRER instance ID"
+    ::= { vtssFrerConfigEntry 1 }
+
+vtssFrerConfigMode OBJECT-TYPE
+    SYNTAX      VTSSFrerFrerMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Mode that this instance is running in."
+    ::= { vtssFrerConfigEntry 2 }
+
+vtssFrerConfigFrerVlan OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID that the streams identified by stream_ids get classified
+         to."
+    ::= { vtssFrerConfigEntry 3 }
+
+vtssFrerConfigEgressPorts OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "List of Egress ports."
+    ::= { vtssFrerConfigEntry 4 }
+
+vtssFrerConfigAlgorithm OBJECT-TYPE
+    SYNTAX      VTSSFrerRecoveryAlg
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The chosen recovery algorithm."
+    ::= { vtssFrerConfigEntry 5 }
+
+vtssFrerConfigHistoryLen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The vector recovery algorithm's history length."
+    ::= { vtssFrerConfigEntry 6 }
+
+vtssFrerConfigResetTimeoutMsec OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The reset time in milliseconds of the recovery algorithm."
+    ::= { vtssFrerConfigEntry 7 }
+
+vtssFrerConfigTakeNoSequence OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls latent error detection enabledness. Indicates whether
+         individual recovery is enabled on this FRER instance. When individual
+         recovery is enabled, each member flow will run the selected recovery
+         algorithm before passing it to the compound recovery, allowing for
+         detecting a sender that sends the same R-Tag sequence number over and
+         over again (see e.g. 802.1CB, Annex C.10)."
+    ::= { vtssFrerConfigEntry 8 }
+
+vtssFrerConfigIndividualRecovery OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether we are an end system that terminates recovery and
+         removes the R-tag before the frames are egressing."
+    ::= { vtssFrerConfigEntry 9 }
+
+vtssFrerConfigTerminate OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether we are an end system that terminates recovery and
+         removes the R-tag before the frames are egressing."
+    ::= { vtssFrerConfigEntry 10 }
+
+vtssFrerConfigLaErrDetection OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls latent error detection enabledness."
+    ::= { vtssFrerConfigEntry 11 }
+
+vtssFrerConfigLaErrDifference OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Specifies the maximum distance between the number of discarded packets
+         and the number of member streams multiplied by the number of passed
+         packets. Any larger difference will trigger the detection of a latent
+         error by the latent error test function."
+    ::= { vtssFrerConfigEntry 12 }
+
+vtssFrerConfigLaErrPeriodMsec OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of milliseconds between running the latent error test
+         function."
+    ::= { vtssFrerConfigEntry 13 }
+
+vtssFrerConfigLaErrPaths OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of paths that the latent error detection function operates
+         on."
+    ::= { vtssFrerConfigEntry 14 }
+
+vtssFrerConfigLaErrResetPeriodMsec OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of milliseconds between running the latent error reset
+         function."
+    ::= { vtssFrerConfigEntry 15 }
+
+vtssFrerConfigAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether this instance is active or not."
+    ::= { vtssFrerConfigEntry 16 }
+
+vtssFrerConfigStreamId0 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 0"
+    ::= { vtssFrerConfigEntry 50 }
+
+vtssFrerConfigStreamId1 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 1"
+    ::= { vtssFrerConfigEntry 51 }
+
+vtssFrerConfigStreamId2 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 2"
+    ::= { vtssFrerConfigEntry 52 }
+
+vtssFrerConfigStreamId3 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 3"
+    ::= { vtssFrerConfigEntry 53 }
+
+vtssFrerConfigStreamId4 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 4"
+    ::= { vtssFrerConfigEntry 54 }
+
+vtssFrerConfigStreamId5 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 5"
+    ::= { vtssFrerConfigEntry 55 }
+
+vtssFrerConfigStreamId6 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 6"
+    ::= { vtssFrerConfigEntry 56 }
+
+vtssFrerConfigStreamId7 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 7"
+    ::= { vtssFrerConfigEntry 57 }
+
+vtssFrerConfigStreamCollectionId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If set to 0, StreamIds are used, otherwise stream collections are used.
+         Stream collections cannot be used with individual recovery."
+    ::= { vtssFrerConfigEntry 58 }
+
+vtssFrerConfigIngressOuterTagPop OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If set to true, a possible VLAN tag of the frames matching the stream
+         or stream collection will be stripped. Only used in generation mode."
+    ::= { vtssFrerConfigEntry 59 }
+
+vtssFrerConfigAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssFrerConfigEntry 100 }
+
+vtssFrerConfigRowEditor OBJECT IDENTIFIER
+    ::= { vtssFrerConfig 2 }
+
+vtssFrerConfigRowEditorId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The FRER instance ID"
+    ::= { vtssFrerConfigRowEditor 1 }
+
+vtssFrerConfigRowEditorMode OBJECT-TYPE
+    SYNTAX      VTSSFrerFrerMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Mode that this instance is running in."
+    ::= { vtssFrerConfigRowEditor 2 }
+
+vtssFrerConfigRowEditorFrerVlan OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID that the streams identified by stream_ids get classified
+         to."
+    ::= { vtssFrerConfigRowEditor 3 }
+
+vtssFrerConfigRowEditorEgressPorts OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "List of Egress ports."
+    ::= { vtssFrerConfigRowEditor 4 }
+
+vtssFrerConfigRowEditorAlgorithm OBJECT-TYPE
+    SYNTAX      VTSSFrerRecoveryAlg
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The chosen recovery algorithm."
+    ::= { vtssFrerConfigRowEditor 5 }
+
+vtssFrerConfigRowEditorHistoryLen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The vector recovery algorithm's history length."
+    ::= { vtssFrerConfigRowEditor 6 }
+
+vtssFrerConfigRowEditorResetTimeoutMsec OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The reset time in milliseconds of the recovery algorithm."
+    ::= { vtssFrerConfigRowEditor 7 }
+
+vtssFrerConfigRowEditorTakeNoSequence OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls latent error detection enabledness. Indicates whether
+         individual recovery is enabled on this FRER instance. When individual
+         recovery is enabled, each member flow will run the selected recovery
+         algorithm before passing it to the compound recovery, allowing for
+         detecting a sender that sends the same R-Tag sequence number over and
+         over again (see e.g. 802.1CB, Annex C.10)."
+    ::= { vtssFrerConfigRowEditor 8 }
+
+vtssFrerConfigRowEditorIndividualRecovery OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether we are an end system that terminates recovery and
+         removes the R-tag before the frames are egressing."
+    ::= { vtssFrerConfigRowEditor 9 }
+
+vtssFrerConfigRowEditorTerminate OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether we are an end system that terminates recovery and
+         removes the R-tag before the frames are egressing."
+    ::= { vtssFrerConfigRowEditor 10 }
+
+vtssFrerConfigRowEditorLaErrDetection OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls latent error detection enabledness."
+    ::= { vtssFrerConfigRowEditor 11 }
+
+vtssFrerConfigRowEditorLaErrDifference OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Specifies the maximum distance between the number of discarded packets
+         and the number of member streams multiplied by the number of passed
+         packets. Any larger difference will trigger the detection of a latent
+         error by the latent error test function."
+    ::= { vtssFrerConfigRowEditor 12 }
+
+vtssFrerConfigRowEditorLaErrPeriodMsec OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of milliseconds between running the latent error test
+         function."
+    ::= { vtssFrerConfigRowEditor 13 }
+
+vtssFrerConfigRowEditorLaErrPaths OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of paths that the latent error detection function operates
+         on."
+    ::= { vtssFrerConfigRowEditor 14 }
+
+vtssFrerConfigRowEditorLaErrResetPeriodMsec OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of milliseconds between running the latent error reset
+         function."
+    ::= { vtssFrerConfigRowEditor 15 }
+
+vtssFrerConfigRowEditorAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether this instance is active or not."
+    ::= { vtssFrerConfigRowEditor 16 }
+
+vtssFrerConfigRowEditorStreamId0 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 0"
+    ::= { vtssFrerConfigRowEditor 50 }
+
+vtssFrerConfigRowEditorStreamId1 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 1"
+    ::= { vtssFrerConfigRowEditor 51 }
+
+vtssFrerConfigRowEditorStreamId2 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 2"
+    ::= { vtssFrerConfigRowEditor 52 }
+
+vtssFrerConfigRowEditorStreamId3 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 3"
+    ::= { vtssFrerConfigRowEditor 53 }
+
+vtssFrerConfigRowEditorStreamId4 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 4"
+    ::= { vtssFrerConfigRowEditor 54 }
+
+vtssFrerConfigRowEditorStreamId5 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 5"
+    ::= { vtssFrerConfigRowEditor 55 }
+
+vtssFrerConfigRowEditorStreamId6 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 6"
+    ::= { vtssFrerConfigRowEditor 56 }
+
+vtssFrerConfigRowEditorStreamId7 OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Stream identity list element 7"
+    ::= { vtssFrerConfigRowEditor 57 }
+
+vtssFrerConfigRowEditorStreamCollectionId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If set to 0, StreamIds are used, otherwise stream collections are used.
+         Stream collections cannot be used with individual recovery."
+    ::= { vtssFrerConfigRowEditor 58 }
+
+vtssFrerConfigRowEditorIngressOuterTagPop OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If set to true, a possible VLAN tag of the frames matching the stream
+         or stream collection will be stripped. Only used in generation mode."
+    ::= { vtssFrerConfigRowEditor 59 }
+
+vtssFrerConfigRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssFrerConfigRowEditor 100 }
+
+vtssFrerStatus OBJECT IDENTIFIER
+    ::= { vtssFrerMibObjects 3 }
+
+vtssFrerStatusTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSFrerStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created FRER instance status."
+    ::= { vtssFrerStatus 1 }
+
+vtssFrerStatusEntry OBJECT-TYPE
+    SYNTAX      VTSSFrerStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created FRER instance status."
+    INDEX       { vtssFrerStatusId }
+    ::= { vtssFrerStatusTable 1 }
+
+VTSSFrerStatusEntry ::= SEQUENCE {
+    vtssFrerStatusId                                                 Integer32,
+    vtssFrerStatusOperState                                          VTSSFrerOperState,
+    vtssFrerStatusLatentError                                        TruthValue,
+    vtssFrerStatusWarningNone                                        TruthValue,
+    vtssFrerStatusWarningStreamNotFound                              TruthValue,
+    vtssFrerStatusWarningNoIngressPorts                              TruthValue,
+    vtssFrerStatusWarningStreamAttachFail                            TruthValue,
+    vtssFrerStatusWarningIngressEgressOverlap                        TruthValue,
+    vtssFrerStatusWarningEgressPortCnt                               TruthValue,
+    vtssFrerStatusWarningIngressNoLink                               TruthValue,
+    vtssFrerStatusWarningEgressNoLink                                TruthValue,
+    vtssFrerStatusWarningVlanMembership                              TruthValue,
+    vtssFrerStatusWarningStpBlocked                                  TruthValue,
+    vtssFrerStatusWarningMstpBlocked                                 TruthValue,
+    vtssFrerStatusWarningStreamHasConfigurationalWarnings            TruthValue,
+    vtssFrerStatusWarningStreamCollectionNotFound                    TruthValue,
+    vtssFrerStatusWarningStreamCollectionAttachFail                  TruthValue,
+    vtssFrerStatusWarningStreamCollectionHasConfigurationalWarnings  TruthValue
+}
+
+vtssFrerStatusId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The FRER instance ID"
+    ::= { vtssFrerStatusEntry 1 }
+
+vtssFrerStatusOperState OBJECT-TYPE
+    SYNTAX      VTSSFrerOperState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Operational state of this FRER instance."
+    ::= { vtssFrerStatusEntry 2 }
+
+vtssFrerStatusLatentError OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "If latent error detection is enabled and a SIGNAL_LATENT_ERROR is
+         raised, this member will become true."
+    ::= { vtssFrerStatusEntry 3 }
+
+vtssFrerStatusWarningNone OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "No warnings found."
+    ::= { vtssFrerStatusEntry 4 }
+
+vtssFrerStatusWarningStreamNotFound OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the matching streams doesn't exist."
+    ::= { vtssFrerStatusEntry 5 }
+
+vtssFrerStatusWarningNoIngressPorts OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      obsolete
+    DESCRIPTION
+        "Obsolete. Will always be false. Use
+         WarningStreamHasConfigurationalWarnings."
+    ::= { vtssFrerStatusEntry 6 }
+
+vtssFrerStatusWarningStreamAttachFail OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Failed to attach to at least one of the streams, possibly because it is
+         part of a stream collection."
+    ::= { vtssFrerStatusEntry 7 }
+
+vtssFrerStatusWarningIngressEgressOverlap OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "There is an overlap between ingress and egress ports."
+    ::= { vtssFrerStatusEntry 8 }
+
+vtssFrerStatusWarningEgressPortCnt OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In generation mode, only one egress port is specified."
+    ::= { vtssFrerStatusEntry 9 }
+
+vtssFrerStatusWarningIngressNoLink OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the ingress ports doesn't have link."
+    ::= { vtssFrerStatusEntry 10 }
+
+vtssFrerStatusWarningEgressNoLink OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the egress ports doesn't have link."
+    ::= { vtssFrerStatusEntry 11 }
+
+vtssFrerStatusWarningVlanMembership OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the egress ports is not member of the FRER VLAN."
+    ::= { vtssFrerStatusEntry 12 }
+
+vtssFrerStatusWarningStpBlocked OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the egress ports is blocked by STP."
+    ::= { vtssFrerStatusEntry 13 }
+
+vtssFrerStatusWarningMstpBlocked OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the egress ports is blocked by MSTP."
+    ::= { vtssFrerStatusEntry 14 }
+
+vtssFrerStatusWarningStreamHasConfigurationalWarnings OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "At least one of the ingress streams has configurational warnings."
+    ::= { vtssFrerStatusEntry 15 }
+
+vtssFrerStatusWarningStreamCollectionNotFound OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Stream collection doesn't exist."
+    ::= { vtssFrerStatusEntry 16 }
+
+vtssFrerStatusWarningStreamCollectionAttachFail OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Failed to attach to stream collection."
+    ::= { vtssFrerStatusEntry 17 }
+
+vtssFrerStatusWarningStreamCollectionHasConfigurationalWarnings OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The specified stream collection has configurational warnings."
+    ::= { vtssFrerStatusEntry 18 }
+
+vtssFrerStatusNotificationTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSFrerStatusNotificationEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created FRER instance notification status."
+    ::= { vtssFrerStatus 2 }
+
+vtssFrerStatusNotificationEntry OBJECT-TYPE
+    SYNTAX      VTSSFrerStatusNotificationEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created FRER instance notification status."
+    INDEX       { vtssFrerStatusNotificationId }
+    ::= { vtssFrerStatusNotificationTable 1 }
+
+VTSSFrerStatusNotificationEntry ::= SEQUENCE {
+    vtssFrerStatusNotificationId           Integer32,
+    vtssFrerStatusNotificationLatentError  TruthValue
+}
+
+vtssFrerStatusNotificationId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The FRER instance ID"
+    ::= { vtssFrerStatusNotificationEntry 1 }
+
+vtssFrerStatusNotificationLatentError OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "If latent error detection is enabled and a SIGNAL_LATENT_ERROR is
+         raised, this member will become true."
+    ::= { vtssFrerStatusNotificationEntry 2 }
+
+vtssFrerStatusStatisticsTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSFrerStatusStatisticsEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of FRER instance statistics."
+    ::= { vtssFrerStatus 3 }
+
+vtssFrerStatusStatisticsEntry OBJECT-TYPE
+    SYNTAX      VTSSFrerStatusStatisticsEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "FRER statistics."
+    INDEX       { vtssFrerStatusStatisticsId,
+                  vtssFrerStatusStatisticsIfIndex,
+                  vtssFrerStatusStatisticsStreamId }
+    ::= { vtssFrerStatusStatisticsTable 1 }
+
+VTSSFrerStatusStatisticsEntry ::= SEQUENCE {
+    vtssFrerStatusStatisticsId                 Integer32,
+    vtssFrerStatusStatisticsIfIndex            VTSSInterfaceIndex,
+    vtssFrerStatusStatisticsStreamId           Unsigned32,
+    vtssFrerStatusStatisticsOutOfOrder         Counter64,
+    vtssFrerStatusStatisticsRogue              Counter64,
+    vtssFrerStatusStatisticsPassed             Counter64,
+    vtssFrerStatusStatisticsDiscarded          Counter64,
+    vtssFrerStatusStatisticsLost               Counter64,
+    vtssFrerStatusStatisticsTagless            Counter64,
+    vtssFrerStatusStatisticsRecoveryResets     Counter64,
+    vtssFrerStatusStatisticsLaErrResets        Counter64,
+    vtssFrerStatusStatisticsGenerationResets   Counter64,
+    vtssFrerStatusStatisticsGenerationMatches  Counter64
+}
+
+vtssFrerStatusStatisticsId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The FRER instance ID"
+    ::= { vtssFrerStatusStatisticsEntry 1 }
+
+vtssFrerStatusStatisticsIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface index."
+    ::= { vtssFrerStatusStatisticsEntry 2 }
+
+vtssFrerStatusStatisticsStreamId OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The Stream ID"
+    ::= { vtssFrerStatusStatisticsEntry 3 }
+
+vtssFrerStatusStatisticsOutOfOrder OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyOutOfOrderPackets"
+    ::= { vtssFrerStatusStatisticsEntry 5 }
+
+vtssFrerStatusStatisticsRogue OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyRoguePackets"
+    ::= { vtssFrerStatusStatisticsEntry 6 }
+
+vtssFrerStatusStatisticsPassed OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyPassedPackets"
+    ::= { vtssFrerStatusStatisticsEntry 7 }
+
+vtssFrerStatusStatisticsDiscarded OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyDiscardedPackets"
+    ::= { vtssFrerStatusStatisticsEntry 8 }
+
+vtssFrerStatusStatisticsLost OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyLostPackets"
+    ::= { vtssFrerStatusStatisticsEntry 9 }
+
+vtssFrerStatusStatisticsTagless OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyTaglessPackets"
+    ::= { vtssFrerStatusStatisticsEntry 10 }
+
+vtssFrerStatusStatisticsRecoveryResets OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyResets"
+    ::= { vtssFrerStatusStatisticsEntry 11 }
+
+vtssFrerStatusStatisticsLaErrResets OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqRcvyLatentErrorResets (S/W counted)"
+    ::= { vtssFrerStatusStatisticsEntry 12 }
+
+vtssFrerStatusStatisticsGenerationResets OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqGenResets (S/W counted)"
+    ::= { vtssFrerStatusStatisticsEntry 13 }
+
+vtssFrerStatusStatisticsGenerationMatches OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "frerCpsSeqGenMatches"
+    ::= { vtssFrerStatusStatisticsEntry 14 }
+
+vtssFrerControl OBJECT IDENTIFIER
+    ::= { vtssFrerMibObjects 4 }
+
+vtssFrerControlStatisticsClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSFrerControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of FRER clear commands."
+    ::= { vtssFrerControl 1 }
+
+vtssFrerControlStatisticsClearEntry OBJECT-TYPE
+    SYNTAX      VTSSFrerControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created FRER clear command."
+    INDEX       { vtssFrerControlStatisticsClearId }
+    ::= { vtssFrerControlStatisticsClearTable 1 }
+
+VTSSFrerControlStatisticsClearEntry ::= SEQUENCE {
+    vtssFrerControlStatisticsClearId     Integer32,
+    vtssFrerControlStatisticsClearClear  TruthValue
+}
+
+vtssFrerControlStatisticsClearId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The FRER instance ID"
+    ::= { vtssFrerControlStatisticsClearEntry 2 }
+
+vtssFrerControlStatisticsClearClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to clear the counters of an FRER instance."
+    ::= { vtssFrerControlStatisticsClearEntry 3 }
+
+vtssFrerControlClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSFrerControlClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is the FRER instance control table."
+    ::= { vtssFrerControl 2 }
+
+vtssFrerControlClearEntry OBJECT-TYPE
+    SYNTAX      VTSSFrerControlClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents dynamic control elements an FRER
+         instance."
+    INDEX       { vtssFrerControlClearId }
+    ::= { vtssFrerControlClearTable 1 }
+
+VTSSFrerControlClearEntry ::= SEQUENCE {
+    vtssFrerControlClearId          Integer32,
+    vtssFrerControlClearReset       TruthValue,
+    vtssFrerControlClearLaErrClear  TruthValue
+}
+
+vtssFrerControlClearId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The FRER instance ID"
+    ::= { vtssFrerControlClearEntry 2 }
+
+vtssFrerControlClearReset OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If this FRER instance is in generation mode, this member is used to
+         reset thesequence number of the sequence generator.If this FRER
+         instance is in recovery mode, this member is used to reset therecovery
+         function. It resets both possible individual recovery functionsand the
+         compound recovery functions. A value of false has no effect."
+    ::= { vtssFrerControlClearEntry 3 }
+
+vtssFrerControlClearLaErrClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Clear a sticky latent error.If this FRER instance is in generation
+         mode, this member has no effect.If this FRER instance is in recovery
+         mode, but latent error detection isdisabled, this member has no
+         effect.A value of false has no effect."
+    ::= { vtssFrerControlClearEntry 4 }
+
+vtssFrerTrap OBJECT IDENTIFIER
+    ::= { vtssFrerMibObjects 6 }
+
+vtssFrerTrapAdd NOTIFICATION-TYPE
+    OBJECTS     { vtssFrerStatusNotificationId,
+                  vtssFrerStatusNotificationLatentError }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that a row has been added. The index(es) and value(s)
+         of the row is included in the trap."
+
+    ::= { vtssFrerTrap 1 }
+
+vtssFrerTrapMod NOTIFICATION-TYPE
+    OBJECTS     { vtssFrerStatusNotificationId,
+                  vtssFrerStatusNotificationLatentError }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that one or more of the objects included in the trap
+          has been updated."
+
+    ::= { vtssFrerTrap 2 }
+
+vtssFrerTrapDel NOTIFICATION-TYPE
+    OBJECTS     { vtssFrerStatusNotificationId }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that a row has been deleted. The index(es) of the
+         row is included in the trap."
+
+    ::= { vtssFrerTrap 3 }
+
+vtssFrerMibConformance OBJECT IDENTIFIER
+    ::= { vtssFrerMib 2 }
+
+vtssFrerMibCompliances OBJECT IDENTIFIER
+    ::= { vtssFrerMibConformance 1 }
+
+vtssFrerMibGroups OBJECT IDENTIFIER
+    ::= { vtssFrerMibConformance 2 }
+
+vtssFrerCapabilitiesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerCapabilitiesInstanceMax,
+                  vtssFrerCapabilitiesMstreamMax,
+                  vtssFrerCapabilitiesCstreamMax,
+                  vtssFrerCapabilitiesResetTimeoutMsecMin,
+                  vtssFrerCapabilitiesResetTimeoutMsecMax,
+                  vtssFrerCapabilitiesHistorylenMin,
+                  vtssFrerCapabilitiesHistorylenMax,
+                  vtssFrerCapabilitiesLaErrDifferenceMin,
+                  vtssFrerCapabilitiesLaErrDifferenceMax,
+                  vtssFrerCapabilitiesLaErrPeriodMsecMin,
+                  vtssFrerCapabilitiesLaErrPeriodMsecMax,
+                  vtssFrerCapabilitiesLaErrPathsMin,
+                  vtssFrerCapabilitiesLaErrPathsMax,
+                  vtssFrerCapabilitiesLaErrResetPeriodMsecMin,
+                  vtssFrerCapabilitiesLaErrResetPeriodMsecMax,
+                  vtssFrerCapabilitiesEgressPortCntMax,
+                  vtssFrerCapabilitiesStreamIdMax,
+                  vtssFrerCapabilitiesStreamCollectionIdMax }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 1 }
+
+vtssFrerConfigTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerConfigId, vtssFrerConfigMode,
+                  vtssFrerConfigFrerVlan, vtssFrerConfigEgressPorts,
+                  vtssFrerConfigAlgorithm, vtssFrerConfigHistoryLen,
+                  vtssFrerConfigResetTimeoutMsec,
+                  vtssFrerConfigTakeNoSequence,
+                  vtssFrerConfigIndividualRecovery,
+                  vtssFrerConfigTerminate,
+                  vtssFrerConfigLaErrDetection,
+                  vtssFrerConfigLaErrDifference,
+                  vtssFrerConfigLaErrPeriodMsec,
+                  vtssFrerConfigLaErrPaths,
+                  vtssFrerConfigLaErrResetPeriodMsec,
+                  vtssFrerConfigAdminActive, vtssFrerConfigStreamId0,
+                  vtssFrerConfigStreamId1, vtssFrerConfigStreamId2,
+                  vtssFrerConfigStreamId3, vtssFrerConfigStreamId4,
+                  vtssFrerConfigStreamId5, vtssFrerConfigStreamId6,
+                  vtssFrerConfigStreamId7,
+                  vtssFrerConfigStreamCollectionId,
+                  vtssFrerConfigIngressOuterTagPop,
+                  vtssFrerConfigAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 2 }
+
+vtssFrerConfigRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerConfigRowEditorId,
+                  vtssFrerConfigRowEditorMode,
+                  vtssFrerConfigRowEditorFrerVlan,
+                  vtssFrerConfigRowEditorEgressPorts,
+                  vtssFrerConfigRowEditorAlgorithm,
+                  vtssFrerConfigRowEditorHistoryLen,
+                  vtssFrerConfigRowEditorResetTimeoutMsec,
+                  vtssFrerConfigRowEditorTakeNoSequence,
+                  vtssFrerConfigRowEditorIndividualRecovery,
+                  vtssFrerConfigRowEditorTerminate,
+                  vtssFrerConfigRowEditorLaErrDetection,
+                  vtssFrerConfigRowEditorLaErrDifference,
+                  vtssFrerConfigRowEditorLaErrPeriodMsec,
+                  vtssFrerConfigRowEditorLaErrPaths,
+                  vtssFrerConfigRowEditorLaErrResetPeriodMsec,
+                  vtssFrerConfigRowEditorAdminActive,
+                  vtssFrerConfigRowEditorStreamId0,
+                  vtssFrerConfigRowEditorStreamId1,
+                  vtssFrerConfigRowEditorStreamId2,
+                  vtssFrerConfigRowEditorStreamId3,
+                  vtssFrerConfigRowEditorStreamId4,
+                  vtssFrerConfigRowEditorStreamId5,
+                  vtssFrerConfigRowEditorStreamId6,
+                  vtssFrerConfigRowEditorStreamId7,
+                  vtssFrerConfigRowEditorStreamCollectionId,
+                  vtssFrerConfigRowEditorIngressOuterTagPop,
+                  vtssFrerConfigRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 3 }
+
+vtssFrerStatusTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerStatusId, vtssFrerStatusOperState,
+                  vtssFrerStatusLatentError,
+                  vtssFrerStatusWarningNone,
+                  vtssFrerStatusWarningStreamNotFound,
+                  vtssFrerStatusWarningStreamAttachFail,
+                  vtssFrerStatusWarningIngressEgressOverlap,
+                  vtssFrerStatusWarningEgressPortCnt,
+                  vtssFrerStatusWarningIngressNoLink,
+                  vtssFrerStatusWarningEgressNoLink,
+                  vtssFrerStatusWarningVlanMembership,
+                  vtssFrerStatusWarningStpBlocked,
+                  vtssFrerStatusWarningMstpBlocked,
+                  vtssFrerStatusWarningStreamHasConfigurationalWarnings,
+                  vtssFrerStatusWarningStreamCollectionNotFound,
+                  vtssFrerStatusWarningStreamCollectionAttachFail,
+                  vtssFrerStatusWarningStreamCollectionHasConfigurationalWarnings }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 4 }
+
+vtssFrerStatusNotificationTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerStatusNotificationId,
+                  vtssFrerStatusNotificationLatentError }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 5 }
+
+vtssFrerStatusStatisticsTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerStatusStatisticsId,
+                  vtssFrerStatusStatisticsIfIndex,
+                  vtssFrerStatusStatisticsStreamId,
+                  vtssFrerStatusStatisticsOutOfOrder,
+                  vtssFrerStatusStatisticsRogue,
+                  vtssFrerStatusStatisticsPassed,
+                  vtssFrerStatusStatisticsDiscarded,
+                  vtssFrerStatusStatisticsLost,
+                  vtssFrerStatusStatisticsTagless,
+                  vtssFrerStatusStatisticsRecoveryResets,
+                  vtssFrerStatusStatisticsLaErrResets,
+                  vtssFrerStatusStatisticsGenerationResets,
+                  vtssFrerStatusStatisticsGenerationMatches }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 6 }
+
+vtssFrerControlStatisticsClearTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerControlStatisticsClearId,
+                  vtssFrerControlStatisticsClearClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 7 }
+
+vtssFrerControlClearTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssFrerControlClearId, vtssFrerControlClearReset,
+                  vtssFrerControlClearLaErrClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssFrerMibGroups 8 }
+
+vtssFrerTrapAddInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssFrerTrapAdd }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssFrerMibGroups 9 }
+
+vtssFrerTrapModInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssFrerTrapMod }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssFrerMibGroups 10 }
+
+vtssFrerTrapDelInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssFrerTrapDel }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssFrerMibGroups 11 }
+
+vtssFrerMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssFrerCapabilitiesInfoGroup,
+                       vtssFrerConfigTableInfoGroup,
+                       vtssFrerConfigRowEditorInfoGroup,
+                       vtssFrerStatusTableInfoGroup,
+                       vtssFrerStatusNotificationTableInfoGroup,
+                       vtssFrerStatusStatisticsTableInfoGroup,
+                       vtssFrerControlStatisticsClearTableInfoGroup,
+                       vtssFrerControlClearTableInfoGroup,
+                       vtssFrerTrapAddInfoGroup,
+                       vtssFrerTrapModInfoGroup,
+                       vtssFrerTrapDelInfoGroup }
+
+    ::= { vtssFrerMibCompliances 1 }
+
+END

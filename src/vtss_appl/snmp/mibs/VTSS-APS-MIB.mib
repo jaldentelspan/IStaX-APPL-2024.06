@@ -1,0 +1,958 @@
+-- *****************************************************************
+-- APS-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-APS-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Counter64 FROM SNMPv2-SMI
+    Integer32 FROM SNMPv2-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    MacAddress FROM SNMPv2-TC
+    TruthValue FROM SNMPv2-TC
+    VTSSDisplayString FROM VTSS-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    ;
+
+vtssApsMib MODULE-IDENTITY
+    LAST-UPDATED "202003050000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "This is a private Linear APS (G.8031) MIB"
+    REVISION    "202003050000Z"
+    DESCRIPTION
+        "Added Signal Fail triggering options"
+    REVISION    "201908270000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 150 }
+
+
+VTSSApsCommand ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "protection group command."
+    SYNTAX      INTEGER { noRequest(0), lockout(1), forceSwitch(2),
+                          manualSwitchToWorking(3),
+                          manualSwitchToProtecting(4), exercise(5),
+                          clear(6), freeze(7), freezeClear(8) }
+
+VTSSApsDefectState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Interface defect state."
+    SYNTAX      INTEGER { ok(0), sd(1), sf(2) }
+
+VTSSApsMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The APS protection mode."
+    SYNTAX      INTEGER { oneForOne(0), onePlusOneUniDir(1),
+                          onePlusOneBiDir(2) }
+
+VTSSApsOperationalState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "APS instance operational state."
+    SYNTAX      INTEGER { disabled(0), active(1), internalError(2) }
+
+VTSSApsOperationalWarning ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "APS instance operational warning."
+    SYNTAX      INTEGER { none(0), wMEPNotFound(1), pMEPNotFound(2),
+                          wMEPAdminDisabled(3), pMEPAdminDisabled(4),
+                          wMEPNotDownMEP(5), pMEPNotDownMEP(6),
+                          wMEPDiffersFromIfindex(7),
+                          pMEPDiffersFromIfindex(8) }
+
+VTSSApsProtectionState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "protection group state."
+    SYNTAX      INTEGER { noRequestWorking(0), noRequestProtect(1),
+                          lockout(2), forcedSwitch(3),
+                          signalFailWorking(4), signalFailProtect(5),
+                          manualSwitchtoProtect(6),
+                          manualSwitchtoWorking(7), waitToRestore(8),
+                          doNotRevert(9), exerciseWorking(10),
+                          exerciseProtect(11),
+                          reverseRequestWorking(12),
+                          reverseRequestProtect(13),
+                          signalDegradeWorking(14),
+                          signalDegradeProtect(15) }
+
+VTSSApsRequest ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "APS request/state."
+    SYNTAX      INTEGER { nr(0), dnr(1), rr(2), exer(4), wtr(5),
+                          ms(7), sd(9), sfW(11), fs(13), sfP(14),
+                          lo(15) }
+
+VTSSApsSfTrigger ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The APS signal-fail triggering method."
+    SYNTAX      INTEGER { link(0), mep(1) }
+
+vtssApsMibObjects OBJECT IDENTIFIER
+    ::= { vtssApsMib 1 }
+
+vtssApsCapabilities OBJECT IDENTIFIER
+    ::= { vtssApsMibObjects 1 }
+
+vtssApsCapabilitiesInstanceMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of created APS instances."
+    ::= { vtssApsCapabilities 1 }
+
+vtssApsCapabilitiesWtrSecsMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum WTR timer value in secs."
+    ::= { vtssApsCapabilities 2 }
+
+vtssApsCapabilitiesHoldOffMsecsMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum Hold Off timer value in msec."
+    ::= { vtssApsCapabilities 3 }
+
+vtssApsConfig OBJECT IDENTIFIER
+    ::= { vtssApsMibObjects 2 }
+
+vtssApsConfigTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSApsConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created APS instance parameters."
+    ::= { vtssApsConfig 1 }
+
+vtssApsConfigEntry OBJECT-TYPE
+    SYNTAX      VTSSApsConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created APS instance parameters."
+    INDEX       { vtssApsConfigId }
+    ::= { vtssApsConfigTable 1 }
+
+VTSSApsConfigEntry ::= SEQUENCE {
+    vtssApsConfigId                    Integer32,
+    vtssApsConfigAdminActive           TruthValue,
+    vtssApsConfigWorkingMEPDomain      VTSSDisplayString,
+    vtssApsConfigWorkingMEPService     VTSSDisplayString,
+    vtssApsConfigWorkingMEPId          Unsigned32,
+    vtssApsConfigProtectingMEPDomain   VTSSDisplayString,
+    vtssApsConfigProtectingMEPService  VTSSDisplayString,
+    vtssApsConfigProtectingMEPId       Unsigned32,
+    vtssApsConfigMode                  VTSSApsMode,
+    vtssApsConfigTxApsEnable           TruthValue,
+    vtssApsConfigRevertive             TruthValue,
+    vtssApsConfigWaitToRestoreSecs     Unsigned32,
+    vtssApsConfigHoldOffTimerMSecs     Unsigned32,
+    vtssApsConfigWorkingIfIndex        VTSSInterfaceIndex,
+    vtssApsConfigWorkingSfTrigger      VTSSApsSfTrigger,
+    vtssApsConfigProtectingIfIndex     VTSSInterfaceIndex,
+    vtssApsConfigProtectingSfTrigger   VTSSApsSfTrigger,
+    vtssApsConfigLevel                 Integer32,
+    vtssApsConfigVid                   VTSSUnsigned16,
+    vtssApsConfigPcp                   VTSSUnsigned8,
+    vtssApsConfigSmac                  MacAddress,
+    vtssApsConfigAction                VTSSRowEditorState
+}
+
+vtssApsConfigId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The APS instance ID"
+    ::= { vtssApsConfigEntry 1 }
+
+vtssApsConfigAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The administrative state of this APS instance. Set to true to make it
+         function normally and false to make it cease functioning."
+    ::= { vtssApsConfigEntry 2 }
+
+vtssApsConfigWorkingMEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name of the working MEP."
+    ::= { vtssApsConfigEntry 3 }
+
+vtssApsConfigWorkingMEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of the working MEP."
+    ::= { vtssApsConfigEntry 4 }
+
+vtssApsConfigWorkingMEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID of the working MEP."
+    ::= { vtssApsConfigEntry 5 }
+
+vtssApsConfigProtectingMEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name of the protecting MEP."
+    ::= { vtssApsConfigEntry 6 }
+
+vtssApsConfigProtectingMEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of the protecting MEP."
+    ::= { vtssApsConfigEntry 7 }
+
+vtssApsConfigProtectingMEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID name of the protecting MEP."
+    ::= { vtssApsConfigEntry 8 }
+
+vtssApsConfigMode OBJECT-TYPE
+    SYNTAX      VTSSApsMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select the architecture and direction of the APS instance."
+    ::= { vtssApsConfigEntry 9 }
+
+vtssApsConfigTxApsEnable OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Choose whether this end transmits APS PDUs. Only for 1+1,
+         unidirectional."
+    ::= { vtssApsConfigEntry 10 }
+
+vtssApsConfigRevertive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Revertive operation can be enabled or disabled."
+    ::= { vtssApsConfigEntry 11 }
+
+vtssApsConfigWaitToRestoreSecs OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Wait to restore timer in seconds - max. capabilities:WtrSecsMax - min.
+         1."
+    ::= { vtssApsConfigEntry 12 }
+
+vtssApsConfigHoldOffTimerMSecs OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Hold off timer in 100 ms steps - max. capabilities:HoldOffMsecsMax -
+         min. 0 means no hold off"
+    ::= { vtssApsConfigEntry 13 }
+
+vtssApsConfigWorkingIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Working port."
+    ::= { vtssApsConfigEntry 14 }
+
+vtssApsConfigWorkingSfTrigger OBJECT-TYPE
+    SYNTAX      VTSSApsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select the signal-fail triggering method for the working port."
+    ::= { vtssApsConfigEntry 15 }
+
+vtssApsConfigProtectingIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Protecting port."
+    ::= { vtssApsConfigEntry 16 }
+
+vtssApsConfigProtectingSfTrigger OBJECT-TYPE
+    SYNTAX      VTSSApsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select the signal-fail triggering method for the protecting port."
+    ::= { vtssApsConfigEntry 17 }
+
+vtssApsConfigLevel OBJECT-TYPE
+    SYNTAX      Integer32 (0..7)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MD/MEG Level (0-7)."
+    ::= { vtssApsConfigEntry 18 }
+
+vtssApsConfigVid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID used in the L-APS PDUs. 0 means untagged"
+    ::= { vtssApsConfigEntry 19 }
+
+vtssApsConfigPcp OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "PCP (priority) (default 7). The PCP value used in the VLAN tag unless
+         the L-APS PDU is untagged. Must be a value in range [0; 7]. "
+    ::= { vtssApsConfigEntry 20 }
+
+vtssApsConfigSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source MAC address used in L-APS PDUs. Must be a unicast address. If
+         all-zeros, the switch port's MAC address will be used."
+    ::= { vtssApsConfigEntry 21 }
+
+vtssApsConfigAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssApsConfigEntry 100 }
+
+vtssApsConfigRowEditor OBJECT IDENTIFIER
+    ::= { vtssApsConfig 2 }
+
+vtssApsConfigRowEditorId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The APS instance ID"
+    ::= { vtssApsConfigRowEditor 1 }
+
+vtssApsConfigRowEditorAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The administrative state of this APS instance. Set to true to make it
+         function normally and false to make it cease functioning."
+    ::= { vtssApsConfigRowEditor 2 }
+
+vtssApsConfigRowEditorWorkingMEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name of the working MEP."
+    ::= { vtssApsConfigRowEditor 3 }
+
+vtssApsConfigRowEditorWorkingMEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of the working MEP."
+    ::= { vtssApsConfigRowEditor 4 }
+
+vtssApsConfigRowEditorWorkingMEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID of the working MEP."
+    ::= { vtssApsConfigRowEditor 5 }
+
+vtssApsConfigRowEditorProtectingMEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Domain name of the protecting MEP."
+    ::= { vtssApsConfigRowEditor 6 }
+
+vtssApsConfigRowEditorProtectingMEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Service name of the protecting MEP."
+    ::= { vtssApsConfigRowEditor 7 }
+
+vtssApsConfigRowEditorProtectingMEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MEPID name of the protecting MEP."
+    ::= { vtssApsConfigRowEditor 8 }
+
+vtssApsConfigRowEditorMode OBJECT-TYPE
+    SYNTAX      VTSSApsMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select the architecture and direction of the APS instance."
+    ::= { vtssApsConfigRowEditor 9 }
+
+vtssApsConfigRowEditorTxApsEnable OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Choose whether this end transmits APS PDUs. Only for 1+1,
+         unidirectional."
+    ::= { vtssApsConfigRowEditor 10 }
+
+vtssApsConfigRowEditorRevertive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Revertive operation can be enabled or disabled."
+    ::= { vtssApsConfigRowEditor 11 }
+
+vtssApsConfigRowEditorWaitToRestoreSecs OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Wait to restore timer in seconds - max. capabilities:WtrSecsMax - min.
+         1."
+    ::= { vtssApsConfigRowEditor 12 }
+
+vtssApsConfigRowEditorHoldOffTimerMSecs OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Hold off timer in 100 ms steps - max. capabilities:HoldOffMsecsMax -
+         min. 0 means no hold off"
+    ::= { vtssApsConfigRowEditor 13 }
+
+vtssApsConfigRowEditorWorkingIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Working port."
+    ::= { vtssApsConfigRowEditor 14 }
+
+vtssApsConfigRowEditorWorkingSfTrigger OBJECT-TYPE
+    SYNTAX      VTSSApsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select the signal-fail triggering method for the working port."
+    ::= { vtssApsConfigRowEditor 15 }
+
+vtssApsConfigRowEditorProtectingIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Protecting port."
+    ::= { vtssApsConfigRowEditor 16 }
+
+vtssApsConfigRowEditorProtectingSfTrigger OBJECT-TYPE
+    SYNTAX      VTSSApsSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Select the signal-fail triggering method for the protecting port."
+    ::= { vtssApsConfigRowEditor 17 }
+
+vtssApsConfigRowEditorLevel OBJECT-TYPE
+    SYNTAX      Integer32 (0..7)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MD/MEG Level (0-7)."
+    ::= { vtssApsConfigRowEditor 18 }
+
+vtssApsConfigRowEditorVid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID used in the L-APS PDUs. 0 means untagged"
+    ::= { vtssApsConfigRowEditor 19 }
+
+vtssApsConfigRowEditorPcp OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "PCP (priority) (default 7). The PCP value used in the VLAN tag unless
+         the L-APS PDU is untagged. Must be a value in range [0; 7]. "
+    ::= { vtssApsConfigRowEditor 20 }
+
+vtssApsConfigRowEditorSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Source MAC address used in L-APS PDUs. Must be a unicast address. If
+         all-zeros, the switch port's MAC address will be used."
+    ::= { vtssApsConfigRowEditor 21 }
+
+vtssApsConfigRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssApsConfigRowEditor 100 }
+
+vtssApsStatus OBJECT IDENTIFIER
+    ::= { vtssApsMibObjects 3 }
+
+vtssApsStatusTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSApsStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created APS instance status."
+    ::= { vtssApsStatus 1 }
+
+vtssApsStatusEntry OBJECT-TYPE
+    SYNTAX      VTSSApsStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created APS instance status."
+    INDEX       { vtssApsStatusId }
+    ::= { vtssApsStatusTable 1 }
+
+VTSSApsStatusEntry ::= SEQUENCE {
+    vtssApsStatusId                  Integer32,
+    vtssApsStatusOperationalState    VTSSApsOperationalState,
+    vtssApsStatusProtectionState     VTSSApsProtectionState,
+    vtssApsStatusWorkingState        VTSSApsDefectState,
+    vtssApsStatusProtectingState     VTSSApsDefectState,
+    vtssApsStatusTxApsRequest        VTSSApsRequest,
+    vtssApsStatusTxApsReSignal       VTSSUnsigned8,
+    vtssApsStatusTxApsBrSignal       VTSSUnsigned8,
+    vtssApsStatusRxApsRequest        VTSSApsRequest,
+    vtssApsStatusRxApsReSignal       VTSSUnsigned8,
+    vtssApsStatusRxApsBrSignal       VTSSUnsigned8,
+    vtssApsStatusDfopCM              TruthValue,
+    vtssApsStatusDfopPM              TruthValue,
+    vtssApsStatusDfopNR              TruthValue,
+    vtssApsStatusDfopTO              TruthValue,
+    vtssApsStatusSmac                MacAddress,
+    vtssApsStatusTxCnt               Counter64,
+    vtssApsStatusRxValidCnt          Counter64,
+    vtssApsStatusRxInvalidCnt        Counter64,
+    vtssApsStatusOperationalWarning  VTSSApsOperationalWarning
+}
+
+vtssApsStatusId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The APS instance ID"
+    ::= { vtssApsStatusEntry 1 }
+
+vtssApsStatusOperationalState OBJECT-TYPE
+    SYNTAX      VTSSApsOperationalState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Operational state."
+    ::= { vtssApsStatusEntry 2 }
+
+vtssApsStatusProtectionState OBJECT-TYPE
+    SYNTAX      VTSSApsProtectionState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Protection state according to to G.8031 Annex A."
+    ::= { vtssApsStatusEntry 3 }
+
+vtssApsStatusWorkingState OBJECT-TYPE
+    SYNTAX      VTSSApsDefectState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Working interface defect state."
+    ::= { vtssApsStatusEntry 4 }
+
+vtssApsStatusProtectingState OBJECT-TYPE
+    SYNTAX      VTSSApsDefectState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Protecting interface defect state."
+    ::= { vtssApsStatusEntry 5 }
+
+vtssApsStatusTxApsRequest OBJECT-TYPE
+    SYNTAX      VTSSApsRequest
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Transmitted APS request."
+    ::= { vtssApsStatusEntry 6 }
+
+vtssApsStatusTxApsReSignal OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Transmitted APS requested signal."
+    ::= { vtssApsStatusEntry 7 }
+
+vtssApsStatusTxApsBrSignal OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Transmitted APS bridged signal."
+    ::= { vtssApsStatusEntry 8 }
+
+vtssApsStatusRxApsRequest OBJECT-TYPE
+    SYNTAX      VTSSApsRequest
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Received APS request."
+    ::= { vtssApsStatusEntry 9 }
+
+vtssApsStatusRxApsReSignal OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Received APS requested signal."
+    ::= { vtssApsStatusEntry 10 }
+
+vtssApsStatusRxApsBrSignal OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Received APS bridged signal."
+    ::= { vtssApsStatusEntry 11 }
+
+vtssApsStatusDfopCM OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "FOP Configuration Mismatch - APS received on working."
+    ::= { vtssApsStatusEntry 12 }
+
+vtssApsStatusDfopPM OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "FOP Provisioning Mismatch."
+    ::= { vtssApsStatusEntry 13 }
+
+vtssApsStatusDfopNR OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "FOP No Response."
+    ::= { vtssApsStatusEntry 14 }
+
+vtssApsStatusDfopTO OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "FOP TimeOut."
+    ::= { vtssApsStatusEntry 15 }
+
+vtssApsStatusSmac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Source MAC address of last received LAPS PDU or all-zeros if no PDU has
+         been received."
+    ::= { vtssApsStatusEntry 16 }
+
+vtssApsStatusTxCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of APS PDU frames transmitted."
+    ::= { vtssApsStatusEntry 17 }
+
+vtssApsStatusRxValidCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of valid APS PDU frames received on the protect port."
+    ::= { vtssApsStatusEntry 18 }
+
+vtssApsStatusRxInvalidCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of invalid APS PDU frames received on the protect port."
+    ::= { vtssApsStatusEntry 19 }
+
+vtssApsStatusOperationalWarning OBJECT-TYPE
+    SYNTAX      VTSSApsOperationalWarning
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Operational warning."
+    ::= { vtssApsStatusEntry 101 }
+
+vtssApsControl OBJECT IDENTIFIER
+    ::= { vtssApsMibObjects 4 }
+
+vtssApsControlCommandTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSApsControlCommandEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created APS instance command. When an APS instance
+         is created in the 'InstanceTable', an entry is automatically created
+         here with 'no command'."
+    ::= { vtssApsControl 1 }
+
+vtssApsControlCommandEntry OBJECT-TYPE
+    SYNTAX      VTSSApsControlCommandEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created APS instance command."
+    INDEX       { vtssApsControlCommandId }
+    ::= { vtssApsControlCommandTable 1 }
+
+VTSSApsControlCommandEntry ::= SEQUENCE {
+    vtssApsControlCommandId       Integer32,
+    vtssApsControlCommandCommand  VTSSApsCommand
+}
+
+vtssApsControlCommandId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The APS instance ID"
+    ::= { vtssApsControlCommandEntry 2 }
+
+vtssApsControlCommandCommand OBJECT-TYPE
+    SYNTAX      VTSSApsCommand
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "protection group command."
+    ::= { vtssApsControlCommandEntry 3 }
+
+vtssApsControlStatisticsClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSApsControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created APS clear commands."
+    ::= { vtssApsControl 2 }
+
+vtssApsControlStatisticsClearEntry OBJECT-TYPE
+    SYNTAX      VTSSApsControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created APS clear command."
+    INDEX       { vtssApsControlStatisticsClearId }
+    ::= { vtssApsControlStatisticsClearTable 1 }
+
+VTSSApsControlStatisticsClearEntry ::= SEQUENCE {
+    vtssApsControlStatisticsClearId     Integer32,
+    vtssApsControlStatisticsClearClear  TruthValue
+}
+
+vtssApsControlStatisticsClearId OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The APS instance ID"
+    ::= { vtssApsControlStatisticsClearEntry 2 }
+
+vtssApsControlStatisticsClearClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to clear the counters of an APS instance."
+    ::= { vtssApsControlStatisticsClearEntry 4 }
+
+vtssApsMibConformance OBJECT IDENTIFIER
+    ::= { vtssApsMib 2 }
+
+vtssApsMibCompliances OBJECT IDENTIFIER
+    ::= { vtssApsMibConformance 1 }
+
+vtssApsMibGroups OBJECT IDENTIFIER
+    ::= { vtssApsMibConformance 2 }
+
+vtssApsCapabilitiesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssApsCapabilitiesInstanceMax,
+                  vtssApsCapabilitiesWtrSecsMax,
+                  vtssApsCapabilitiesHoldOffMsecsMax }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssApsMibGroups 1 }
+
+vtssApsConfigTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssApsConfigId, vtssApsConfigAdminActive,
+                  vtssApsConfigWorkingMEPDomain,
+                  vtssApsConfigWorkingMEPService,
+                  vtssApsConfigWorkingMEPId,
+                  vtssApsConfigProtectingMEPDomain,
+                  vtssApsConfigProtectingMEPService,
+                  vtssApsConfigProtectingMEPId, vtssApsConfigMode,
+                  vtssApsConfigTxApsEnable, vtssApsConfigRevertive,
+                  vtssApsConfigWaitToRestoreSecs,
+                  vtssApsConfigHoldOffTimerMSecs,
+                  vtssApsConfigWorkingIfIndex,
+                  vtssApsConfigWorkingSfTrigger,
+                  vtssApsConfigProtectingIfIndex,
+                  vtssApsConfigProtectingSfTrigger,
+                  vtssApsConfigLevel, vtssApsConfigVid,
+                  vtssApsConfigPcp, vtssApsConfigSmac,
+                  vtssApsConfigAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssApsMibGroups 2 }
+
+vtssApsConfigRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssApsConfigRowEditorId,
+                  vtssApsConfigRowEditorAdminActive,
+                  vtssApsConfigRowEditorWorkingMEPDomain,
+                  vtssApsConfigRowEditorWorkingMEPService,
+                  vtssApsConfigRowEditorWorkingMEPId,
+                  vtssApsConfigRowEditorProtectingMEPDomain,
+                  vtssApsConfigRowEditorProtectingMEPService,
+                  vtssApsConfigRowEditorProtectingMEPId,
+                  vtssApsConfigRowEditorMode,
+                  vtssApsConfigRowEditorTxApsEnable,
+                  vtssApsConfigRowEditorRevertive,
+                  vtssApsConfigRowEditorWaitToRestoreSecs,
+                  vtssApsConfigRowEditorHoldOffTimerMSecs,
+                  vtssApsConfigRowEditorWorkingIfIndex,
+                  vtssApsConfigRowEditorWorkingSfTrigger,
+                  vtssApsConfigRowEditorProtectingIfIndex,
+                  vtssApsConfigRowEditorProtectingSfTrigger,
+                  vtssApsConfigRowEditorLevel,
+                  vtssApsConfigRowEditorVid,
+                  vtssApsConfigRowEditorPcp,
+                  vtssApsConfigRowEditorSmac,
+                  vtssApsConfigRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssApsMibGroups 3 }
+
+vtssApsStatusTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssApsStatusId, vtssApsStatusOperationalState,
+                  vtssApsStatusProtectionState,
+                  vtssApsStatusWorkingState,
+                  vtssApsStatusProtectingState,
+                  vtssApsStatusTxApsRequest,
+                  vtssApsStatusTxApsReSignal,
+                  vtssApsStatusTxApsBrSignal,
+                  vtssApsStatusRxApsRequest,
+                  vtssApsStatusRxApsReSignal,
+                  vtssApsStatusRxApsBrSignal, vtssApsStatusDfopCM,
+                  vtssApsStatusDfopPM, vtssApsStatusDfopNR,
+                  vtssApsStatusDfopTO, vtssApsStatusSmac,
+                  vtssApsStatusTxCnt, vtssApsStatusRxValidCnt,
+                  vtssApsStatusRxInvalidCnt,
+                  vtssApsStatusOperationalWarning }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssApsMibGroups 4 }
+
+vtssApsControlCommandTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssApsControlCommandId,
+                  vtssApsControlCommandCommand }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssApsMibGroups 5 }
+
+vtssApsControlStatisticsClearTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssApsControlStatisticsClearId,
+                  vtssApsControlStatisticsClearClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssApsMibGroups 6 }
+
+vtssApsMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssApsCapabilitiesInfoGroup,
+                       vtssApsConfigTableInfoGroup,
+                       vtssApsConfigRowEditorInfoGroup,
+                       vtssApsStatusTableInfoGroup,
+                       vtssApsControlCommandTableInfoGroup,
+                       vtssApsControlStatisticsClearTableInfoGroup }
+
+    ::= { vtssApsMibCompliances 1 }
+
+END

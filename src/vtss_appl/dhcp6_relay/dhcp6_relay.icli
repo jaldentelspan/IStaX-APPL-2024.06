@@ -1,0 +1,451 @@
+//
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+//
+//
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_DHCP6_RELAY)
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include <string.h>
+#include "ip_utils.hxx"
+#include "dhcp6_relay.h"
+#include "vtss/appl/dhcp6_relay.h"
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+
+#define ERRMSG_LEADIN "%% DHCP6 relay: "
+
+static BOOL _enable_dhcpv6_relay(
+    u32                                 session_id,
+    icli_unsigned_range_t              *vlist,
+    vtss_ifindex_t                      relay,
+    vtss_appl_dhcpv6_relay_vlan_t *conf
+)
+{
+    u32            i;
+    mesa_vid_t     vid;
+    vtss_ifindex_t idx;
+    BOOL           r;
+    mesa_rc        rc;
+
+    r = FALSE;
+
+    for ( i = 0; i < vlist->cnt; i++ ) {
+        for ( vid = (mesa_vid_t)(vlist->range[i].min); vid <= (mesa_vid_t)(vlist->range[i].max); vid++ ) {
+
+            if ( (rc = vtss_ifindex_from_vlan(vid, &idx)) == VTSS_RC_OK &&
+                 (rc = vtss_appl_dhcpv6_relay_conf_set(idx, relay, conf)) == VTSS_RC_OK ) {
+                r = TRUE;
+            } else {
+                ICLI_PRINTF(ERRMSG_LEADIN " Failed to enable on VLAN %u: %s\n",
+                            vid, dhcp6_relay_error_txt(rc));
+            }
+        }
+    }
+
+    return r;
+}
+
+static BOOL _disable_dhcpv6_relay(
+    u32                                 session_id,
+    icli_unsigned_range_t              *vlist,
+    vtss_ifindex_t                      relay
+)
+{
+    u32            i;
+    mesa_vid_t     vid;
+    vtss_ifindex_t idx;
+    BOOL           r;
+    mesa_rc        rc;
+
+    r = FALSE;
+
+    for ( i = 0; i < vlist->cnt; i++ ) {
+        for ( vid = (mesa_vid_t)(vlist->range[i].min); vid <= (mesa_vid_t)(vlist->range[i].max); vid++ ) {
+
+            if ( (rc = vtss_ifindex_from_vlan(vid, &idx)) == VTSS_RC_OK) {
+                vtss_ifindex_t idx_itr = idx;
+                vtss_ifindex_t relay_itr = relay;
+                if (VTSS_IFINDEX_NONE == relay) {
+                    vtss_appl_dhcpv6_relay_vlan_t conf;
+                    for (auto rc = dhcp6_relay_vlan_configuration.get_next(&idx_itr,&relay_itr, &conf);
+                        rc == VTSS_RC_OK && idx_itr == idx;
+                        rc = dhcp6_relay_vlan_configuration.get_next(&idx_itr, &relay_itr, &conf)) {
+                        vtss_appl_dhcpv6_relay_conf_del(idx_itr, relay_itr);
+                    }
+                    r = TRUE;
+                } else {
+                    r = (VTSS_RC_OK == vtss_appl_dhcpv6_relay_conf_del(idx, relay));
+                }
+            } else {
+                ICLI_PRINTF(ERRMSG_LEADIN " Failed to disable on VLAN %u\n", vid);
+            }
+        }
+    }
+
+    return r;
+}
+
+static void _print_vlan_statistics(
+    u32 session_id,
+    vtss_appl_dhcpv6_relay_vlan_statistics_t stats) 
+{
+    ICLI_PRINTF("Tx to server| "
+                "Rx from server| "
+                "Server pkts dropped| "
+                "Tx to client| "
+                "Rx from client| "
+                "Client pkts dropped\n"
+                "-----------------------------------------------------------------------------------------------------\n"
+                "%12d| %14d| %19d| %12d| %14d| %19d\n\n", 
+                stats.get_tx_to_server(), stats.get_rx_from_server(), stats.get_server_pkt_dropped(),
+                stats.get_tx_to_client(), stats.get_rx_from_client(), stats.get_client_pkt_dropped());
+}
+
+
+FUNCTION_END
+
+HELP_DHCP6_RELAY  = Configure DHCP6 relay parameters
+HELP_DHCP6_RELAY  = Configure DHCP6 relay parameters
+
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = ipv6 dhcp relay [ destination <ipv6_ucast> ] interface vlan <vlan_id>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = b_destination
+CMD_VAR = v_ipv6_ucast
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_vlan_id
+
+HELP      = ##ICLI_HELP_IPV6
+HELP      = ##ICLI_HELP_IP_DHCP6_GENERIC
+HELP      = ##HELP_DHCP6_RELAY
+HELP      = Configure DHCPv6 destination address
+HELP      = IPv6 address of the DHCPv6 server
+HELP      = Configure VLAN interface used for relaying
+HELP      = Configure VLAN interface used for relaying
+HELP      = VLAN ID of interface used for relaying
+
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlist
+
+CODE_BEGIN
+    vtss_appl_dhcpv6_relay_vlan_t        conf;
+    vtss_ifindex_t                            relay;
+
+    if (b_destination) {
+        conf.relay_destination = v_ipv6_ucast;
+    } else {
+        conf.relay_destination = ipv6_all_dhcp_servers;
+    }
+    if (VTSS_RC_OK != vtss_ifindex_from_vlan(v_vlan_id, &relay)) {
+        ICLI_PRINTF("Invalid relay interface");
+        return ICLI_RC_ERROR;
+    }
+    if (_enable_dhcpv6_relay(session_id, vlist, relay, &conf) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no ipv6 dhcp relay [ { destination <ipv6_ucast> interface vlan <vlan_id> } | { interface vlan <vlan_id> } ] 
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = b_vlan
+CMD_VAR = v_vlan_id
+CMD_VAR =
+CMD_VAR = i_vlan
+CMD_VAR = i_vlan_id
+
+HELP      = No form
+HELP      = ##ICLI_HELP_IPV6
+HELP      = ##ICLI_HELP_IP_DHCP6_GENERIC
+HELP      = ##HELP_DHCP6_RELAY
+HELP      = DHCPv6 destination address to be deleted
+HELP      = IPv6 address of the DHCPv6 server
+HELP      = Interface command
+HELP      = Specific VLAN interface to be deleted
+HELP      = VLAN ID of interface to be deleted
+HELP      = Interface command
+HELP      = Specific VLAN interface to be deleted
+HELP      = VLAN ID of interface to be deleted
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlist
+
+CODE_BEGIN
+    vtss_ifindex_t   relay = VTSS_IFINDEX_NONE;
+
+    if (b_vlan) {
+        if (VTSS_RC_OK != vtss_ifindex_from_vlan(v_vlan_id, &relay)) {
+            ICLI_PRINTF("Invalid relay interface");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    if (i_vlan) {
+        if (VTSS_RC_OK != vtss_ifindex_from_vlan(i_vlan_id, &relay)) {
+            ICLI_PRINTF("Invalid relay interface");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    if (_disable_dhcpv6_relay(session_id, vlist, relay) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ipv6 dhcp relay [ interface vlan <vlan_id> ]
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = b_vlan
+CMD_VAR = v_vlan_id
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = DHCPv6 relay agent
+HELP = Select an interface to view
+HELP = VLAN to view
+HELP = ID of VLAN
+
+CODE_BEGIN
+    vtss_ifindex_t itr = VTSS_IFINDEX_NONE, itr_v_vlan_id = VTSS_IFINDEX_NONE;
+    vtss_ifindex_t relay_vid = VTSS_IFINDEX_NONE;
+    if (b_vlan) {
+        if (VTSS_RC_OK != vtss_ifindex_from_vlan(v_vlan_id, &itr)) {
+            return ICLI_RC_ERROR;
+        }
+        itr_v_vlan_id = itr;
+    } else {
+        itr = VTSS_IFINDEX_NONE;
+    }
+    for (auto rc = vtss_appl_dhcpv6_relay_vlan_status_itr(&itr, &itr, nullptr, &relay_vid); 
+         rc == VTSS_RC_OK && (!b_vlan || itr == itr_v_vlan_id);
+         rc = vtss_appl_dhcpv6_relay_vlan_status_itr(&itr, &itr, nullptr, &relay_vid) )
+    {
+        char ipv6addr[100];
+        vtss_appl_dhcpv6_relay_vlan_t status;
+        vtss_appl_dhcpv6_relay_status_get(itr, relay_vid, &status);
+        inet_ntop(AF_INET6, &(status.relay_destination.addr),
+                  ipv6addr, sizeof(ipv6addr));
+
+        ICLI_PRINTF("Relaying interface vlan %d to %s on interface vlan %d\n", 
+                    idx2vid(itr),
+                    ipv6addr,
+                    idx2vid(relay_vid));
+    }
+CODE_END
+
+CMD_END
+
+//=========================================
+
+CMD_BEGIN
+COMMAND   = show ipv6 dhcp relay statistics [ interface vlan <vlan_id> ]
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = interface
+CMD_VAR = b_vlan
+CMD_VAR = vlan_id
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = DHCPv6 relay agent
+HELP = View statistics
+HELP = Select an interface to view
+HELP = VLAN to view
+HELP = ID of VLAN
+
+CODE_BEGIN
+    vtss_ifindex_t itr = VTSS_IFINDEX_NONE, itr_vlan_id = VTSS_IFINDEX_NONE;
+    vtss_ifindex_t relay_vid = VTSS_IFINDEX_NONE;
+    bool first = true;
+    
+    if (interface) {
+        if (VTSS_RC_OK != vtss_ifindex_from_vlan(vlan_id, &itr)) {
+            return ICLI_RC_ERROR;
+        }
+        itr_vlan_id = itr;
+    } else {
+        itr = VTSS_IFINDEX_NONE;
+    }
+    for (auto rc = vtss_appl_dhcpv6_relay_vlan_statistics_itr(&itr, &itr, nullptr, &relay_vid); 
+         rc == VTSS_RC_OK && (!b_vlan || itr == itr_vlan_id);
+         rc = vtss_appl_dhcpv6_relay_vlan_statistics_itr(&itr, &itr, nullptr, &relay_vid) )
+    {
+        vtss_appl_dhcpv6_relay_vlan_statistics_t stats;
+        vtss_appl_dhcpv6_relay_vlan_statistics_get(itr, relay_vid, &stats);
+
+        if (first) {
+            first = false;
+            ICLI_PRINTF("Server packets with interface option missing: %d\n", 
+            vtss_appl_server_pkts_interface_missing_get());
+        }
+
+        ICLI_PRINTF("Statistics for relay interface vlan %d to server on interface vlan %d:\n\n", 
+                    idx2vid(itr),
+                    idx2vid(relay_vid));
+        _print_vlan_statistics(session_id, stats);
+    }
+CODE_END
+
+CMD_END
+
+//=========================================
+
+CMD_BEGIN
+COMMAND   = clear ipv6 dhcp relay statistics [ interface vlan <vlan_id> [ interface vlan <vlan_id> ] ]
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = interface
+CMD_VAR = b_vlan
+CMD_VAR = vlan_id
+CMD_VAR = rel_interface
+CMD_VAR =
+CMD_VAR = rel_vlan_id
+
+HELP = clear command
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = DHCPv6 relay agent
+HELP = Clearing statistics
+HELP = Select an interface to clear
+HELP = VLAN to clear
+HELP = ID of VLAN
+HELP = Select a relay interface to clear
+HELP = Relay VLAN to clear
+HELP = ID of relay VLAN
+
+CODE_BEGIN
+    vtss_ifindex_t itr = VTSS_IFINDEX_NONE, itr_vlan_id = VTSS_IFINDEX_NONE;
+    vtss_ifindex_t relay_vid = VTSS_IFINDEX_NONE;
+    vtss_appl_dhcpv6_relay_vlan_statistics_t stat;
+    
+    if (interface) {
+        if (VTSS_RC_OK != vtss_ifindex_from_vlan(vlan_id, &itr)) {
+            return ICLI_RC_ERROR;
+        }
+        if (!rel_interface) {
+            itr_vlan_id = itr;
+            for (auto rc = vtss_appl_dhcpv6_relay_vlan_statistics_itr(&itr, &itr, nullptr, &relay_vid); 
+            rc == VTSS_RC_OK && (!b_vlan || itr == itr_vlan_id);
+            rc = vtss_appl_dhcpv6_relay_vlan_statistics_itr(&itr, &itr, nullptr, &relay_vid) )
+            {
+                vtss_appl_dhcpv6_relay_vlan_statistics_set(itr, relay_vid, &stat);
+            }
+        } else {
+            if (VTSS_RC_OK != vtss_ifindex_from_vlan(rel_vlan_id, &relay_vid)) {
+                return ICLI_RC_ERROR;
+            }
+            vtss_appl_dhcpv6_relay_vlan_statistics_set(itr, relay_vid, &stat);
+        }
+    } else {
+        vtss_appl_dhcpv6_relay_control_t ctrl;
+        ctrl.clear_all_stats = true;
+        vtss_appl_dhcpv6_relay_control_set(&ctrl);
+    }
+CODE_END
+
+CMD_END
+

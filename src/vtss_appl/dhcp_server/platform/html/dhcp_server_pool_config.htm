@@ -1,0 +1,1053 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>SNMP System Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/deviceid.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript">
+
+// Global variables
+var pool_name = "";
+var ipDynamicTable;
+
+var poolArr = [];
+var currPool = {};
+var reservedEntries = [];
+var currReservedEntries = [];
+
+// Arrays for select boxes.
+var pool_type_TMode = Array("None", "Network", "Host");
+var pool_type_VMode = Array("none", "network", "host");
+
+var reserved_only_TMode = Array("Off", "On");
+var reserved_only_VMode = genArrayInt(0, 1);
+
+var netbios_node_type_TMode = Array("None", "B-node", "P-node", "M-node", "H-node");
+var netbios_node_type_oVMode = Array("nodeNone", "nodeB", "nodeP", "nodeM", "nodeH");
+
+var client_id_type_TMode = Array("None", "Name", "MAC");
+var client_id_type_oVMode = Array("none", "name", "mac");
+
+var cell_width  = 16;
+var style_width = "20em";
+
+var SERVER_CNT = 4;
+var VENDOR_CLASS_INFO_CNT = 4;
+
+// Help page magic
+var help_page = "/help/help_dhcp_server_pool_config.htm";
+
+var pageArgs = searchArgs( window.location.search );
+if ( pageArgs.pool_name ) {
+    pool_name = pageArgs.pool_name;
+}
+
+// Fill in names of existing dhcp pools into pool name select box.
+function selectUpdate( selConf )
+{
+    var sel, frag, i, opt;
+
+    sel = document.getElementById("pool_select");
+
+    clearChildNodes(sel);
+
+    frag = document.createDocumentFragment();
+    var _pool_name = decodeURI(pool_name);
+
+    for ( i = 0; i < selConf.length; ++i ) {
+        opt = document.createElement("option");
+        opt.appendChild( document.createTextNode( unescape(selConf[i]) ) );
+        opt.setAttribute("value", selConf[i]);
+        if ( _pool_name == selConf[i] ) {
+            opt.setAttribute("selected", true);
+        }
+        opt.style.width = style_width;
+        frag.appendChild(opt);
+    }
+    sel.appendChild(frag);
+}
+
+// Add a generic text input cell to the given document fragment.
+function dataUpdate( frag, title, value, id, maxLen, b_disabled )
+{
+    var tr, td;
+
+    tr = document.createElement("tr");
+    addTextCell(tr, title, "param_label");
+    td = addInputCell(tr, value, "cl", id, cell_width);
+    td.setAttribute("maxLength", maxLen);
+    td.style.width = style_width;
+    td.disabled = b_disabled;
+    frag.appendChild(tr);
+}
+
+// Add server text input cells from a given array to the given document fragment.
+function serverUpdate( frag, title, sv, id )
+{
+    var tr, str, std, val, i;
+
+    tr = document.createElement("tr");
+    addTextCell(tr, title, "param_label");
+    for ( i = 0; i < SERVER_CNT; ++i ) {
+        str = document.createElement("tr");
+        if ( sv && sv[i] ) {
+            val = sv[i];
+        } else {
+            val = "";
+        }
+        std = addInputCell(str, val, "cl", id+i, cell_width);
+        std.setAttribute("maxLength", 16);
+        std.style.width = style_width;
+        tr.appendChild(str);
+        frag.appendChild(tr);
+    }
+}
+
+// Add vendor text input cells to the given document fragment.
+function vendorUpdate( frag, sv, n )
+{
+    var tr, td, val;
+
+    tr = document.createElement("tr");
+    addTextCell(tr, "Vendor "+(n+1)+" Class Identifier", "param_label");
+    if ( sv && sv[0] ) {
+        val = unescape( sv[0] );
+    } else {
+        val = "";
+    }
+    td = addInputCell(tr, val, "cl", "pool_class_identifier_"+n, cell_width);
+    td.setAttribute("maxLength", 64);
+    td.style.width = style_width;
+    frag.appendChild(tr);
+
+    tr = document.createElement("tr");
+    addTextCell(tr, "Vendor "+(n+1)+" Specific Information", "param_label");
+    if ( sv && sv[1] ) {
+        val = unescape( sv[1] );
+    } else {
+        val = "";
+    }
+    td = addInputCell(tr, val, "cl", "pool_specific_info_"+n, cell_width);
+    td.setAttribute("maxLength", 66);
+    td.style.width = style_width;
+    frag.appendChild(tr);
+}
+
+// Action handler for when a new pool type is selected from the pool type select box.
+function poolTypeChangeUpdate()
+{
+    var fld, b;
+
+    // Type
+    fld = document.getElementById("pool_type");
+
+    // disable IP and netmask
+    if ( fld.value === "none" ) {
+        b = true;
+    } else {
+        b = false;
+    }
+
+    fld = document.getElementById("pool_ip");
+    if ( fld ) {
+        fld.disabled = b;
+    }
+
+    fld = document.getElementById("pool_netmask");
+    if ( fld ) {
+        fld.disabled = b;
+    }
+}
+
+// Action handler for when Client identifier type is changed.
+function clientIdTypeChangeUpdate()
+{
+    var fld, b;
+
+    fld = document.getElementById("pool_client_id_type");
+    if ( fld.value === "none" ) {
+        b = true;
+    } else {
+        b = false;
+    }
+
+    fld = document.getElementById("pool_client_id_value");
+    if ( fld ) {
+        fld.disabled = b;
+    }
+}
+
+// Adds all rows to the pool settings table, using info from the given pool.
+function addRow( frag, pool )
+{
+    var poolData, poolName, tr, td, index, i, sv, str, std, client_id, b_disabled, pool_type, reserved_only;
+
+    poolData = pool.val;
+    poolName = pool.key;
+
+    index = 0;
+
+    // name
+    tr = document.createElement("tr");
+    addTextCell(tr, "Pool Name", "param_label");
+    td = addInputCell(tr, poolName, "cl", "pool_name", cell_width);
+    td.setAttribute("maxLength", 32);
+    td.style.width = style_width;
+    td.disabled = true;
+    frag.appendChild(tr);
+
+    // type
+    pool_type = poolData.PoolType;
+    tr = document.createElement("tr");
+    addTextCell(tr, "Type", "param_label");
+    td = addSelectCell(tr, pool_type_TMode, pool_type_VMode, pool_type, "cl", "pool_type");
+    td.style.width = style_width;
+    td.onchange = poolTypeChangeUpdate;
+    frag.appendChild(tr);
+
+    // if disable IP and netmask or not
+    if ( pool_type == "none" ) {
+        b_disabled = true;
+    } else {
+        b_disabled = false;
+    }
+
+    // ip
+    dataUpdate(frag, "IP", poolData.Ipv4Address, "pool_ip", 16, b_disabled);
+
+    // netmask
+    dataUpdate(frag, "Subnet Mask", poolData.SubnetMask, "pool_netmask", 16, b_disabled);
+
+    // lease time
+    tr = document.createElement("tr");
+    addTextCell(tr, "Lease Time", "param_label");
+
+    str = document.createElement("tr");
+    std = addInputCellWithText(str, poolData.LeaseDay, "cl", "pool_lease_days", 12, 4, 0, "", " days (0-365)");
+    std.setAttribute("maxLength", 3);
+    tr.appendChild(str);
+    frag.appendChild(tr);
+
+    str = document.createElement("tr");
+    std = addInputCellWithText(str, poolData.LeaseHour, "cl", "pool_lease_hours", 12, 4, 0, "", " hours (0-23)");
+    std.setAttribute("maxLength", 2);
+    tr.appendChild(str);
+    frag.appendChild(tr);
+
+    str = document.createElement("tr");
+    std = addInputCellWithText(str, poolData.LeaseMinute, "cl", "pool_lease_minutes", 12, 4, 0, "", " minutes (0-59)");
+    std.setAttribute("maxLength", 2);
+    tr.appendChild(str);
+    frag.appendChild(tr);
+
+    // domain name
+    dataUpdate(frag, "Domain Name", poolData.DomainName, "pool_domain_name", 128);
+
+    // broadcast address
+    dataUpdate(frag, "Broadcast Address", poolData.SubnetBroadcast, "pool_broadcast_addr", 16);
+
+    // Allocate reserved entries only or not
+    reserved_only = poolData.ReservedOnly;
+    tr = document.createElement("tr");
+    addTextCell(tr, "Allocate reserved entries only", "param_label");
+    td = addSelectCell(tr, reserved_only_TMode, reserved_only_VMode, reserved_only, "cl", "reserved_only");
+    td.style.width = style_width;
+    frag.appendChild(tr);
+
+    // Default Router
+    var def_routers = [poolData.DefaultRouter1, poolData.DefaultRouter2, poolData.DefaultRouter3, poolData.DefaultRouter4];
+    serverUpdate(frag, "Default Router", def_routers, "pool_default_router_");
+
+    // DNS Server
+    var dns_servers = [poolData.DnsServer1, poolData.DnsServer2, poolData.DnsServer3, poolData.DnsServer4];
+    serverUpdate(frag, "DNS Server", dns_servers, "pool_dns_server_");
+
+    // NTP Server
+    var ntp_servers = [poolData.NtpServer1, poolData.NtpServer2, poolData.NtpServer3, poolData.NtpServer4];
+    serverUpdate(frag, "NTP Server", ntp_servers, "pool_ntp_server_");
+
+    // NetBIOS Node Type
+    tr = document.createElement("tr");
+    addTextCell(tr, "NetBIOS Node Type", "param_label");
+    td = addSelectCell(tr, netbios_node_type_TMode, netbios_node_type_oVMode, poolData.NetbiosNodeType, "cl", "pool_netbios_node_type");
+    td.style.width = style_width;
+    frag.appendChild(tr);
+
+    // NetBIOS Scope
+    dataUpdate(frag, "NetBIOS Scope", poolData.NetbiosScope, "pool_netbios_scope", 128);
+
+    // NetBIOS Name Server
+    var netb_servers = [poolData.NetbiosNameServer1, poolData.NetbiosNameServer2, poolData.NetbiosNameServer3, poolData.NetbiosNameServer4];
+    serverUpdate(frag, "NetBIOS Name Server", netb_servers, "pool_netbios_name_server_");
+
+    // NIS Domain Name
+    dataUpdate(frag, "NIS Domain Name", poolData.NisDomainName, "pool_nis_domain_name", 128);
+
+    // NIS Server
+    var nis_servers = [poolData.NisServer1, poolData.NisServer2, poolData.NisServer3, poolData.NisServer4];
+    serverUpdate(frag, "NIS Server", nis_servers, "pool_nis_server_");
+
+    // Client Identifier
+    tr = document.createElement("tr");
+    addTextCell(tr, "Client Identifier", "param_label");
+
+    str = document.createElement("tr");
+    std = addSelectCell(str, client_id_type_TMode, client_id_type_oVMode, poolData.ClientIdentifierType, "cl", "pool_client_id_type");
+    std.onchange = clientIdTypeChangeUpdate;
+    tr.appendChild(str);
+
+    str = document.createElement("tr");
+    std = addInputCell(str, poolData.ClientIdentifierName, "cl", "pool_client_id_value", cell_width);
+    std.setAttribute("maxLength", 128);
+    std.style.width = style_width;
+    if ( poolData.ClientIdentifierType === "none" ) {
+        std.disabled = true;
+    }
+    tr.appendChild(str);
+
+    frag.appendChild(tr);
+
+    // Hardware Address
+    dataUpdate(frag, "Hardware Address", poolData.ClientHardwareAddress, "pool_hardware_address", 17);
+
+    // Client Name
+    dataUpdate(frag, "Client Name", poolData.ClientName, "pool_client_name", 32);
+
+    // Vendor Class Info List
+    var vendor_ids = [poolData.VendorClassId1, poolData.VendorClassId2, poolData.VendorClassId3, poolData.VendorClassId4];
+    var vendor_infos = [poolData.VendorSpecificInfo1, poolData.VendorSpecificInfo2, poolData.VendorSpecificInfo3, poolData.VendorSpecificInfo4];
+    for ( i = 0; i < VENDOR_CLASS_INFO_CNT; ++i ) {
+        var vendor_data = [vendor_ids[i], vendor_infos[i]];
+        vendorUpdate(frag, vendor_data, i);
+    }
+}
+
+// Reset pool data to match pool info stored in the backend.
+function poolReset()
+{
+    insertPoolData(currPool);
+}
+
+// Helper function that creates document fragment and calls addRow function.
+function insertPoolData(pool) {
+    // pool configuration
+    var frag = document.createDocumentFragment();
+    addRow(frag, pool);
+
+    // Add Frag to table body
+    var tbody = document.getElementById("pool_data");
+    clearChildNodes( tbody );
+
+    if ( ! tbody.appendChild(frag) ) {
+        alert("This browser doesn't support dynamic tables.");
+    }
+}
+
+// Add header to ip entries table
+function addIpHeader(table_rows) {
+    var row;
+    //1st row
+    row = {
+        fields: [
+            { type: "disp_hdr", params: ["Delete", 1, 1] },
+            { type: "disp_hdr", params: ["Reserved address", 1, 1] },
+            { type: "disp_hdr", params: ["Interface", 1, 1] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+// Add a single row to ip entries table
+function addIpRow(ipEntry, idx) {
+    var row = {
+        fields: [
+            { type: "chkbox", params: [0, "c", "ipDel_" + idx, null] },
+            { type: "text", params: [ipEntry.key[1], "cr"] },
+            { type: "input", params: [ipEntry.val, "cl", "ipPort_" + idx] }
+        ]
+    };
+
+    return row;
+}
+
+// Add rows to reserved Ip entries dynamic table
+function addIpRows(entries) {
+    var table_rows = new Array();
+    var empty_colspan = 3;
+
+    // Add table header
+    addIpHeader(table_rows);
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!entries.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+        return table_rows;
+    }
+
+    for (var i = 0; i < entries.length; i++) {
+        table_rows.push(addIpRow(entries[i], i));
+    }
+
+    return table_rows;
+
+}
+
+// Action handler when user changes pool being viewed 
+function poolSelect()
+{
+    var sel, _pool_name, i;
+
+    // Update pool settings table
+    sel = document.getElementById("pool_select");
+    _pool_name = sel.options[sel.selectedIndex].value;
+    pool_name = sel.options[sel.selectedIndex].value;
+
+    for (i = 0; i < poolArr.length; i++) {
+        if (poolArr[i].key == _pool_name) {
+            currPool = poolArr[i];
+            break;
+        }
+    }
+
+    insertPoolData(currPool);
+
+    // Update Reserved Entries Table
+    var name = "fixed_address_entries";
+    var recv_json = ipDynamicTable.getRecvJson(name);
+    ipDynamicTable.restore();
+    ipDynamicTable.saveRecvJson(name, recv_json);
+    currReservedEntries = [];
+    
+    for (i = 0; i < reservedEntries.length; i++) {
+        var currEntry = reservedEntries[i];
+        if (currEntry.key[0] == _pool_name) {
+            currReservedEntries.push(currEntry);
+        }
+    }
+
+    var table_rows = addIpRows(currReservedEntries);
+    ipDynamicTable.addRows(table_rows);
+    // Update this dynamic table
+    ipDynamicTable.update();
+    ipDynamicTable.addNewRowButton(addEmptyIpRow, 256);
+}
+
+// To check if a valid ip address has been entered into server input box.
+function serverCheck( id, title )
+{
+    var fld, i;
+
+    for ( i = 0; i < SERVER_CNT; ++i ) {
+        fld = document.getElementById( id+i );
+        if ( fld && fld.value !== "" ) {
+            if ( ! isIpStr(id+i, false, title+", "+fld.value+",", 2) ) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Check if any name entered is a valid argument.
+function nameCheck( id, title )
+{
+    var fld, j;
+
+    fld = document.getElementById( id );
+    if ( fld && fld.value !== "" ) {
+        for ( j = 0; j <= fld.value.length; ++j ) {
+        	if ( fld.value.charAt(j) == " " ) {
+                GiveAlert(title+", "+fld.value+", can not contain SPACE.", fld);
+                return false;
+        	}
+        }
+    }
+    return true;
+}
+
+// Checks if given number is a valid hex.
+function _isHex( v )
+{
+    var i, valid_chars;
+
+    valid_chars = "0123456789abcdefABCDEF";
+    
+    if ( v.charAt(0) != "0" || (v.charAt(1) != "x" && v.charAt(1) != "X") ) {
+        return false;
+    }
+
+    for ( i = 2 ; i <= v.length; ++i ) {
+    	if ( valid_chars.indexOf(v.charAt(i)) == -1 ) {
+    	    return false;
+    	}
+    }
+    return true;
+}
+
+// Verifies that vendor information entered are valid.
+function vendorCheck()
+{
+    var i, j, fld, jfld;
+
+    for ( i = 0; i < VENDOR_CLASS_INFO_CNT; ++i ) {
+        // Vendor Class Identifier
+        // check if duplicate
+        fld = document.getElementById("pool_class_identifier_" + i);
+        if ( fld && fld.value !== "" ) {
+            for ( j = 0; j < VENDOR_CLASS_INFO_CNT; ++j ) {
+                if ( i === j ) {
+                    continue;
+                }
+                jfld = document.getElementById("pool_class_identifier_" + j);
+                if ( jfld && jfld.value !== "" ) {
+                    if ( fld.value === jfld.value ) {
+                        GiveAlert("Duplicate Vendor "+(j+1)+" Class Identifier.", jfld);
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Vendor Specific Information
+        // check value format
+        fld = document.getElementById("pool_specific_info_" + i);
+        if ( fld && fld.value !== "" ) {
+            jfld = document.getElementById("pool_class_identifier_" + i);
+            if ( ! jfld || jfld.value === "" ) {
+                GiveAlert("NULL Vendor "+(i+1)+" Class Identifier. It must have value.", jfld);
+                return false;
+            }
+            if ( ! _isHex(fld.value) ) {
+                GiveAlert("Invalid Vendor "+(i+1)+" Specific Information. It must be a HEX string and begin with '0x' or '0X'.", fld);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+function convertIpStr2Number(ip)
+{
+    var n = 0;
+    var b = ip.match(/^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s*$/);
+    if (b) {
+	for (var i = 1; i <= 4; ++i) {
+	    n <<= 8;
+	    n += Number(b[i]);
+	}
+    }
+    return n;
+}
+
+// Get pool settings from table and send to backend via Json.
+function savePoolData()
+{
+    var i, j, fld, pool_type, id_type, ip, subnet_mask, reserved_only;
+
+    var tmpPool = currPool.val;
+
+    // Pool Name
+    // move to the end to make sure it is successful
+    // otherwise, the input cell will be enabled when check is failed
+
+    // Type
+    fld = document.getElementById("pool_type");
+    pool_type = fld.value;
+    tmpPool.PoolType = fld.value;
+
+    // IP
+    ip = 0;
+    fld = document.getElementById("pool_ip");
+    if ( pool_type !== "none" ) {
+        if ( fld && fld.value !== "" ) {
+            if ( ! isIpAddr("pool_ip", "IP, "+fld.value+",") ) {
+                return false;
+            }
+            if ( isIpAddrZero("pool_ip", false) ) {
+                GiveAlert("IP address can not be 0.", fld);
+                return false;
+            }
+            ip = convertIpStr2Number( fld.value );
+            tmpPool.Ipv4Address = fld.value;
+        } else {
+            GiveAlert("Pool type is defined so IP must be inputted.", fld);
+            return false;
+        }
+    } else {
+        if ( fld && fld.value !== "" ) {
+            fld.value === "";
+        }
+    }
+
+    // Netmask
+    subnet_mask = 0;
+    fld = document.getElementById("pool_netmask");
+    if ( pool_type !== "none" ) {
+        if ( fld && fld.value !== "" ) {
+            if ( ! isIpMask("pool_netmask", "Netmask, "+fld.value+",") ) {
+                return false;
+            }
+            if ( isIpAddrZero("pool_netmask", true) ) {
+                GiveAlert("Subnet mask can not be 0.", fld);
+                return false;
+            }
+            subnet_mask = convertIpStr2Number( fld.value );
+            tmpPool.SubnetMask = fld.value;
+        } else {
+            GiveAlert("Pool type is defined so subnet mask must be inputted.", fld);
+            return false;
+        }
+    } else {
+        if ( fld && fld.value !== "" ) {
+            fld.value === "";
+        }
+    }
+
+    // Host : IP and netmask
+    if ( pool_type === "host" && ip && subnet_mask ) {
+        // avoid the first 0 address
+        if ( (ip & (~subnet_mask)) === 0 ) {
+            GiveAlert("The combination of IP address and subnet mask is invalid. All of the bits in the host address portion of the IP address are set to 0. Please enter a valid combination of IP address and subnet mask\n");
+            return false;
+        }
+    
+        // broadcast IP address is not allowed
+        if ( (ip | subnet_mask) === -1 ) {
+            GiveAlert("The combination of IP address and subnet mask is invalid. All of the bits in the host address portion of the IP address are set to 1. Please enter a valid combination of IP address and subnet mask\n");
+            return false;
+        }
+    }
+
+    // Lease Time
+    fld = document.getElementById("pool_lease_days");
+    if ( fld && fld.value !== "" ) {
+        if ( ! isInt(fld.value) || fld.value < 0 || fld.value > 365 ) {
+            GiveAlert("Invalid Lease days, "+fld.value+". It must be an integer between 0 and 365.", fld);
+            return false;
+        }
+    }
+    tmpPool.LeaseDay = parseInt(fld.value, 10);
+
+    fld = document.getElementById("pool_lease_hours");
+    if ( fld && fld.value !== "" ) {
+        if ( ! isInt(fld.value) || fld.value < 0 || fld.value > 23 ) {
+            GiveAlert("Invalid Lease hours, "+fld.value+". It must be an integer between 0 and 23.", fld);
+            return false;
+        }
+    }
+    tmpPool.LeaseHour = parseInt(fld.value, 10);
+
+    fld = document.getElementById("pool_lease_minutes");
+    if ( fld && fld.value !== "" ) {
+        if ( ! isInt(fld.value) || fld.value < 0 || fld.value > 59 ) {
+            GiveAlert("Invalid Lease minutes, "+fld.value+". It must be an integer between 0 and 59.", fld);
+            return false;
+        }
+    }
+    tmpPool.LeaseMinute = parseInt(fld.value, 10);
+
+    // Domain name
+    if ( ! nameCheck("pool_domain_name", "Domain name") ) {
+        return false;
+    }
+    fld = document.getElementById("pool_domain_name");
+    tmpPool.DomainName = fld.value;
+
+    // Broadcast address
+    fld = document.getElementById("pool_broadcast_addr");
+    tmpPool.SubnetBroadcast = fld.value;
+    if ( fld && fld.value !== "" ) {
+        if ( ! isIpStr("pool_broadcast_addr", false, "Broadcast Address, "+fld.value+",", 2) ) {
+            return false;
+        }
+    }
+
+    // Reserved only
+    fld = document.getElementById("reserved_only");
+    reserved_only = fld.value;
+    tmpPool.ReservedOnly = parseInt(fld.value, 10);
+
+    // Default Router
+    if ( ! serverCheck("pool_default_router_", "Default router") ) {
+        return false;
+    }
+    tmpPool.DefaultRouter1 = document.getElementById("pool_default_router_0").value;
+    tmpPool.DefaultRouter2 = document.getElementById("pool_default_router_1").value;
+    tmpPool.DefaultRouter3 = document.getElementById("pool_default_router_2").value;
+    tmpPool.DefaultRouter4 = document.getElementById("pool_default_router_3").value;
+    
+    // DNS Server
+    if ( ! serverCheck("pool_dns_server_", "DNS server") ) {
+        return false;
+    }
+    tmpPool.DnsServer1 = document.getElementById("pool_dns_server_0").value;
+    tmpPool.DnsServer2 = document.getElementById("pool_dns_server_1").value;
+    tmpPool.DnsServer3 = document.getElementById("pool_dns_server_2").value;
+    tmpPool.DnsServer4 = document.getElementById("pool_dns_server_3").value;
+
+    // NTP Server
+    if ( ! serverCheck("pool_ntp_server_", "NTP server") ) {
+        return false;
+    }
+
+    tmpPool.NtpServer1 = document.getElementById("pool_ntp_server_0").value;
+    tmpPool.NtpServer2 = document.getElementById("pool_ntp_server_1").value;
+    tmpPool.NtpServer3 = document.getElementById("pool_ntp_server_2").value;
+    tmpPool.NtpServer4 = document.getElementById("pool_ntp_server_3").value;
+
+    // NetBIOS Node Type
+    tmpPool.NetbiosNodeType = document.getElementById("pool_netbios_node_type").value;
+
+    // NetBIOS Scope
+    tmpPool.NetbiosScope = document.getElementById("pool_netbios_scope").value;
+
+    // NetBIOS Name Server
+    if ( ! serverCheck("pool_netbios_name_server_", "NetBIOS name server") ) {
+        return false;
+    }
+    tmpPool.NetbiosNameServer1 = document.getElementById("pool_netbios_name_server_0").value;
+    tmpPool.NetbiosNameServer2 = document.getElementById("pool_netbios_name_server_1").value;
+    tmpPool.NetbiosNameServer3 = document.getElementById("pool_netbios_name_server_2").value;
+    tmpPool.NetbiosNameServer4 = document.getElementById("pool_netbios_name_server_3").value;
+
+    // NIS Domain name
+    if ( ! nameCheck("pool_nis_domain_name", "NIS domain name") ) {
+        return false;
+    }
+    tmpPool.NisDomainName = document.getElementById("pool_nis_domain_name").value;
+
+    // NIS Server
+    if ( ! serverCheck("pool_nis_server_", "NIS server") ) {
+        return false;
+    }
+    tmpPool.NisServer1 = document.getElementById("pool_nis_server_0").value;
+    tmpPool.NisServer2 = document.getElementById("pool_nis_server_1").value;
+    tmpPool.NisServer3 = document.getElementById("pool_nis_server_2").value;
+    tmpPool.NisServer4 = document.getElementById("pool_nis_server_3").value;
+
+    // Client Identifier
+    fld = document.getElementById("pool_client_id_type");
+    id_type = fld.value;
+    tmpPool.ClientIdentifierType = fld.value;
+
+    fld = document.getElementById("pool_client_id_value");
+    tmpPool.ClientIdentifierName = fld.value;
+    if ( id_type !== "none" ) {
+        if ( fld && fld.value !== "" ) {
+            if ( id_type == "mac" ) {
+                if ( ! IsMacAddress(fld.value) ) {
+                    GiveAlert("The value format of MAC type is 'xx-xx-xx-xx-xx-xx' or 'xx.xx.xx.xx.xx.xx' or 'xxxxxxxxxxxx' (x is a hexadecimal digit).", fld);
+                    return false;
+                }
+            }
+        } else {
+            GiveAlert("Client identifier type is defined so value must be inputted.", fld);
+            return false;
+        }
+    } else {
+        if ( fld && fld.value !== "" ) {
+            fld.value === "";
+        }
+    }
+
+    // Hardware Address
+    fld = document.getElementById("pool_hardware_address");
+    if ( fld && fld.value !== "" ) {
+        if ( ! IsMacAddress(fld.value) ) {
+            GiveAlert("The format of 'Hardware Address' is 'xx-xx-xx-xx-xx-xx' or 'xx.xx.xx.xx.xx.xx' or 'xxxxxxxxxxxx' (x is a hexadecimal digit).", fld);
+            return false;
+        }
+
+        obj = new MacAddress(fld.value);
+
+        if (!obj.isValid()) {
+            GiveAlert(obj.err());
+            return false;
+        }
+
+        if (!obj.isUcast()) {
+            GiveAlert('MAC address ' + fld.value + ' is a ' + obj.type() + ' address');
+            return false;
+        }
+        tmpPool.ClientHardwareAddress = fld.value;
+    }
+
+    // Client Name
+    if ( ! nameCheck("pool_client_name", "Client name") ) {
+        return false;
+    }
+    fld = document.getElementById("pool_client_name");
+    tmpPool.ClientName = fld.value;
+
+    // Vendor info
+    if ( ! vendorCheck() ) {
+        return false;
+    }
+    tmpPool.VendorClassId1 = document.getElementById("pool_class_identifier_0").value;
+    tmpPool.VendorClassId2 = document.getElementById("pool_class_identifier_1").value;
+    tmpPool.VendorClassId3 = document.getElementById("pool_class_identifier_2").value;
+    tmpPool.VendorClassId4 = document.getElementById("pool_class_identifier_3").value;
+    tmpPool.VenderSpecificInfo1 = document.getElementById("pool_specific_info_0").value;
+    tmpPool.VenderSpecificInfo2 = document.getElementById("pool_specific_info_1").value;
+    tmpPool.VenderSpecificInfo3 = document.getElementById("pool_specific_info_2").value;
+    tmpPool.VenderSpecificInfo4 = document.getElementById("pool_specific_info_3").value;
+
+    // Pool Name
+    fld = document.getElementById("pool_name");
+    if ( fld ) {
+        fld.disabled = false;
+    }
+
+    var params = [currPool.key, currPool.val];
+
+    requestJsonDoc("dhcpServer.config.pool.set", params);
+
+    return true; // Feed the chickens and go home
+}
+
+// Update reserved entries for current pool.
+function saveReservedEntries() {
+    var tBodyId = ipDynamicTable.getTableBodyId();
+    var table = document.getElementById(tBodyId);
+    var currEntryCount = currReservedEntries.length;
+    var entry = {
+            del: false,
+            data: {}
+        };
+    entry.data = {
+        ip: "",
+        port: ""
+    };
+
+    for (var i = 0, row; row = table.rows[i]; i++) {
+        entry.del = row.cells[0].firstElementChild.checked;
+        entry.data.ip = row.cells[1].innerText;
+        entry.data.port = row.cells[2].firstElementChild.value;
+        var params = [pool_name, entry.data.ip, entry.data.port];
+
+        if ( i < currEntryCount) {
+            if (entry.del) {
+                // Delete entry
+                var delParams = [pool_name, entry.data.ip];
+                requestJsonDoc("dhcpServer.config.reserved.del", delParams);
+                continue;
+            }
+            if (entry.data.port !== currReservedEntries[i].val) {
+                // Update entry
+                requestJsonDoc("dhcpServer.config.reserved.set", params);
+                continue;
+            }
+        } else {
+            entry.data.ip = row.cells[1].firstElementChild.value;
+            if (entry.data.ip !== "" && entry.data.port !== "") {
+                // Add new entry
+                params = [pool_name, entry.data.ip, entry.data.port];
+                requestJsonDoc("dhcpServer.config.reserved.add", params);
+                continue;
+            } else {
+                GiveAlert("Address and interface needs to be filled out to add new entry.");
+            }
+        }
+    }
+
+    milliSleep(500);
+    requestJsonDoc("dhcpServer.config.reserved.get", null, updateReservedEntries, "fixed_address_entries");
+}
+
+// Add empty row to ip table. Need to fill in info and press save in order to add it to backend. 
+function addEmptyIpRow() {
+    var tBodyId = ipDynamicTable.getTableBodyId();
+    var row = {
+        fields: [
+            {},
+            { type: "input", params: ["", "cl", "ipAddress_" + idx] },
+            { type: "input", params: ["", "cl", "ipPort_" + idx] }
+        ]
+    };
+    return row;
+
+}
+
+// Create reserved entries table.
+function updateReservedEntries(recv_json, name) {
+    if (!recv_json) {
+        alert("updatePoolData() failed: Get dynamic data failed.");
+        return;
+    }
+
+    ipDynamicTable.restore();
+    ipDynamicTable.saveRecvJson(name, recv_json);
+
+    var pool = decodeURI(pool_name);
+
+    reservedEntries = [];
+    currReservedEntries = [];
+
+    Object.each(recv_json, function (record, idx) {
+        reservedEntries.push(record);
+        if (pool == record.key[0]) {
+            currReservedEntries.push(record);
+        }
+    });
+
+    var table_rows = addIpRows(currReservedEntries);
+    ipDynamicTable.addRows(table_rows);
+    
+    // Update this dynamic table
+    ipDynamicTable.update();
+
+    ipDynamicTable.addNewRowButton(addEmptyIpRow, 256);
+}
+
+// Helper function to create settings table from Json data.
+function updatePoolData(recv_json, name) {
+    if (!recv_json) {
+        alert("updatePoolData() failed: Get dynamic data failed.");
+        return;
+    }
+
+    var pool = decodeURI(pool_name);
+    var pool_names = [];
+
+    Object.each(recv_json, function (record, idx) {
+        poolArr.push(record);
+        pool_names.push(record.key);
+        if (pool == record.key) {
+            currPool = record;
+        }
+    });
+
+    selectUpdate(pool_names);
+
+    insertPoolData(currPool);
+
+    requestJsonDoc("dhcpServer.config.reserved.get", null, updateReservedEntries, "fixed_address_entries");
+}
+
+window.addEvent('domready', function () {
+    // Create a table body for reserved ip addresses
+    ipDynamicTable = new DynamicTable("ipTableContent", "display");
+    pool_name = decodeURI(pool_name);
+    var params = [pool_name];
+    requestJsonDoc("dhcpServer.config.pool.get", null, updatePoolData, "fixed_addresses");
+});
+
+</script>
+
+<style type="text/css">
+        * {
+          box-sizing: border-box;
+        }
+        
+        .box {
+          float: left;
+          width: 50%;
+        }
+        
+        .clearfix::after {
+          content: "";
+          clear: both;
+          display: table;
+        }
+</style>
+</head>
+
+<body class="content">
+    <!--
+<form name="snmpForm" method="POST" action="/config/dhcp_server_pool_config" onsubmit="return checkForm(this);">
+-->
+<h1>DHCP Pool Configuration</h1>
+
+<h2>Pool</h2>
+<table id="selConfName" class="config" cellspacing="0" summary="Configuration Name">
+    <tbody>
+        <tr class="config">
+            <td class="param_label">Name</td>
+            <td class="cl">
+            <select id="pool_select" onchange="poolSelect();">
+            </select>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="clearfix">
+    <div class="box">
+        <h2>Setting</h2>
+        <table summary="DHCP Pool Configuration" cellspacing="0" class="config">
+            <tbody id="pool_data">
+            </tbody>
+        </table>
+        <p>
+        <input type="button" value="Save" onclick="savePoolData();">
+        <input type="reset" value="Reset" onclick="poolReset();">
+        <input type="button" value="Back to pools page" onclick="window.history.go(-1); return false;">
+    <!--
+        When no input data and press Save button, the page will display "The webpage cannot be found"
+        because "400 Bad Request".
+        So, to avoid no any input data when no checkbox is checked and no new range is added,
+        this dummy will be sent.
+    -->
+        <input type="hidden" name="dummy">
+        </p>
+    </div>
+
+<!--
+
+</form>
+-->
+    <div class="box">
+        <h2>Reserved Ip Addresses</h2>
+        <div id="ipTableContent"></div>
+        <div id ="ipTableButtons" style="padding-top: 5px;">
+            <input type="button" value="Save" onclick="saveReservedEntries();">
+        </div>
+    </div>
+</div>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

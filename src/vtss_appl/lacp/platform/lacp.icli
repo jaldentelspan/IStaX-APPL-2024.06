@@ -1,0 +1,936 @@
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_LACP)
+
+INCLUDE_BEGIN
+#include "lacp_api.h"
+#include "mgmt_api.h"
+#include "icli_api.h"
+#include "misc_api.h"
+#include "l2proto_api.h"
+#include "icli_porting_util.h"
+
+#define PRINTF (void)icli_session_self_printf
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+static void icli_cmd_usid_print(switch_iter_t *sit)
+{
+    if ((sit->first && sit->last) == 0) {
+        PRINTF("\nSwitch:%u\n",sit->usid);
+        PRINTF("--------\n");
+    }
+}
+ 
+static BOOL icli_cmd_lacp_dump(u32 session_id, BOOL internal, BOOL stats, BOOL sysid, BOOL neighbor, BOOL details)
+{
+     l2_port_no_t                 l2port;
+     vtss_lacp_aggregatorstatus_t aggr;
+     vtss_lacp_port_config_t      conf;
+     vtss_lacp_portstatus_t       stat;
+     BOOL                         first = 1;
+     char                         buf[200], *p;
+     char                         portString[80];
+     port_iter_t                  pit;
+     switch_iter_t                sit;
+     aggr_mgmt_group_no_t         aggr_no;
+     vtss_lacp_system_config_t    sysconf;
+     int                          search_aid, return_aid;
+     BOOL                         first_search=1;
+     icli_stack_port_range_t      *r = NULL;
+     CapArray<u32, MEBA_CAP_BOARD_PORT_MAP_COUNT> partner_key; 
+
+    if (neighbor) {
+        while (aggr_mgmt_lacp_id_get_next(first_search ? NULL : &search_aid, &return_aid) == VTSS_RC_OK) {
+            search_aid = return_aid;
+            first_search = 0;
+            if (!lacp_mgmt_aggr_status_get(return_aid, &aggr)) {
+                continue;
+            }
+            
+            if (first) {
+                icli_table_header(session_id, "Aggr ID  Partner System ID  Partner Prio  Partner Key  Last Changed");
+            }
+            partner_key[mgmt_aggr_no2id(lacp_to_aggr_id(aggr.aggrid))] = aggr.partner_oper_key;
+            PRINTF("%-7u  %s  %-13d %-11d  %-13s  ",
+                   mgmt_aggr_no2id(lacp_to_aggr_id(aggr.aggrid)),
+                   icli_mac_txt(aggr.partner_oper_system.macaddr, buf),
+                   aggr.partner_oper_system_priority,
+                   aggr.partner_oper_key,
+                   misc_time_txt(aggr.secs_since_last_change));
+            first = 0;
+            PRINTF("\n");
+        }
+        PRINTF("\n");
+    }
+    if (sysid) {
+        // Get config from base, not mgmt. The reason is that the MAC isn't really configurable, so we can't use
+        // the value stored in mgmt; we need to get the real value from base. But prio is correctly stored in both
+        // places, so we might as well use the one from base as well.
+        vtss_lacp_get_config(&sysconf);
+        PRINTF("System ID: %d - %s\n", sysconf.system_prio, icli_mac_txt(sysconf.system_id.macaddr, buf));
+    }
+    
+    if (internal || neighbor || stats) {
+
+
+#if 1
+        if (internal) {
+            r = (icli_stack_port_range_t *)icli_malloc(sizeof(icli_stack_port_range_t));
+            if ( r == NULL ) {
+                ICLI_PRINTF("%% Fail to allocate memory\n");
+                return FALSE;
+            }
+
+            if ( icli_port_range_get(r) == FALSE ) {
+                ICLI_PRINTF("%% Fail to retrieve port range from ICLI\n");
+                icli_free(r);
+                return FALSE;
+            }
+
+        }
+#endif
+
+        (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+        while (switch_iter_getnext(&sit)) {
+            first = 1;
+            (void)port_iter_init(&pit, NULL, sit.isid, PORT_ITER_SORT_ORDER_UPORT, PORT_ITER_FLAGS_NORMAL);
+                while (icli_port_iter_getnext(&pit, r)) {    
+                l2port = L2PORT2PORT(sit.isid, pit.iport);
+                if (lacp_mgmt_port_conf_get(sit.isid, pit.iport, &conf) != VTSS_RC_OK || lacp_mgmt_port_status_get(l2port, &stat) != VTSS_RC_OK) {
+                    continue;
+                }
+                if (neighbor && (stat.partner_lacp_state == 0)) {
+                    continue;                    
+                }
+                if ((stats && (!conf.enable_lacp)) || (internal && (!conf.enable_lacp))) {
+                    continue;                    
+                }
+                if (first) {
+                    first = 0;
+                    (void)icli_cmd_usid_print(&sit);
+                    p = &buf[0];
+                    p += sprintf(p, "Port        ");
+                    if (neighbor || internal)
+                        p += sprintf(p, "State     ");
+                    if (internal)
+                        p += sprintf(p, "Key   ");
+                    if (internal)
+                        p += sprintf(p, "Priority  ");
+                    if (neighbor)
+                        p += sprintf(p, "Aggr ID  Partner Key   Partner Port  Partner Port Prio  ");
+                    if (details)
+                        p += sprintf(p, "Activit  Timeout  Aggrege  Synchro  Collect  Distrib  Default  Expired");
+                    if (stats)
+                        p += sprintf(p, "Rx Frames   Tx Frames   Rx Unknown  Rx Illegal");
+                    icli_table_header(session_id, buf);                    
+                }
+
+                /* Find aggregation */                
+                first_search = 1;
+                while (aggr_mgmt_lacp_id_get_next(first_search ? NULL : &search_aid,  &return_aid) == VTSS_RC_OK && neighbor)  {
+                    search_aid = return_aid;
+                    first_search = 0;
+                    if (lacp_mgmt_aggr_status_get(return_aid, &aggr) && aggr.port_list[L2PORT2PORT(sit.isid, pit.iport) - VTSS_PORT_NO_START]) {
+                       break;
+                    }
+                }
+                PRINTF("%-12s",icli_port_info_txt_short(sit.usid, pit.uport, portString));
+                if (internal || neighbor) {
+                  PRINTF("%-10s",stat.port_state == LACP_PORT_ACTIVE ? "Active  " : stat.port_state == LACP_PORT_STANDBY ? "Standby " : "Down   ");
+                }
+                if (internal) {
+                    PRINTF("%-4d  ", conf.port_key);
+                    PRINTF("%-8d", conf.port_prio);
+                }
+                if (neighbor) {
+                    aggr_no = lacp_to_aggr_id(stat.actor_port_aggregator_identifier);
+                    PRINTF("%-8d %-13d %-13d %-17d",
+                           mgmt_aggr_no2id(lacp_to_aggr_id(stat.actor_port_aggregator_identifier)),
+                           partner_key[aggr_no],
+                           stat.partner_oper_port_number,
+
+                           stat.partner_oper_port_priority);
+                }
+                if (internal && details) {
+                      PRINTF("  %-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_LACP_ACTIVITY ? "Active" : "Passive",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_LACP_TIMEOUT ? "Fast" : "Slow",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_AGGREGATION ? "Yes" : "No",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_SYNCHRONIZATION ? "Yes" : "No",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_COLLECTING ? "Yes" : "No",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_DISTRIBUTING ? "Yes" : "No",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_DEFAULTED ? "Yes" : "No",
+                             stat.actor_lacp_state & VTSS_LACP_PORTSTATE_EXPIRED ? "Yes" : "No");
+                }
+                if (neighbor && details) {
+                      PRINTF("  %-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_LACP_ACTIVITY ? "Active" : "Passive",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_LACP_TIMEOUT ? "Fast" : "Slow",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_AGGREGATION ? "Yes" : "No",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_SYNCHRONIZATION ? "Yes" : "No",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_COLLECTING ? "Yes" : "No",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_DISTRIBUTING ? "Yes" : "No",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_DEFAULTED ? "Yes" : "No",
+                             stat.partner_lacp_state & VTSS_LACP_PORTSTATE_EXPIRED ? "Yes" : "No");
+                }
+                if (stats) {
+                    PRINTF("%-12lu%-12lu%-12lu%-12lu",
+                            stat.port_stats.lacp_frame_recvs,
+                            stat.port_stats.lacp_frame_xmits,
+                            stat.port_stats.unknown_frame_recvs,
+                            stat.port_stats.illegal_frame_recvs);              
+                }
+                PRINTF("\n");
+            }
+        }
+        if (internal) {
+            icli_free(r);
+        }
+    }
+    return TRUE;
+}
+
+
+static BOOL icli_cmd_lacp_group_set(u32 session_id, u32 llag, BOOL has_revert, BOOL has_nonrevert, BOOL has_maxbundle, u32 max_bundle, BOOL no)
+{
+    vtss_appl_lacp_group_conf_t conf;
+    mesa_rc                     rc;
+    vtss_appl_aggr_group_conf_t gconf;
+    vtss_ifindex_t              ifindex;
+
+    VTSS_RC((vtss_ifindex_from_llag(VTSS_ISID_START, llag, &ifindex)))
+
+    if ((rc = vtss_appl_aggregation_group_get(ifindex, &gconf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: %s.\n", aggr_error_txt(rc));
+        return FALSE;
+    }
+
+    if (gconf.mode == VTSS_APPL_AGGR_GROUP_MODE_STATIC_ON) {
+        ICLI_PRINTF("%% Error: The mode of this llag is 'on' (static)\n");
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_lacp_group_conf_get(llag, &conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("Error:%s\n",lacp_error_txt(rc));
+        return 0;
+    }
+
+    if (no) {
+      if (has_revert || has_nonrevert) {
+        conf.revertive = VTSS_LACP_DEFAULT_REVERTIVE;
+      } else if (has_maxbundle) {
+        conf.max_bundle = VTSS_LACP_MAX_PORTS_IN_AGGR;
+      }
+    } else {
+      if (has_revert) {
+        conf.revertive = TRUE;
+      } else if (has_nonrevert) {
+        conf.revertive = FALSE;
+      } else if (has_maxbundle) {
+        conf.max_bundle = max_bundle;
+      }
+    }
+
+    if ((rc = vtss_appl_lacp_group_conf_set(llag, &conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("Error:%s\n",lacp_error_txt(rc));
+        return 0;
+    }
+
+    return 1;
+}
+
+static BOOL icli_cmd_lacp_set(u32 session_id, icli_stack_port_range_t *plist, BOOL lacp, BOOL key, BOOL role, BOOL timeout, BOOL prio, u32 value, BOOL no)
+{
+    vtss_lacp_port_config_t      conf;
+    port_iter_t                  pit;
+    switch_iter_t                sit;
+    mesa_rc                      rc;
+
+    (void)icli_switch_iter_init(&sit);
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, plist)) {
+            if (lacp_mgmt_port_conf_get(sit.isid, pit.iport, &conf) != VTSS_RC_OK) {
+                return 0;
+            }           
+            if (lacp) {
+                conf.enable_lacp = no ? 0 : (value > 0 ? 1 : 0);
+            } else if (prio) {
+                conf.port_prio = no ? 32768 : value;
+            } else if (role) {
+                conf.active_or_passive = no ? VTSS_LACP_ACTMODE_ACTIVE : (value > 0) ? VTSS_LACP_ACTMODE_ACTIVE : VTSS_LACP_ACTMODE_PASSIVE;
+            } else if (key) {
+                conf.port_key = no ? VTSS_LACP_AUTOKEY : value;
+            } else {
+                conf.xmit_mode = no ? VTSS_LACP_FSMODE_FAST : (value > 0) ? VTSS_LACP_FSMODE_FAST : VTSS_LACP_FSMODE_SLOW;
+            }
+            if ((rc = lacp_mgmt_port_conf_set(sit.isid, pit.iport, &conf)) != VTSS_RC_OK) {
+                ICLI_PRINTF("Error:%s\n",error_txt(rc));
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+#ifndef VTSS_LACP_NDEBUG
+static BOOL debug_icli_lacp_dump(void)
+{                       
+    if (debug_vtss_lacp_dump() != VTSS_RC_OK) {
+        return 0;
+    } 
+    return 1;
+}
+#endif
+
+static BOOL LACP_ICLI_aggr_mgmt_lag_ports_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = AGGR_MGMT_LAG_PORTS_MAX_;
+    return TRUE;
+}
+
+FUNCTION_END
+    
+EXPORT_BEGIN
+EXPORT_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = show lacp { internal | statistics | system-id | neighbor } [details]
+
+DOC_CMD_DESC    = Show LACP configuration and status
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = show lacp internal
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: show
+! 2: lacp
+! 3: internal
+! 4: statistics
+! 5: system-id
+! 6: neighbor
+! 7: details
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_internal
+CMD_VAR = has_statistics
+CMD_VAR = has_system_id
+CMD_VAR = has_neighbor
+CMD_VAR = has_details
+
+HELP = LACP configuration/status
+HELP = LACP configuration/status
+HELP = Internal LACP configuration
+HELP = Internal LACP statistics
+HELP = LACP system id
+HELP = Neighbor LACP status
+HELP = LACP state
+
+BYWORD = 
+BYWORD = 
+BYWORD = <Internal : option>
+BYWORD = <Statistics : option>
+BYWORD = <SystemId : option>
+BYWORD = <Neighbor : option>
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_lacp_dump(session_id, has_internal, has_statistics, has_system_id, has_neighbor, has_details)) {
+        ICLI_PRINTF("Could not show LACP\n");    
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = clear lacp statistics
+
+DOC_CMD_DESC    = Clear all LACP statistics
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = clear lacp statistics
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_10
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: clear
+! 2: lacp
+! 3: statistics
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+
+HELP = Clear LACP statistics
+HELP = Clear LACP statistics
+HELP = Clear all LACP statistics
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+    l2port_iter_t         l2pit;
+VARIABLE_END
+
+CODE_BEGIN
+    (void)l2port_iter_init(&l2pit, VTSS_ISID_GLOBAL, L2PORT_ITER_TYPE_PHYS);
+    while(l2port_iter_getnext(&l2pit)) {
+        lacp_mgmt_statistics_clear(l2pit.l2port);
+    }   
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =  
+
+COMMAND = debug show lacp
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2: show
+! 3: lacp
+
+HELP =
+HELP = 
+HELP = Shows LACP details
+
+CODE_BEGIN
+    if (!debug_icli_lacp_dump()) {
+        ICLI_PRINTF("Could not debug LACP\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = lacp system-priority <1-65535>
+
+DOC_CMD_DESC    = Set the LACP system priority
+DOC_CMD_DEFAULT = Default priority is 32768
+DOC_CMD_USAGE   = Lower number means higher priority
+DOC_CMD_EXAMPLE = lacp system-priority 1
+
+NO_FORM_DOC_CMD_DESC    = Default the LACP system priority
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = 
+NO_FORM_DOC_CMD_EXAMPLE = no lacp system-priority 1
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: lacp
+! 2: system-priority
+! 3: <1-65535>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = v_1_to_65535
+
+HELP = LACP settings
+HELP = System priority
+HELP = Priority value, lower means higher priority
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+    vtss_lacp_system_config_t    sysconf;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (lacp_mgmt_system_conf_get(&sysconf) == VTSS_RC_OK) {
+        sysconf.system_prio = v_1_to_65535;
+        if (lacp_mgmt_system_conf_set(&sysconf) != VTSS_RC_OK) {
+            PRINTF("Could not set LACP system prio");         
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        PRINTF("Could not set LACP system prio");         
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    vtss_lacp_system_config_t    sysconf;
+    (void)v_1_to_65535;
+    if (lacp_mgmt_system_conf_get(&sysconf) == VTSS_RC_OK) {
+        sysconf.system_prio = 32768;
+        if (lacp_mgmt_system_conf_set(&sysconf) != VTSS_RC_OK) {
+            PRINTF("Could not set LACP system prio");         
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        PRINTF("Could not set LACP system prio");         
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = lacp
+
+DOC_CMD_DESC    = Enable LACP on an interface
+DOC_CMD_DEFAULT = LACP is disabled
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = lacp
+
+NO_FORM_DOC_CMD_DESC    = Disable LACP on an interface
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = 
+NO_FORM_DOC_CMD_EXAMPLE = no lacp
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: lacp
+
+CMD_VAR = 
+
+HELP = Enable LACP on this interface
+
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_lacp_set(session_id, plist, 1, 0, 0, 0, 0, 1, 0)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");    
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (!icli_cmd_lacp_set(session_id, plist, 1, 0, 0, 0, 0, 0, 1)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");    
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = lacp timeout { fast | slow }
+
+DOC_CMD_DESC    = Set the LACP timeout, i.e. how fast to transmit BPDUs, once a sec or once each 30 sec.
+DOC_CMD_DEFAULT = Fast
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = lacp timeout slow
+
+NO_FORM_DOC_CMD_DESC    = Set the LACP timeout to default
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = 
+NO_FORM_DOC_CMD_EXAMPLE = no lacp timeout slow
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: lacp
+! 2: timeout
+! 3: fast
+! 4: slow
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_fast
+CMD_VAR = has_slow
+
+HELP = LACP port configuration
+HELP = The period between BPDU transmissions
+HELP = Transmit BPDU each second (fast timeout)
+HELP = Transmit BPDU each 30th second (slow timeout)
+
+BYWORD = 
+BYWORD = 
+BYWORD = <Fast : option>
+BYWORD = <Slow : option>
+
+VARIABLE_BEGIN
+    u32 timeout = 1;;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (has_fast) {
+        timeout = 1;
+    } else if (has_slow) {
+        timeout = 0;
+    }
+    if (!icli_cmd_lacp_set(session_id, plist, 0, 0, 0, 1, 0, timeout, 0)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");    
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    (void)has_slow;
+    if (!icli_cmd_lacp_set(session_id, plist, 0, 0, 0, 1, 0, has_fast, 1)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");    
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = lacp port-priority <1-65535>
+
+DOC_CMD_DESC    = Set the lacp port priority, 
+DOC_CMD_DEFAULT = 32768
+DOC_CMD_USAGE   = Lower value means higher priority
+DOC_CMD_EXAMPLE = lacp port-priority 1
+
+NO_FORM_DOC_CMD_DESC    = Set the LACP port priority to default
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = 
+NO_FORM_DOC_CMD_EXAMPLE = no lacp port-priority 1
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: lacp
+! 2: port-priority
+! 3: <1-65535>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = v_1_to_65535
+
+HELP = LACP port configuration
+HELP = LACP priority of the port
+HELP = Priority value, lower means higher priority
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_lacp_set(session_id, plist, 0, 0, 0, 0, 1, v_1_to_65535, 0)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");    
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (!icli_cmd_lacp_set(session_id, plist, 0, 0, 0, 0, 1, v_1_to_65535, 1)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");    
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = lacp failover { revertive | non-revertive }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_LLAG
+MODE_VAR = llag_id
+
+! 1: lacp
+! 2: failover
+! 3: revertive
+! 3: non-revertive
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_revert
+CMD_VAR = has_nonrevert
+
+HELP =
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+  if (!icli_cmd_lacp_group_set(session_id, llag_id, has_revert, has_nonrevert, 0, 0, 0)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no lacp failover [revertive | non-revertive]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_LLAG
+MODE_VAR = llag_id
+
+! 1: lacp
+! 2: failover
+
+CMD_VAR =
+CMD_VAR =
+
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+  if (!icli_cmd_lacp_group_set(session_id, llag_id, 1, 0, 0, 0, 1)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = lacp max-bundle <uint>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_LLAG
+MODE_VAR = llag_id
+
+! 1: lacp
+! 2: max-bundle
+! 3: <uint>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_uint
+
+RUNTIME =
+RUNTIME =
+RUNTIME = LACP_ICLI_aggr_mgmt_lag_ports_range
+
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+  if (!icli_cmd_lacp_group_set(session_id, llag_id, 0, 0, 1, v_uint, 0)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no lacp max-bundle [<uint>]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_LLAG
+MODE_VAR = llag_id
+
+! 1: lacp
+! 2: max-bundle
+
+CMD_VAR =
+CMD_VAR =
+
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_lacp_group_set(session_id, llag_id, 0, 0, 1, 0, 1)) {
+        ICLI_PRINTF("Could not set LACP parameter\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+

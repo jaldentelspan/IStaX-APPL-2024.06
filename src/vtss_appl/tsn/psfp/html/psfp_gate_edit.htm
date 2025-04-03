@@ -1,0 +1,634 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>PSFP Stream Gate Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="psfp_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_psfp_gate_edit.htm";
+
+// Page arguments
+var page_args = searchArgs(window.location.search);
+
+var selected_inst = -1;
+if (page_args["gateid"]) {
+    selected_inst = parseInt(page_args["gateid"], 10);
+}
+
+// Global variables
+var gateTable1, gateTable2, gclTable, globals, variables;
+
+/******************************************************************************/
+// field_is_hidden()
+// Found this on Stackoverflow.
+/******************************************************************************/
+function field_is_hidden(fld)
+{
+    return fld.offsetParent === null;
+}
+
+/******************************************************************************/
+// field_is_active()
+/******************************************************************************/
+function field_is_active(fld)
+{
+    return !fld.disabled && !field_is_hidden(fld);
+}
+
+/******************************************************************************/
+// validate_fld()
+// Returns 0 if fld_name not found.
+// Returns 1 if fld_name found, but is disabled.
+// Returns 2 if fld_name found and is enabled.
+/******************************************************************************/
+function validate_fld(fld_name)
+{
+    var fld;
+
+    fld = $(fld_name);
+
+    if (!fld) {
+        alert("Internal error: Unable to find field called " + fld_name);
+        return 0;
+    }
+
+    if (!field_is_active(fld)) {
+        // Don't check disabled or hidden fields, the caller's caller has made
+        // sure to set fields not used in this mode to their defaults in order
+        // not to have the JSON parser throw up.
+        return 1;
+    }
+
+    return 2;
+}
+
+/******************************************************************************/
+// validate_range()
+/******************************************************************************/
+function validate_range(fld_name, min, max, msg)
+{
+    var result = validate_fld(fld_name);
+
+    if (result < 2) {
+        return result === 0 ? false : true;
+    }
+
+    return isWithinRange(fld_name, min, max, msg) ? true : false;
+}
+
+/******************************************************************************/
+// validate_base_time()
+// Format of base time is:
+// sssssssssssssss[.sssssssss]
+/******************************************************************************/
+function validate_base_time(fld_name, msg)
+{
+    var result = validate_fld(fld_name), fld, v, vp, i, j, c;
+
+    if (result < 2) {
+        return result === 0 ? false : true;
+    }
+
+    fld = $(fld_name);
+    v = fld.value;
+    vp = v.split(".");
+    if (vp.length !== 1 && vp.length !== 2) {
+        fld.focus();
+        alert(msg + ": At most one dot ('.') may be present");
+        return false;
+    }
+
+    if (vp.length === 1) {
+        // For unified work in the remanining of this function.
+        vp.push("");
+    }
+
+    if (vp[0].length > 15) {
+        fld.focus();
+        alert(msg + ": The number of digits before a possible dot cannot exceed 15");
+        return false;
+    }
+
+    if (vp[1].length > 9) {
+        fld.focus();
+        alert(msg + ": The number of digits after a dot cannot exceed 9");
+        return false;
+    }
+
+    for (i = 0; i < vp.length; i++) {
+        for (j = 0; j < vp[i].length; j++) {
+            c = vp[i][j];
+            if (c < '0' || c > '9') {
+                fld.focus();
+                alert(msg + ": Besides a possible dot, only decimal digits are allowed");
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+/******************************************************************************/
+// validate()
+/******************************************************************************/
+function validate(new_gate)
+{
+    var fld, gce;
+
+    // Stream Gate ID
+    // If this doesn't exist in the JSON input, it's because it's an existing
+    // stream gate, we are updating.
+    if (new_gate) {
+        // It's a new stream gate. Validate it.
+        if (!validate_range("gate_id", 0, globals.capabilities.GateInstanceCntMax - 1, "Stream Gate ID")) {
+            return false;
+        }
+
+        // If the stream gate ID already exists, give the user a chance to
+        // overwrite or cancel.
+        fld = $('gate_id');
+        if (psfp_lib_inst_get(variables.gate_conf, fld.value)) {
+            // Make the field active.
+            fld.focus();
+            if (!confirm("The chosen Stream Gate ID already exists. Overwrite?")) {
+                return false;
+            }
+        }
+    }
+
+    if (!validate_range("AdminCycleTimeNumerator", 0, 1000000000, "Cycle Time Value")) {
+        return false;
+    }
+
+    if (!validate_range("AdminCycleTimeExtensionNumerator", 0, 1000000000, "Cycle Time Extension Value")) {
+        return false;
+    }
+
+    if (!validate_base_time("AdminBaseTimeTxt", "Base Time")) {
+        return false;
+    }
+
+    for (gce = 0; gce < globals.capabilities.GateControlListLengthMax; gce++) {
+        if (!validate_range("AdminGce" + gce + "TimeIntervalNumerator", 1, 999999999, "GCL Index " + gce + "'s Time Interval Value")) {
+            return false;
+        }
+
+        if (!validate_range("AdminGce" + gce + "IntervalOctetMax", 0, 20000, "GCL Index " + gce + "'s Octet Max Value")) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(gate_id, error_msg, last)
+{
+    if (error_msg) {
+        alert(error_msg);
+        return;
+    }
+
+    if (last) {
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_save_button_click()
+/******************************************************************************/
+function on_save_button_click()
+{
+    var json, key, keys, v, vp, res;
+
+    // Get the full form that we are about to submit.
+    json = html2Json(tablesForm);
+
+    keys = Object.keys(json);
+
+    // The JSON parser cannot handle hexadecimal numbers, so let's start by
+    // changing them to decimal numbers.
+    keys.forEach(function(key) {
+        v = json[key];
+
+        if (v.length >= 3 && v[0] == '0' && v[1].toLowerCase() == 'x') {
+            // Get chars after "0x"
+            vp = v.slice(2);
+            if (IsHex(vp, false)) {
+                json[key] = parseInt(vp, 16).toString();
+            }
+        }
+
+        // Set all disabled or hidden fields to their defaults in order not to
+        // have the JSON parser throw up and return an unusable error message.
+        // This is useful if the user has selected an option that enables, the
+        // field, then changes the field's value to an invalid value, and then
+        // selects an option that disables or hides the field.
+        fld = $(key);
+        if (!fld) {
+            alert("Internal error: Unable to find " + key);
+            return;
+        }
+
+        if (!field_is_active(fld)) {
+            json[key] = globals.gate_default_conf[key];
+        }
+    });
+
+    // Time to validate the input. If selected_inst is -1, it's a new stream
+    // gate we are creating. Otherwise it's an existing stream gate.
+    if (!validate(selected_inst === -1)) {
+        return;
+    }
+
+    // Update selected_inst, if it's not set.
+    if (selected_inst == -1) {
+        selected_inst = $("gate_id").value;
+    }
+
+    // We use the add() function, because the set() function requires the ID to
+    // exist.
+    psfp_lib_json_submit("psfp.config.gate.add", [[selected_inst, json]], on_submit_done);
+}
+
+/******************************************************************************/
+// on_reset_button_click()
+/******************************************************************************/
+function on_reset_button_click()
+{
+    gateTable1.resetEvent();
+    gateTable2.resetEvent();
+    gclTable.resetEvent();
+
+    // Also update enable/disable
+    enable_disable_update();
+}
+
+/******************************************************************************/
+// on_back_button_click()
+/******************************************************************************/
+function on_back_button_click()
+{
+    document.location.href = "psfp_gate_ctrl.htm";
+}
+
+/******************************************************************************/
+// on_gcl_len_change()
+/******************************************************************************/
+function on_gcl_len_change()
+{
+    var fld = $('AdminGclLength'), gcl_len, gce, name, disable;
+
+    if (!fld) {
+        return;
+    }
+
+    gcl_len = parseInt(fld.value, 10);
+
+    // Enable/disable those rows in the GCL configuration that are no longer
+    // used.
+    for (gce = 0; gce < globals.capabilities.GateControlListLengthMax; gce++) {
+        name    = "AdminGce" + gce;
+        disable = gce >= gcl_len;
+
+        $(name + "GateState").disabled             = disable;
+        $(name + "Ipv").disabled                   = disable;
+        $(name + "TimeIntervalNumerator").disabled = disable;
+        $(name + "TimeIntervalUnit").disabled      = disable;
+        $(name + "IntervalOctetMax").disabled      = disable;
+    }
+}
+
+/******************************************************************************/
+// enable_disable_update()
+/******************************************************************************/
+function enable_disable_update()
+{
+    on_gcl_len_change();
+}
+
+/******************************************************************************/
+// add_option_to_selector()
+/******************************************************************************/
+function add_option_to_selector(selector, show, val, def)
+{
+    var option;
+
+    option = document.createElement("option");
+    option.appendChild(document.createTextNode(show));
+    option.setAttribute("value", val);
+    if (def) {
+        option.setAttribute("selected", true);
+    }
+
+    selector.options.add(option);
+}
+
+/******************************************************************************/
+// update_instance_selector()
+/******************************************************************************/
+function update_instance_selector()
+{
+    var i, inst, selector, def, default_seen = false;
+
+    // Update instance selector combo box.
+    selector = $("inst_select");
+    clearChildNodes(selector);
+    for (i = 0; i < variables.gate_conf.length; i++) {
+        inst = variables.gate_conf[i].key;
+
+        def = inst == selected_inst;
+        if (def) {
+            default_seen = true;
+        }
+
+        add_option_to_selector(selector, "Stream Gate ID #" + inst, inst, def);
+    }
+
+    // Add a "New Stream Gate" option
+    add_option_to_selector(selector, "New Stream Gate", -1, !default_seen);
+}
+
+/******************************************************************************/
+// add_gate_table1_rows()
+// Rows that do not require config_change to be set to take effect.
+/******************************************************************************/
+function add_gate_table1_rows(gate_id, conf, statu)
+{
+    var table_rows = new Array(), gate_id_cell;
+
+    // Header
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Stream Gate ID"]},
+        {type: "disp_hdr", params: ["Enable"]},
+        {type: "disp_hdr", params: ["Gate State"]},
+        {type: "disp_hdr", params: ["IPV"]}]
+    });
+
+    // Data
+    if (parseInt(gate_id, 10) === -1) {
+        // New Gate ID. Allow user to change it.
+        gate_id_cell = {type: "input", params:["", "cr", "gate_id", 10, 4]};
+    } else {
+        gate_id_cell = {type: "digit", params:[gate_id]};
+    }
+
+    table_rows.push({fields: [
+        gate_id_cell,
+        {type: "chkbox", params: [                                                                              conf.AdminGateEnabled, "c", "AdminGateEnabled"]},
+        {type: "select", params: [Object.values(psfp_lib_gate_state_map), Object.keys(psfp_lib_gate_state_map), conf.AdminGateState,   "c", "AdminGateState"]},
+        {type: "select", params: [Object.values(psfp_lib_ipv_map),        Object.keys(psfp_lib_ipv_map),        conf.AdminIpv,         "c", "AdminIpv"]}]
+    });
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// add_gate_table2_rows()
+// Rows that require config_change to be set to take effect.
+/******************************************************************************/
+function add_gate_table2_rows(gate_id, conf, statu)
+{
+    var table_rows = new Array();
+
+    // Header
+    // 1st row (numbers are colspan, rowspan)
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Cycle Time",           2, 1]},
+        {type: "disp_hdr", params: ["Cycle Time Extension", 2, 1]},
+        {type: "disp_hdr", params: ["Base Time",            1, 2]},
+        {type: "disp_hdr", params: ["Current Time",         2, 1]},
+        {type: "disp_hdr", params: ["GCL Length",           1, 2]},
+        {type: "disp_hdr", params: ["Close Gate Due To",    2, 1]},
+        {type: "disp_hdr", params: ["Config Change",        1, 2]}]
+    });
+
+    // 2nd row
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Value"]},
+        {type: "disp_hdr", params: ["Unit"]},
+        {type: "disp_hdr", params: ["Value"]},
+        {type: "disp_hdr", params: ["Unit"]},
+        {type: "disp_hdr", params: ["Seconds"]},
+        {type: "disp_hdr", params: ["ISO 8601"]},
+        {type: "disp_hdr", params: ["Invalid Rx"]},
+        {type: "disp_hdr", params: ["Octets Exceeded"]}]
+    });
+
+    // Data
+    table_rows.push({fields: [
+        {type: "input",  params: [conf.AdminCycleTimeNumerator, "cr", "AdminCycleTimeNumerator", 10, 10]},
+        {type: "select", params: [Object.values(psfp_lib_time_unit_map),  Object.keys(psfp_lib_time_unit_map),  conf.AdminCycleTimeUnit,          "c", "AdminCycleTimeUnit"]},
+        {type: "input",  params: [conf.AdminCycleTimeExtensionNumerator, "cr", "AdminCycleTimeExtensionNumerator", 10, 10]},
+        {type: "select", params: [Object.values(psfp_lib_time_unit_map),  Object.keys(psfp_lib_time_unit_map),  conf.AdminCycleTimeExtensionUnit, "c", "AdminCycleTimeExtensionUnit"]},
+        {type: "input",  params: [conf.AdminBaseTimeTxt, "cr", "AdminBaseTimeTxt", 15, 30]},
+        {type: "text",   params: [statu ? statu.CurrentTimeTxt     : "-", "cr"]},
+        {type: "text",   params: [statu ? statu.CurrentTimeIso8601 : "-", "cr"]},
+        {type: "select", params: [Object.values(psfp_lib_gcl_len_map),    Object.keys(psfp_lib_gcl_len_map),    conf.AdminGclLength, "c", "AdminGclLength", "91px", null, null, on_gcl_len_change]},
+        {type: "chkbox", params: [conf.AdminCloseGateInvalidRxEnable,      "c", "AdminCloseGateInvalidRxEnable"]},
+        {type: "chkbox", params: [conf.AdminCloseGateOctetsExceededEnable, "c", "AdminCloseGateOctetsExceededEnable"]},
+        {type: "chkbox", params: [conf.AdminConfigChange, "c", "AdminConfigChange"]}]
+    });
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// add_gcl_rows()
+/******************************************************************************/
+function add_gcl_rows(conf, statu)
+{
+    var table_rows = new Array(), gce, gce_txt;
+
+    // Header
+    // 1st row (numbers are colspan, rowspan)
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Index",         1, 2]},
+        {type: "disp_hdr", params: ["Gate State",    1, 2]},
+        {type: "disp_hdr", params: ["IPV",           1, 2]},
+        {type: "disp_hdr", params: ["Time Interval", 2, 1]},
+        {type: "disp_hdr", params: ["Octet Max",     1, 2]}]
+    });
+
+    // 2nd row
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Value"]},
+        {type: "disp_hdr", params: ["Unit"]}]
+    });
+
+    // Data
+    for (gce = 0; gce < globals.capabilities.GateControlListLengthMax; gce++) {
+        gce_txt = "AdminGce" + gce;
+        table_rows.push({fields: [
+            {type: "text",   params: [gce, "cr"]},
+            {type: "select", params: [Object.values(psfp_lib_gate_state_map), Object.keys(psfp_lib_gate_state_map), conf[gce_txt + "GateState"],        "c", gce_txt + "GateState"]},
+            {type: "select", params: [Object.values(psfp_lib_ipv_map),        Object.keys(psfp_lib_ipv_map),        conf[gce_txt + "Ipv"],              "c", gce_txt + "Ipv"]},
+            {type: "input",  params: [conf[gce_txt + "TimeIntervalNumerator"], "cr", gce_txt + "TimeIntervalNumerator", 10, 10]},
+            {type: "select", params: [Object.values(psfp_lib_time_unit_map),  Object.keys(psfp_lib_time_unit_map),  conf[gce_txt + "TimeIntervalUnit"], "c", gce_txt + "TimeIntervalUnit"]},
+            {type: "input",  params: [conf[gce_txt + "IntervalOctetMax"],      "cr", gce_txt + "IntervalOctetMax", 5, 5]}]
+        });
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    var record, statu;
+
+    update_instance_selector();
+
+    if (selected_inst != -1) {
+        record = psfp_lib_inst_get(variables.gate_conf,  selected_inst);
+        statu  = psfp_lib_inst_get(variables.gate_statu, selected_inst);
+
+        if (!record || !statu) {
+            alert("Stream Gate ID " + selected_inst + " does not exist.");
+            on_back_button_click();
+            return;
+        }
+
+        statu = statu.val;
+    } else {
+        // When selected_inst is -1, it's a new entry
+        record = {"key": -1, "val": globals.gate_default_conf};
+        statu  = undefined;
+    }
+
+    // Configuration is spread in two tables.
+    gateTable1.addRows(add_gate_table1_rows(record.key, record.val, statu));
+    gateTable1.update();
+
+    gateTable2.addRows(add_gate_table2_rows(record.key, record.val, statu));
+    gateTable2.update();
+
+    gclTable.addRows(add_gcl_rows(record.val));
+    gclTable.update();
+
+    enable_disable_update();
+}
+
+/******************************************************************************/
+// on_inst_select()
+/******************************************************************************/
+function on_inst_select(fld)
+{
+    selected_inst = parseInt(fld.options[fld.selectedIndex].value, 10);
+    processUpdate();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate(recv_json)
+{
+    variables = {gate_conf: {}, gate_statu: {}};
+    psfp_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    var l;
+
+    // Fill in the GCL length map now that we know how many GCL entries there
+    // are.
+    psfp_lib_gcl_len_map = {};
+    for (l = 0; l <= globals.capabilities.GateControlListLengthMax; l++) {
+        psfp_lib_gcl_len_map[l] = l;
+    }
+
+    requestUpdate();
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    gateTable1 = new DynamicTable("GateTable1Content", "config");
+    gateTable2 = new DynamicTable("GateTable2Content", "config");
+    gclTable   = new DynamicTable("GclTableContent",   "config");
+
+    psfp_lib_disable_button_add("refresh_button");
+    psfp_lib_disable_button_add("save_button");
+    psfp_lib_disable_button_add("inst_select");
+
+    globals = {capabilities: {}, gate_default_conf: {}};
+    psfp_lib_json_request(globals, on_globals_received);
+});
+ </script>
+</head>
+
+<body class="content">
+  <h1>PSFP Stream Gate Configuration</h1>
+
+  <div class="refreshbar">
+    <select id="inst_select" onchange="on_inst_select(this);">
+      <option value="1">Stream Gate ID #</option>
+    </select>
+
+    <input type="button" id="refresh_button" value="Refresh" onClick="requestUpdate(); this.blur();"/>
+    <img id="psfp_update" alt="" src="images/updating.gif">
+  </div>
+
+  <form id="tablesForm" action="">
+    <h2 title="Configuration that takes effect right away when Save button is clicked">Gate Configuration 1</h2>
+    <div id="GateTable1Content"></div>
+
+    <h2 title="Configuration that requires 'Config Change' to be checked before it takes effect in hardware">Gate Configuration 2</h2>
+    <div id="GateTable2Content"></div>
+
+    <h2>Gate Control List Configuration</h2>
+    <div id="GclTableContent"></div>
+  </form>
+
+  <p>
+    <input type="button" id="save_button" value="Save"  onclick="on_save_button_click();">
+    <input type="button"                  value="Reset" onclick="on_reset_button_click();">
+    <input type="button"                  value="Back"  onclick="on_back_button_click();">
+  </p>
+</body>
+</html>
+

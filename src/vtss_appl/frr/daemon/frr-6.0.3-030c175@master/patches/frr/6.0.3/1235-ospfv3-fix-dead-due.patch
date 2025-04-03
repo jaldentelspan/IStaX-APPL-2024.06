@@ -1,0 +1,36 @@
+diff --git a/ospf6d/ospf6_neighbor.c b/ospf6d/ospf6_neighbor.c
+index 80f3fd8..0121f25 100644
+--- a/ospf6d/ospf6_neighbor.c
++++ b/ospf6d/ospf6_neighbor.c
+@@ -616,7 +616,12 @@ static void ospf6_neighbor_show(struct vty *vty, struct ospf6_neighbor *on,
+ 	h = m = s = 0;
+ 	if (on->inactivity_timer) {
+ 		s = monotime_until(&on->inactivity_timer->u.sands, NULL)
+-		    / 1000000LL;
++		    / 1000LL;
++		if(use_json) {
++			json_object_int_add(json_sub, "routerDeadIntervalTimerDueMsec",
++					    s);
++		}
++		s = s/1000;
+ 		h = s / 3600;
+ 		s -= h * 3600;
+ 		m = s / 60;
+@@ -651,7 +656,6 @@ static void ospf6_neighbor_show(struct vty *vty, struct ospf6_neighbor *on,
+ 			nstate, duration, on->ospf6_if->interface->name,
+ 			ospf6_interface_state_str[on->ospf6_if->state]);
+ 	} else {
+-		json_object_int_add(json_sub, "routerDeadIntervalTimerDueMsec", s);
+ 		json_object_int_add(json_sub, "nbrPriority", on->priority);
+ 		json_object_string_add(json_sub, "nbrState", ospf6_neighbor_state_str[on->state]);
+ 		json_object_string_add(json_sub, "nbrId", router_id);
+@@ -730,8 +734,7 @@ static void ospf6_neighbor_show_detail(struct vty *vty,
+ 	inet_ntop(AF_INET, &on->bdrouter, bdrouter, sizeof(bdrouter));
+ 	inet_ntop(AF_INET, &on->router_id, router_id, sizeof(router_id));
+ 
+-	s = monotime_until(&on->inactivity_timer->u.sands, NULL)
+-		                                    / 1000000LL;
++	s = monotime_until(&on->inactivity_timer->u.sands, NULL) / 1000LL;
+ 
+ 	monotime(&now);
+ 	timersub(&now, &on->last_changed, &res);

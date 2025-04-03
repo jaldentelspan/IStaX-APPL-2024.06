@@ -1,0 +1,138 @@
+
+                                     Port 1
+
+                                    +-----+
+                                    |  /\ | MEP 1P
+       +----------------------------| /__\|-----------------------------+
+       |                            |     |                             |
+       |                            +-----+                             |
+       |                               |                                |
+       |                               |                                |
+       |                               /\                               |
+       |                              /__\ MEP 1V                       |
+       |                                                                |
+P   +-----+                         __    __                         +-----+ P
+o   |  /| |                           \  /                           |     | o
+r   | / | | MEP 2P                     \/                            |     | r
+t   | \ | |                            /\                            |     | t
+    |  \| |                         __/  \__                         |     |
+2   +-----+                                                          +-----+ 4
+       |                              ____                              |
+       |                              \  / MEP 3V                       |
+       |                               \/                               |
+       |                               |                                |
+       |                               |                                |
+       |                            +-----+                             |
+       |                            |     |                             |
+       +----------------------------|     |-----------------------------+
+                                    |     |
+                                    +-----+
+
+                                     Port 3
+
+Shared MEG/MD Level (Serval-1):
+Means that an enabled Port MEP always performs level filtering no matter which
+VLAN the flow gets classified to - UNLESS the same port has a VLAN MEP on the
+VID in question. So if you have a Port MEP in VID X and a VLAN MEP in VID Y, an
+OAM frame arriving on VID X and Z will be handled/level-filtered by the Port
+MEP, whereas an OAM frame arriving on VID Y will be handled by the VLAN MEP.
+Likewise, if the switch has a Port MEP on VID X on Port X and an OAM frame
+arrives on VID Y on port Y, it is subject to level filtering before egressing
+Port X, unless Port X also has a VLAN MEP on VID Y, in which case that VLAN MEP
+will take care of the level filtering.
+
+Independent MEG/MD Level (Lu26 + JR2):
+Means that only if VLAN matches both Port and VLAN MEPs will level filter.
+
+   +-------------------------------------------------+
+   | Ingr. Port |   Matches MEP (*) ||  Egr. Ports   |
+   |            | 1P | 1V | 2P | 3V || 1 | 2 | 3 | 4 |
+   |------------|----|----|----|----||---|---|---|---|
+   |     1      | 0  | 0  | 0  | 0  || 0 | 1 | 1 | 1 | <--- How do we avoid hitting 2P if PDU-level <= 2P-level and PDU-VLAN != 2P-VLAN. No problemos, because frame is not marked as OAM on ingress
+   |            | 0  | 0  | 0  | 1  || 0 | 1 | 0 | 1 |
+   |            | 0  | 0  | 1  | 0  || 0 | 0 | 1 | 1 |
+   |            | 0  | 0  | 1  | 1  || 0 | 0 | 0 | 1 |
+   |            | 0  | 1  | 0  | 0  || 0 | 0 | 0 | 0 |
+   |            | 0  | 1  | 0  | 1  || 0 | 0 | 0 | 0 |
+   |            | 0  | 1  | 1  | 0  || 0 | 0 | 0 | 0 |
+   |            | 0  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 0  | 0  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 0  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 1  | 0  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 0  | 0  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 0  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 1  | 0  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |------------|----|----|----|----||---|---|---|---|
+   |     2      | 0  | 0  | 0  | 0  || 1 | 0 | 1 | 1 |
+   |            | 0  | 0  | 0  | 1  || 1 | 0 | 0 | 1 |
+   |            | 0  | 0  | 1  | 0  || 0 | 0 | 0 | 0 |
+   |            | 0  | 0  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 0  | 1  | 0  | 0  || 0 | 0 | 1 | 1 |
+   |            | 0  | 1  | 0  | 1  || 0 | 0 | 0 | 1 | <--- How do we hit 1V and 3V? Use CL-VID TCE that points to correct VOE, and create a VCE on all "other ports" that has a dummy-iflow-id to avoid getting level filtered by the "other ports'" Port VOE (if enabled).
+   |            | 0  | 1  | 1  | 0  || 0 | 0 | 0 | 0 |
+   |            | 0  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 0  | 0  || 0 | 0 | 1 | 1 |
+   |            | 1  | 0  | 0  | 1  || 0 | 0 | 0 | 1 |
+   |            | 1  | 0  | 1  | 0  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 0  | 0  || 0 | 0 | 1 | 1 |
+   |            | 1  | 1  | 0  | 1  || 0 | 0 | 0 | 1 |
+   |            | 1  | 1  | 1  | 0  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |------------|----|----|----|----||---|---|---|---|
+   |     3      | 0  | 0  | 0  | 0  || 1 | 1 | 0 | 1 |
+   |            | 0  | 0  | 0  | 1  || 0 | 0 | 0 | 0 |
+   |            | 0  | 0  | 1  | 0  || 1 | 0 | 0 | 1 |
+   |            | 0  | 0  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 0  | 1  | 0  | 0  || 0 | 1 | 0 | 1 |
+   |            | 0  | 1  | 0  | 1  || 0 | 0 | 0 | 0 |
+   |            | 0  | 1  | 1  | 0  || 0 | 0 | 0 | 1 |
+   |            | 0  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 0  | 0  || 0 | 1 | 0 | 1 |
+   |            | 1  | 0  | 0  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 1  | 0  || 0 | 0 | 0 | 1 |
+   |            | 1  | 0  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 0  | 0  || 0 | 1 | 0 | 1 |
+   |            | 1  | 1  | 0  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 1  | 0  || 0 | 0 | 0 | 1 |
+   |            | 1  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |------------|----|----|----|----||---|---|---|---|
+   |     4      | 0  | 0  | 0  | 0  || 1 | 1 | 1 | 0 |
+   |            | 0  | 0  | 0  | 1  || 1 | 1 | 0 | 0 |
+   |            | 0  | 0  | 1  | 0  || 1 | 0 | 1 | 0 |
+   |            | 0  | 0  | 1  | 1  || 1 | 0 | 0 | 0 |
+   |            | 0  | 1  | 0  | 0  || 0 | 1 | 1 | 0 | <-- How do we avoid hitting MEP 2P? Impossible on Serval-1 => All Port MEPs must have lower level than any VLAN MEP (known as shared MEG level; odd name). On JR2, the default port ES0 rules must mark all frames as independent MEL (indepent_mel = true; also an odd name; requires API update), so that they will be seen as a service frames whether or not it got marked as OAM on ingress from another port. Once a Port MEP gets instantiated, create a TCE on the Port MEP's port matching on the Port MEP's classified VID and mark it as dependent-mel (independent_mel = false) with no eflow (requires API support)
+   |            | 0  | 1  | 0  | 1  || 0 | 1 | 0 | 0 |
+   |            | 0  | 1  | 1  | 0  || 0 | 0 | 1 | 0 |
+   |            | 0  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 0  | 0  | 0  || 0 | 1 | 1 | 0 |
+   |            | 1  | 0  | 0  | 1  || 0 | 1 | 0 | 0 |
+   |            | 1  | 0  | 1  | 0  || 0 | 0 | 1 | 0 |
+   |            | 1  | 0  | 1  | 1  || 0 | 0 | 0 | 0 |
+   |            | 1  | 1  | 0  | 0  || 0 | 1 | 1 | 0 |
+   |            | 1  | 1  | 0  | 1  || 0 | 1 | 0 | 0 |
+   |            | 1  | 1  | 1  | 0  || 0 | 0 | 1 | 0 |
+   |            | 1  | 1  | 1  | 1  || 0 | 0 | 0 | 0 |
+   +-------------------------------------------------+
+
+(*) In case of independent MEL, match means that [VLAN matches and PDU MEL <= MEP's MEL].
+(*) In case of shared MEL,      match means that [VLAN matches and PDU MEL <= MEP's MEL] or [PDU MEL <= Port MEP's MEL].
+
+VOP-V2 (JR2 and later) only:
+Independent MEL == TRUE:  Let the VOE see frames as data.
+Independent MEL == FALSE: Let the VOE see OAM frames as OAM and level-filter it if egressing and level-filter and handle normally if ingressing.
+
+VOP-V1 (Serval-1) only:
+There's no such thing as Independent MEL, so the application must ensure that
+all Port MEPs must have a lower MEG level than any VLAN MEP. This implies that
+it's not possible to have a combination of MAs of type Port and MAs of type VLAN
+in the same MD (and therefore not possible to have Port MEPs and VLAN MEPs  in
+the same domain).
+
+No-VOP:
+All egress must be determined at ingress, so creating leak-prevention ACL rules
+upon ingress. Use 'debug show cfm rules' and 'debug api cil acl' to see what is
+created.
+

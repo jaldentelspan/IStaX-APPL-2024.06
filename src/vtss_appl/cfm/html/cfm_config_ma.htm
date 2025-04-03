@@ -1,0 +1,359 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>CFM Service Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="cfm_lib.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_cfm_config_ma.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities, myPortStatusInfo, myMdInfo;
+
+var oTMd = Array(), oVMd = Array(); // Domain reference
+var oTFormat        = Array(    "String",    "Two Octets", "Y1731 ICC", "Y1731 CC ICC", "Primary Vid");
+var oVFormat        = Array("charString", "unsignedInt16",  "y1731Icc",   "y1731IccCc", "primaryVid");
+
+var oTStatusTlv     = Array("Disable", "Enable", "Defer");
+var oVStatusTlv     = Array("disable", "enable", "defer");
+
+var oTSenderIdTlv   = Array("None", "Chassis", "Manage", "ChassisManage", "Defer");
+var oVSenderIdTlv   = Array("none", "chassis", "manage", "chassismanage", "defer");
+
+var oTOrgTlv        = Array("Disable", "Defer");
+var oVOrgTlv        = Array("disable", "defer");
+
+var oTInterval      = Array(       "300 Hz",        "10 ms",        "100 ms",      "1 sec",    "10 sec",          "1 min",        "10 min" );
+var oVInterval      = Array("interval300Hz", "interval10ms", "interval100ms", "interval1s", "interval10s", "interval1min", "interval10min");
+
+var oTIntervalCap   = oTInterval; // Interval values to be adjuster based on capalilities CcmIntervalMin, CcmIntervalMax
+var oVIntervalCap   = oVInterval; // Interval values to be adjuster based on capalilities CcmIntervalMin, CcmIntervalMax
+
+
+function isDuplicatedRowKey()
+{
+    var recv_json = myDynamicTable.getRecvJson("config");
+    var new_key_prefix = myDynamicTable.getRowPrefixs("newrowKeyPrefix");
+    var del_prefix = myDynamicTable.getRowPrefixs("rowDelPrefix");
+    var i, j, new_key_fld;
+
+    // The new row key index start from 1
+    for (i = 1; i <= myCapabilities.MdCntMax; i++) {
+        new_key_fld = $(new_key_prefix + i);
+        if (!new_key_fld) {
+            continue;
+        }
+
+        // Lookup original entries
+        for (j = 0; j < recv_json.length; j++) {
+            if ($(del_prefix + recv_json[j].key).checked) {
+                continue;
+            }
+            if (new_key_fld.value == recv_json[j].key) {
+                // Found duplicated key
+                return GiveAlert("The Association # " + new_key_fld.value + " already exists.", new_key_fld);
+            }
+        }
+
+        // Lookup new entries
+        for (j = i + 1; j <= myCapabilities.MdCntMax; j++) {
+            if (!$(new_key_prefix + j)) {
+                continue;
+            }
+            if (new_key_fld.value == $(new_key_prefix + j).value) {
+                // Found duplicated key
+                return GiveAlert("The Association # " + new_key_fld.value + " already exists.", new_key_fld);
+            }
+        }
+    }
+
+    return true;
+}
+
+function isValidName(field, badchars, maxlen, what) {
+    if (typeof (field) == "string") {
+        field = document.getElementById(field);
+    }
+
+    if (field.value.length > maxlen) {
+        return GiveAlert(what + " must not exceed " + maxlen + " characters", field);
+    }
+
+    for (var i = 0; i < badchars.length; i++) {
+        if (field.value.indexOf(badchars.charAt(i)) != -1) {
+            return GiveAlert(what + " contains one or more illegal characters", field);
+        }
+    }
+
+    if (field.value.charAt(0) == ' ' || field.value.charAt(0) == '\t' ) {
+        return GiveAlert(what + " must not contain leading whitespace", field);
+    }
+
+    if (field.value.charAt(field.value.length - 1) == ' ' || field.value.charAt(field.value.length - 1) == '\t') {
+        return GiveAlert(what + " must not contain trailing whitespace", field);
+    }
+
+    return true;
+}
+
+function checkForm()
+{
+    // Check if duplicated row key
+    if (!isDuplicatedRowKey()) {
+        return false;
+    }
+
+    return true;
+}
+
+function geRowDefaultValue()
+{
+    var def_val = {"Format":"primaryVid","Name":"","Vid":0,"CcmInterval":"interval1s","SenderIdTlv":"defer","PortStatusTlv":"defer","InterfaceStatusTlv":"defer","OrgSpecificTlv":"defer"};
+    return def_val;
+}
+
+function geKeyDefaultValue()
+{
+    var key_def =  {"md":"","ma":""};
+    return key_def;
+}
+
+function addHeader(table_rows)
+{
+    var row;
+    // 1st row
+    row = {fields:[
+             {type:"disp_hdr", params:["Delete",        1, 2]},
+             {type:"disp_hdr", params:["Domain",        1, 2]},
+             {type:"disp_hdr", params:["Service",       1, 2]},
+             {type:"disp_hdr", params:["Format",        1, 2]},
+             {type:"disp_hdr", params:["Name",          1, 2]},
+             {type:"disp_hdr", params:["VLAN",          1, 2]},
+             {type:"disp_hdr", params:["CCM Interval",  1, 2]},
+             {type:"disp_hdr", params:["TLV option select",4]}
+            ]
+          };
+    table_rows.push(row);
+
+    // 2nd row
+    row = {fields:[
+            {type:"disp_hdr", params:["Sender Id"]},
+            {type:"disp_hdr", params:["Port Status"]},
+            {type:"disp_hdr", params:["Interface Status"]},
+            {type:"disp_hdr", params:["Org. Specific"]}
+        ]
+        };
+    table_rows.push(row);
+
+}
+
+function addRow(key, val, key_prefix)
+{
+    var use_defval = false;
+
+    if (!val) { // Use default value, it is used for new row
+        use_defval = true;
+        val = geRowDefaultValue();
+        new_idx = key;
+    }
+
+    var row_affix = (use_defval ? key_prefix : myDynamicTable.getRowPrefixs("rowKeyPrefix")) + rowKey2Id(key);
+    console.log("Affix:" , row_affix, "Key:", key );
+    var row = {
+        "key":key,
+        fields:[
+            {type:"chkbox",       params:[0, "c", key_prefix + rowKey2Id(key)]},
+            {type:"text",         params:[key.md, "cl"]},
+            {type:"text",         params:[key.ma, "cl"]},
+            {type:"select",       params:[oTFormat, oVFormat, val.Format, "c", "Format_" + row_affix]},
+            {type:"input",        params:[val.Name, "cl", "Name_" + row_affix, 17, 45],
+                                  validate:{func:isValidName, params:["Name_" + row_affix, "", 45,"Name" ]}},
+            {type:"input",        params:[val.Vid, "cr", "Vid_" + row_affix, 4, 4],
+                                  validate:{func:isWithinRange, params:["Vid_" + row_affix, 0, configVlanIdMax, "Vid"]}},
+            {type:"select",       params:[oTIntervalCap, oVIntervalCap, val.CcmInterval, "cr", "CcmInterval_" + row_affix]},
+            {type:"select",       params:[oTSenderIdTlv, oVSenderIdTlv, val.SenderIdTlv, "cr", "SenderIdTlv_" + row_affix]},
+            {type:"select",       params:[oTStatusTlv, oVStatusTlv, val.PortStatusTlv, "cr", "PortStatusTlv_" + row_affix]},
+            {type:"select",       params:[oTStatusTlv, oVStatusTlv, val.InterfaceStatusTlv, "cr", "InterfaceStatusTlv_" + row_affix]},
+            {type:"select",       params:[oTOrgTlv, oVOrgTlv, val.OrgSpecificTlv, "cr", "OrgSpecificTlv_" + row_affix]}
+           ]
+    };
+
+    if (use_defval) { // Change field for new row
+        row.key       = geKeyDefaultValue(); // The value of xxxx in {"md":"xxxxx"} will be replaced by input in the Domain field
+        row.fields[1] = {type:"select", params:[oTMd, oVMd, 0, "c" , key_prefix + new_idx + "_" + "md"]};
+        row.fields[2] = {type:"input",  params:[row.key.ma, "cl", key_prefix + new_idx + "_" + "ma", 10, 15],
+                                        validate:{func:isValidDomainOrServiceName, params:[key_prefix + new_idx + "_" + "ma", 15, "Service" ]}
+        };
+    }
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var row, empty_colspan = 11;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function(record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row
+    if (!recv_json.length) {
+        table_rows.push({fields:[{type:"empty_row", params:[empty_colspan]}]});
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+                                    { text: "*", className: "c" },
+                                    "", "",
+                                    { name: "Format_",  options: [oTFormat, oVFormat] },
+                                    "", "",
+                                    { name: "CcmInterval_", options: [oTIntervalCap, oVIntervalCap] },
+                                    { name: "SenderIdTlv_", options: [oTSenderIdTlv, oVSenderIdTlv] },
+                                    { name: "PortStatusTlv_", options: [oTStatusTlv, oVStatusTlv]},
+                                    { name: "InterfaceStatusTlv", options: [oTStatusTlv, oVStatusTlv]},
+                                    { name: "OrgSpecificTlv_", options: [oTOrgTlv, oVOrgTlv] }]);
+
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+
+    // Add buttons
+    myDynamicTable.addNewRowButton(addRow, myCapabilities.MdCntMax);
+    myDynamicTable.addSubmitButton(name, "cfm.config.ma", requestUpdate);
+    myDynamicTable.addResetButton();
+}
+
+function requestUpdate(recv_json, name)
+{
+    myDynamicTable.restore(); // Reset myDynamicTable to default
+
+    if (name == "capabilities") {
+        console.log(recv_json, name, recv_json.length);
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+            // Adjust configurable values for CCM interval based on capabilities
+            var minIndex = 0;
+            var maxLength = oTInterval.length; // maxLength will always be set later, but just in case!
+            oVIntervalCap = oVInterval;
+            oTIntervalCap = oTInterval;
+            for (var i = 0; i < oVInterval.length; i++) {
+                if (oVInterval[i] == myCapabilities.CcmIntervalMin) {
+                    minIndex = i;
+                }
+                if (oVInterval[i] == myCapabilities.CcmIntervalMax) {
+                    maxLength = i + 1;
+                }
+            }
+            oVIntervalCap.length = maxLength; // remove elements slower than CcmIntervalMax
+            oTIntervalCap.length = maxLength; // remove elements slower than CcmIntervalMax
+            oVIntervalCap.splice(0,minIndex); // remove elements faster than CcmIntervalMin
+            oTIntervalCap.splice(0,minIndex); // remove elements faster than CcmIntervalMin
+        } else {
+            alert("Get capabilities failed.");
+            return;
+        }
+    } else if (name == "configMd") {
+        if (recv_json) {
+            myMdInfo = true;
+            if (recv_json.length) {
+                oTMd.length = 0;
+                oVMd.length = 0;
+                Object.each(recv_json, function(record, idx) {
+                    oTMd.push(record.key.md);
+                    oVMd.push(record.key.md);
+                });
+            }
+        }
+    }
+
+    if (myCapabilities && myMdInfo) {
+        requestJsonDoc("cfm.config.ma.get", null, processUpdate, "config");
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", {func:checkForm, params:[]});
+
+    // This table requires two JSON data(portStatusInfo/capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requrested only one time.
+    requestJsonDoc("cfm.capabilities.get", null, requestUpdate, "capabilities");
+    requestJsonDoc("cfm.config.md.get", null, requestUpdate, "configMd");
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>CFM Service Configuration</h1>
+
+<div class="refreshbar">
+    <input type="button" value="Refresh" onClick='requestUpdate(); this.blur();'>
+    <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+</body>
+</html>
+

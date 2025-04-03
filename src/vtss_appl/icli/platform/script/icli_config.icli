@@ -1,0 +1,4028 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG =
+
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include <stdlib.h>
+#include "icli_cmd_func.h"
+#include "icli_multiline.h"
+#include "vtss_icli_session.h"
+#if ((defined(VTSS_SW_OPTION_SMB_IPMC) || defined(VTSS_SW_OPTION_MVR)) && defined(VTSS_SW_OPTION_IPMC_LIB))
+#include <vtss/appl/ipmc_lib.h>
+#endif
+
+#if defined(VTSS_SW_OPTION_CFM)
+#include <vtss/appl/cfm.hxx> /* For vtss_appl_cfm_XXX()         */
+#include "cfm_api.h"         /* For cfm_util_md_format_to_str() */
+#endif /* VTSS_SW_OPTION_CFM */
+
+#if defined(VTSS_SW_OPTION_APS)
+#include <vtss/appl/aps.h>   /* For vtss_appl_aps_XXX()         */
+#endif /* VTSS_SW_OPTION_APS */
+
+#if defined(VTSS_SW_OPTION_ERPS)
+#include <vtss/appl/erps.h>   /* For vtss_appl_erps_XXX()       */
+#endif /* VTSS_SW_OPTION_ERPS */
+
+#if defined(VTSS_SW_OPTION_IEC_MRP)
+#include <vtss/appl/iec_mrp.h>   /* For vtss_appl_iec_mrp_XXX()  */
+#endif /* VTSS_SW_OPTION_IEC_MRP */
+
+#if defined(VTSS_SW_OPTION_REDBOX)
+#include <vtss/appl/redbox.h>   /* For vtss_appl_redbox_XXX()  */
+#endif /* VTSS_SW_OPTION_REDBOX */
+
+#if defined(VTSS_SW_OPTION_TSN)
+#include <vtss/appl/tsn.h>
+#endif
+
+#if defined(VTSS_SW_OPTION_TSN_PSFP)
+#include <vtss/appl/psfp.h>
+#endif
+
+#if defined(VTSS_SW_OPTION_TSN_FRER)
+#include <vtss/appl/frer.hxx>
+#endif
+
+#if defined(VTSS_SW_OPTION_SNMP)
+#include "vtss_snmp_api.h"
+#endif
+
+#if defined(VTSS_SW_OPTION_VLAN)
+#include "vlan_api.h"
+#include "icli_porting_util.h"
+#include "vlan_icli_functions.h"
+#endif
+
+#ifdef VTSS_SW_OPTION_DHCP_SERVER
+#include "dhcp_server_api.h"
+#endif
+
+#ifdef VTSS_SW_OPTION_SYSUTIL
+#include "sysutil_api.h"
+#endif
+
+#ifdef VTSS_SW_OPTION_IP
+#include "ip_api.h"
+#endif
+
+#ifdef __cplusplus
+#include "enum_macros.hxx"
+VTSS_ENUM_INC(icli_privilege_t);
+#endif
+
+#ifdef VTSS_SW_OPTION_JSON_RPC_NOTIFICATION
+#include "json_rpc_notification_icli_priv.h"
+#endif
+
+#ifdef VTSS_SW_OPTION_QOS
+#include "qos_api.h"
+#endif
+
+#if defined(VTSS_SW_OPTION_AGGR)
+#include "aggr_api.h"
+#include "lacp_api.h"
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR)
+#include "frr_daemon.hxx" /* For frr_has_XXX() */
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF)
+#include "frr_ospf_api.hxx"
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF6)
+#include "frr_ospf6_api.hxx"
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR_RIP)
+#include "frr_rip_api.hxx"
+#endif
+
+#if defined(VTSS_SW_OPTION_VCL)
+#include <vtss/appl/vcl.h>
+#endif /* VTSS_SW_OPTION_VCL */
+
+#if defined(VTSS_SW_OPTION_STREAM)
+#include <vtss/appl/stream.h>
+#endif
+
+#if defined(VTSS_SW_OPTION_MACSEC)
+#include <vtss/appl/macsec.hxx>
+#endif /* VTSS_SW_OPTION_MACSEC */
+
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+
+static BOOL _runtime_privilege_cword(
+    IN    u32                   session_id,
+    IN    icli_runtime_ask_t    ask,
+    OUT   icli_runtime_t        *runtime
+)
+{
+    u32     i;
+
+    if ( session_id ){}
+    if ( runtime ){}
+
+    switch ( ask ) {
+    case ICLI_ASK_CWORD:
+        i = 0;
+        runtime->cword[i] = icli_mode_name_get( ICLI_CMD_MODE_EXEC );
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_GLOBAL_CONFIG );
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_CONFIG_VLAN );
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_INTERFACE_PORT_LIST );
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_INTERFACE_VLAN );
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_CONFIG_LINE );
+#if ((defined(VTSS_SW_OPTION_SMB_IPMC) || defined(VTSS_SW_OPTION_MVR)) && defined(VTSS_SW_OPTION_IPMC_LIB))
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_IPMC_PROFILE);
+#endif
+
+#ifdef VTSS_SW_OPTION_SNMP
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_SNMPS_HOST );
+#endif
+
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_STP_AGGR );
+
+#ifdef VTSS_SW_OPTION_DHCP_SERVER
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_DHCP_POOL );
+#endif
+
+#if defined(VTSS_SW_OPTION_JSON_RPC_NOTIFICATION)
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_JSON_NOTI_HOST );
+#endif
+
+#if defined(VTSS_SW_OPTION_AGGR)
+        runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_LLAG );
+#endif
+
+#if defined(VTSS_SW_OPTION_QOS_ADV)
+        if (vtss_appl_qos_capabilities->has_ingress_map) {
+            runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_QOS_INGRESS_MAP );
+        }
+
+        if (vtss_appl_qos_capabilities->has_egress_map) {
+            runtime->cword[++i] = icli_mode_name_get( ICLI_CMD_MODE_QOS_EGRESS_MAP );
+        }
+#endif
+
+#if defined(VTSS_SW_OPTION_CFM)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_CFM_MD);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_CFM_MA);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_CFM_MEP);
+#endif
+
+#if defined(VTSS_SW_OPTION_APS)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_APS);
+#endif
+
+#if defined(VTSS_SW_OPTION_ERPS)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_ERPS);
+#endif
+
+#if defined(VTSS_SW_OPTION_IEC_MRP)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_IEC_MRP);
+#endif
+
+#if defined(VTSS_SW_OPTION_REDBOX)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_REDBOX);
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_CONFIG_ROUTER_OSPF);
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF6)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_CONFIG_ROUTER_OSPF6);
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR_RIP)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_CONFIG_ROUTER_RIP);
+#endif
+
+#if defined(VTSS_SW_OPTION_FRR_ROUTER)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_CONFIG_ROUTER_KEYCHAIN);
+#endif
+
+#if defined(VTSS_SW_OPTION_STREAM)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_STREAM);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_STREAM_COLLECTION);
+#endif
+
+#if defined(VTSS_SW_OPTION_TSN_PSFP)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_TSN_PSFP_FLOW_METER);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_TSN_PSFP_GATE);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_TSN_PSFP_FILTER);
+#endif
+
+#if defined(VTSS_SW_OPTION_TSN_FRER)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_TSN_FRER);
+#endif
+
+#if defined(VTSS_SW_OPTION_MACSEC)
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_MACSEC);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_MACSEC_SECY);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_MACSEC_TX_SC);
+        runtime->cword[++i] = icli_mode_name_get(ICLI_CMD_MODE_MACSEC_RX_SC);
+#endif
+
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL any_submode_enter(u32 session_id, icli_cmd_mode_t mode, BOOL exit_to_global_config)
+{
+    icli_cmd_mode_t current_mode;
+
+    if (mode < ICLI_CMD_MODE_GLOBAL_CONFIG) {
+        ICLI_PRINTF("%% mode %u is too small.\n", mode);
+        return FALSE;
+    }
+
+    // Get current mode
+    if (ICLI_MODE_GET(&current_mode) != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Failed to get current session mode when entering mode %u.\n", mode);
+        return FALSE;
+    }
+
+    if ((exit_to_global_config  && current_mode < ICLI_CMD_MODE_GLOBAL_CONFIG) ||
+        (!exit_to_global_config && current_mode <= ICLI_CMD_MODE_GLOBAL_CONFIG)) {
+        ICLI_PRINTF("%% Current command mode (%u) is too low to enter the new mode (%u).\n", current_mode, mode);
+        return FALSE;
+    }
+
+    // If asked to, go back to global config mode.
+    while (exit_to_global_config && current_mode > ICLI_CMD_MODE_GLOBAL_CONFIG) {
+        (void)ICLI_MODE_EXIT();
+
+        /* get current mode */
+        if (ICLI_MODE_GET(&current_mode) != ICLI_RC_OK) {
+            ICLI_PRINTF("%% Failed to get current session mode after exit - while attempting to enter mode %u.\n", mode);
+            return FALSE;
+        }
+    }
+
+    if (exit_to_global_config) {
+        if (current_mode != ICLI_CMD_MODE_GLOBAL_CONFIG) {
+            ICLI_PRINTF("%% Invalid current command mode %u encountered while attempting to enter mode %u.\n", current_mode, mode);
+            return FALSE;
+        }
+    }
+
+    // Time to enter new mode
+    if (ICLI_MODE_ENTER(mode) < 0) {
+        ICLI_PRINTF("%% Failed to enter command mode %u.\n", mode);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * Warning: this API can be used only if mode is behind GLOBAL-CONFIG mode
+ * Current mode must be >= GLOBAL-CONFIG.
+ * This function cannot be static, because it's used by icli_multiline.cxx
+ */
+BOOL _submode_enter(u32 session_id, icli_cmd_mode_t mode)
+{
+    return any_submode_enter(session_id, mode, TRUE);
+}
+
+/*
+ * Function to enter a sub-sub mode without exiting to GLOBAL-CONFIG first.
+ * Current mode must be > GLOBAL-CONFIG.
+ * This function cannot be static, because it's only used if CFM or MACsec is
+ * included
+ */
+BOOL _sub_submode_enter(u32 session_id, icli_cmd_mode_t mode)
+{
+    return any_submode_enter(session_id, mode, FALSE);
+}
+
+static BOOL _vlan_mode_enter(
+    IN  u32                     session_id,
+    IN  icli_unsigned_range_t   *vlan_list
+)
+{
+#if defined(VTSS_SW_OPTION_VLAN)
+    VLAN_ICLI_vlan_mode_enter(session_id, vlan_list);
+#else
+    (void)vlan_list;
+#endif
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_CONFIG_VLAN);
+}
+
+static BOOL _interface_port_mode_enter(
+    IN  u32                         session_id,
+    IN  icli_stack_port_range_t     *plist
+)
+{
+    if ( plist ) {}
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_INTERFACE_PORT_LIST);
+}
+
+static BOOL _interface_vlan_enter(IN u32 session_id, IN icli_unsigned_range_t *vlist)
+{
+#ifdef VTSS_SW_OPTION_IP
+    vtss_ifindex_t ifindex;
+    u32            i, vid;
+    mesa_rc        rc;
+
+    /* enable VLAN */
+    for (i = 0; i < vlist->cnt; i++) {
+        for (vid = vlist->range[i].min; vid <= vlist->range[i].max; ++vid) {
+            if (vtss_ifindex_from_vlan(vid, &ifindex) != VTSS_RC_OK) {
+                continue;
+            }
+
+            if (vtss_appl_ip_if_exists(ifindex)) {
+                continue;
+            }
+
+            if ((rc = vtss_appl_ip_if_conf_set(ifindex)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Failed to create interface vlan %u: %s\n", vid, error_txt(rc));
+            }
+        }
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_INTERFACE_VLAN);
+#else
+     return FALSE;
+#endif
+}
+
+static void _interface_vlan_disable(IN u32 session_id, IN icli_unsigned_range_t *vlist)
+{
+#ifdef VTSS_SW_OPTION_IP
+    vtss_ifindex_t ifindex;
+    mesa_rc        rc;
+
+    /* remove IP interfaces */
+    VTSS_ICLI_RANGE_FOREACH (vlist, u32, vid) {
+        if (vtss_ifindex_from_vlan(vid, &ifindex) != VTSS_RC_OK) {
+            continue;
+        }
+
+        if (!vtss_appl_ip_if_exists(ifindex)) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_ip_if_conf_del(ifindex)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Failed to delete interface vlan %u: %s\n", vid, error_txt(rc));
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+#endif
+}
+
+static BOOL _line_mode_enter(
+    IN  u32     session_id
+)
+{
+    /* go to submode */
+    return _submode_enter( session_id, ICLI_CMD_MODE_CONFIG_LINE );
+}
+
+#if defined(VTSS_SW_OPTION_SNMP) && defined(VTSS_SW_OPTION_JSON_RPC)
+static BOOL snmp_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = snmp_module_enabled();
+        return TRUE;
+   }
+   return FALSE;
+}
+
+static BOOL _snmp_server_host_mode_enter(
+    IN  u32     session_id,
+    IN  char    *conf_name
+)
+{
+    /* create SNMP server host */
+    vtss_trap_entry_t  trap_entry;
+
+    strncpy(trap_entry.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_entry.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    if ( VTSS_RC_OK != trap_mgmt_conf_get(&trap_entry)) {
+        trap_entry.valid = TRUE;
+        trap_mgmt_conf_default_get(&trap_entry);
+        if ( VTSS_RC_OK != trap_mgmt_conf_set(&trap_entry) ) {
+            ICLI_PRINTF("%% No more trap configurations allowed.\n\n");
+            return FALSE;
+        }
+    }
+
+    /* go to submode */
+    return _submode_enter( session_id, ICLI_CMD_MODE_SNMPS_HOST );
+}
+#endif
+
+static BOOL _stp_aggr_mode_enter(
+    IN  u32     session_id
+)
+{
+    /* go to submode */
+    return _submode_enter( session_id, ICLI_CMD_MODE_STP_AGGR );
+}
+
+#ifdef VTSS_SW_OPTION_DHCP_SERVER
+static BOOL _dhcp_pool_create(
+    IN  u32     session_id,
+    IN  char    *pool_name
+)
+{
+    vtss_appl_dhcp_server_config_pool_entry_t pool;
+    vtss_appl_dhcp_server_pool_name_t         pname;
+    mesa_rc                                   rc;
+
+    /* create pool */
+
+    memset(&pool, 0, sizeof(pool));
+    pool.lease_day    = DHCP_SERVER_LEASE_DEFAULT_DAYS;
+    pool.lease_hour   = DHCP_SERVER_LEASE_DEFAULT_HOURS;
+    pool.lease_minute = DHCP_SERVER_LEASE_DEFAULT_MINUTES;
+
+    (void)vtss_icli_str_cpy(pname.pool_name, pool_name);
+
+    if ( vtss_appl_dhcp_server_config_pool_entry_get(pname, &pool) != VTSS_RC_OK ) {
+        // not exist, create new one
+        rc = vtss_appl_dhcp_server_config_pool_entry_set(pname, &pool);
+        if (rc != VTSS_RC_OK) {
+            ICLI_PRINTF("%% DHCP Server: Failed to create DHCP pool %s: %s\n", pool_name, error_txt(rc));
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static BOOL _dhcp_pool_mode_enter(
+    IN  u32     session_id,
+    IN  char    *pool_name
+)
+{
+    /* create DHCP pool */
+    if ( _dhcp_pool_create(session_id, pool_name) == FALSE ) {
+        return FALSE;
+    }
+
+    /* go to submode */
+    return _submode_enter( session_id, ICLI_CMD_MODE_DHCP_POOL );
+}
+#endif // VTSS_SW_OPTION_DHCP_SERVER
+
+#ifdef VTSS_SW_OPTION_JSON_RPC_NOTIFICATION
+static BOOL _json_noti_host_mode_enter(IN u32 session_id, IN char *hname)
+{
+    if (hname == NULL || hname[0] == '\0') {
+        ICLI_PRINTF("%% Invalid json notification host name.\n");
+        return FALSE;
+    }
+
+    if (JSON_RPC_icli_event_host_add(hname) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to create json notification host: %s\n", hname);
+        return FALSE;
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_JSON_NOTI_HOST);
+}
+#endif
+
+#if defined(VTSS_SW_OPTION_QOS_ADV)
+static BOOL _qos_runtime_ingress_map(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = vtss_appl_qos_capabilities->has_ingress_map;
+        return TRUE;
+   } else if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = vtss_appl_qos_capabilities->ingress_map_id_min;
+        runtime->range.u.sr.range[0].max = vtss_appl_qos_capabilities->ingress_map_id_max;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL _qos_runtime_egress_map(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = vtss_appl_qos_capabilities->has_egress_map;
+        return TRUE;
+   } else if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = vtss_appl_qos_capabilities->egress_map_id_min;
+        runtime->range.u.sr.range[0].max = vtss_appl_qos_capabilities->egress_map_id_max;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL _qos_ingress_map_mode_enter(IN u32 session_id, IN u32 qos_ingress_map_id)
+{
+    vtss_appl_qos_ingress_map_conf_t conf;
+    mesa_rc                          rc;
+
+    /* Create the map if it doesn't exist */
+    if (vtss_appl_qos_ingress_map_conf_get(qos_ingress_map_id, &conf) != VTSS_RC_OK) {
+        memset(&conf, 0, sizeof(conf)); // Default everything to zero.
+        if ((rc = vtss_appl_qos_ingress_map_conf_add(qos_ingress_map_id, &conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Error creating ingress map %u: %s. This is most likely caused by a chip resource limitation.\n", qos_ingress_map_id, error_txt(rc));
+            return FALSE;
+        }
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_QOS_INGRESS_MAP);
+}
+
+static BOOL _qos_egress_map_mode_enter(IN u32 session_id, IN u32 qos_egress_map_id)
+{
+    vtss_appl_qos_egress_map_conf_t conf;
+    mesa_rc                         rc;
+
+    /* Create the map if it doesn't exist */
+    if (vtss_appl_qos_egress_map_conf_get(qos_egress_map_id, &conf) != VTSS_RC_OK) {
+        memset(&conf, 0, sizeof(conf)); // Default everything to zero.
+        if ((rc = vtss_appl_qos_egress_map_conf_add(qos_egress_map_id, &conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Error creating egress map %u: %s. This is most likely caused by a chip resource limitation.\n", qos_egress_map_id, error_txt(rc));
+            return FALSE;
+        }
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_QOS_EGRESS_MAP);
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_APS
+static BOOL aps_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_aps_capabilities_t cap;
+    uint32_t                     prev_inst, inst, cnt;
+    mesa_rc                      rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_aps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_aps_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT);
+    }
+
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    prev_inst = 0;
+    while (vtss_appl_aps_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+#endif /* VTSS_SW_OPTION_APS */
+
+#ifdef VTSS_SW_OPTION_ERPS
+static BOOL erps_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_erps_capabilities_t cap;
+    uint32_t                      prev_inst, inst, cnt;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_erps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_erps_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 64; // in lack of MESA capability for VTSS_ERPIS
+    }
+
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    prev_inst = 0;
+    while (vtss_appl_erps_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+#endif /* VTSS_SW_OPTION_ERPS */
+
+#ifdef VTSS_SW_OPTION_IEC_MRP
+static BOOL mrp_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_iec_mrp_capabilities_t cap;
+    uint32_t                         prev_inst, inst, cnt;
+    mesa_rc                          rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_iec_mrp_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_iec_mrp_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 10; // Whatever
+    }
+
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    prev_inst = 0;
+    while (vtss_appl_iec_mrp_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+#endif /* VTSS_SW_OPTION_IEC_MRP */
+
+#ifdef VTSS_SW_OPTION_REDBOX
+static BOOL redbox_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = vtss_appl_redbox_supported();
+        return TRUE;
+    }
+
+    return FALSE;
+}
+#endif /* VTSS_SW_OPTION_REDBOX */
+
+#ifdef VTSS_SW_OPTION_REDBOX
+static BOOL redbox_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_redbox_capabilities_t cap;
+    uint32_t                        prev_inst, inst, cnt;
+    mesa_rc                         rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_redbox_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_redbox_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 5; // Whatever
+    }
+
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    prev_inst = 0;
+    while (vtss_appl_redbox_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+#endif /* VTSS_SW_OPTION_REDBOX */
+
+#ifdef VTSS_SW_OPTION_TSN_PSFP
+static BOOL psfp_flow_meter_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    // This is defined in .../tsn/psfp/psfp.icli
+    BOOL psfp_icli_runtime_flow_meter_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime);
+    return psfp_icli_runtime_flow_meter_range(session_id, ask, runtime);
+}
+#endif /* VTSS_SW_OPTION_TSN_PSFP */
+
+#ifdef VTSS_SW_OPTION_TSN_PSFP
+static BOOL psfp_gate_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    // This is defined in .../tsn/psfp/psfp.icli
+    BOOL psfp_icli_runtime_gate_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime);
+    return psfp_icli_runtime_gate_range(session_id, ask, runtime);
+}
+#endif /* VTSS_SW_OPTION_TSN_PSFP */
+
+#ifdef VTSS_SW_OPTION_TSN_PSFP
+static BOOL psfp_filter_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    // This is defined in .../tsn/psfp/psfp.icli
+    BOOL psfp_icli_runtime_filter_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime);
+    return psfp_icli_runtime_filter_range(session_id, ask, runtime);
+}
+#endif /* VTSS_SW_OPTION_TSN_PSFP */
+
+#ifdef VTSS_SW_OPTION_TSN_FRER
+static BOOL frer_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = vtss_appl_frer_supported();
+        return TRUE;
+    }
+
+    return FALSE;
+}
+#endif /* VTSS_SW_OPTION_TSN_FRER */
+
+#ifdef VTSS_SW_OPTION_TSN_FRER
+static BOOL frer_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    uint32_t                      prev_inst, inst, cnt;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+   if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+       T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+       cap.inst_cnt_max = 0;
+   }
+
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    prev_inst = 0;
+    while (vtss_appl_frer_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+#endif /* VTSS_SW_OPTION_TSN_FRER */
+
+#ifdef VTSS_SW_OPTION_TSN_PSFP
+static BOOL psfp_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = vtss_appl_psfp_supported();
+        return TRUE;
+    }
+
+    return FALSE;
+}
+#endif /* VTSS_SW_OPTION_TSN_PSFP */
+
+#ifdef VTSS_SW_OPTION_STREAM
+static BOOL stream_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    extern BOOL stream_icli_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing);
+    return stream_icli_instance_range(session_id, ask, runtime, true);
+}
+
+static BOOL stream_collection_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    extern BOOL stream_collection_icli_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing);
+    return stream_collection_icli_instance_range(session_id, ask, runtime, true);
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_AGGR
+// Current implementation supports LLAGs only
+static BOOL _llag_mode_enter(IN u32 session_id, IN u32 llag_id)
+{
+    vtss_appl_aggr_group_conf_t conf = {};
+    mesa_rc                     rc = VTSS_RC_OK;
+    vtss_ifindex_t              ifindex;
+
+    if (!AGGR_MGMT_GROUP_IS_AGGR(llag_id)) {
+        ICLI_PRINTF("%% Error: llag id not supprted\n");
+        return FALSE;
+    }
+
+    VTSS_RC(vtss_ifindex_from_llag(VTSS_ISID_START, llag_id, &ifindex))
+
+    if ((rc = vtss_appl_aggregation_group_get(ifindex, &conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: %s.\n", aggr_error_txt(rc));
+        return FALSE;
+    }
+    if (conf.mode == VTSS_APPL_AGGR_GROUP_MODE_DISABLED) {
+        conf.mode = VTSS_APPL_AGGR_GROUP_MODE_RESERVED;
+        if ((rc = vtss_appl_aggregation_group_set(ifindex, &conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Error: %s.\n", aggr_error_txt(rc));
+            return FALSE;
+        }
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_LLAG);
+}
+
+static void _interface_llag_disable(IN  u32 session_id, IN u32 llag_id)
+{
+    vtss_appl_aggr_group_conf_t conf = {};
+    mesa_rc                     rc = VTSS_RC_OK;
+    vtss_ifindex_t              ifindex;
+
+    if (!AGGR_MGMT_GROUP_IS_AGGR(llag_id)) {
+        ICLI_PRINTF("%% Error: llag id not supported\n");
+        return;
+    }
+
+    (void)vtss_ifindex_from_llag(VTSS_ISID_START, llag_id, &ifindex);
+
+    conf.mode = VTSS_APPL_AGGR_GROUP_MODE_DISABLED;
+    if ((rc = vtss_appl_aggregation_group_set(ifindex, &conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: %s.\n", aggr_error_txt(rc));
+        return;
+    }
+}
+#endif
+
+#if defined(VTSS_SW_OPTION_AGGR)
+static BOOL ICLI_CONFIG_aggr_mgmt_group_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = AGGR_MGMT_GROUP_NO_START;
+    runtime->range.u.ur.range[0].max = AGGR_MGMT_GROUP_NO_LAST_;
+    return TRUE;
+}
+#endif /* defined(VTSS_SW_OPTION_AGGR) */
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF)
+static BOOL ICLI_CONFIG_ospf_router_mode_enter(IN u32 session_id, IN u32 process_id)
+{
+    mesa_rc rc;
+    if ((rc = vtss_appl_ospf_add(process_id)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Enter to OSPF router mode failed: %s.\n", error_txt(rc));
+        return FALSE;
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_CONFIG_ROUTER_OSPF);
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_OSPF) */
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF)
+static BOOL ICLI_runtime_frr_ospf_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = frr_has_ospfd(); // Set true when ospfd is supported
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_OSPF) */
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF6)
+static BOOL ICLI_CONFIG_ospf6_router_mode_enter(IN u32 session_id, IN u32 process_id)
+{
+    mesa_rc rc;
+    if ((rc = vtss_appl_ospf6_add(process_id)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Enter to OSPF6 router mode failed: %s.\n", error_txt(rc));
+        return FALSE;
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_CONFIG_ROUTER_OSPF6);
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_OSPF6) */
+
+#if defined(VTSS_SW_OPTION_FRR_OSPF6)
+static BOOL ICLI_runtime_frr_ospf6_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = frr_has_ospf6d(); // Set true when ospf6d is supported
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_OSPF6) */
+
+#if defined(VTSS_SW_OPTION_FRR_RIP)
+static BOOL ICLI_CONFIG_rip_router_mode_enter(IN u32 session_id)
+{
+    mesa_rc rc;
+    vtss_appl_rip_router_conf_t conf;
+
+    /* Get current RIP router configuration */
+    if ((rc = vtss_appl_rip_router_conf_get(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: %s.\n", error_txt(rc));
+        return FALSE;
+    }
+
+    /* Enable RIP router mode if current mode is disabled */
+    if (!conf.router_mode) {
+        conf.router_mode = true;
+        if ((rc = vtss_appl_rip_router_conf_set(&conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Enter to RIP router mode failed: %s.\n", error_txt(rc));
+            return FALSE;
+        }
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_CONFIG_ROUTER_RIP);
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_RIP) */
+
+#if defined(VTSS_SW_OPTION_FRR_RIP)
+static BOOL ICLI_runtime_frr_rip_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = frr_has_ripd(); // Set true when ripd is supported
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_RIP) */
+
+#if defined(VTSS_SW_OPTION_FRR_ROUTER)
+static BOOL ICLI_CONFIG_keychain_router_mode_enter(IN u32 session_id, IN char *keychain_name)
+{
+    mesa_rc rc;
+    vtss_appl_router_key_chain_name_t kc;
+    strncpy(kc.name, keychain_name, sizeof(kc.name)-1 );
+    kc.name[sizeof(kc.name) - 1] = '\0';
+
+    if ((rc = vtss_appl_router_key_chain_name_add(&kc)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s.\n", error_txt(rc));
+        return FALSE;
+    }
+
+    /* go to submode */
+    return _submode_enter(session_id, ICLI_CMD_MODE_CONFIG_ROUTER_KEYCHAIN);
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_ROUTER) */
+
+#if defined(VTSS_SW_OPTION_FRR_ROUTER)
+static BOOL ICLI_runtime_frr_router_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = frr_has_router(); // Set true when FRR router is supported
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+#endif /* defined(VTSS_SW_OPTION_FRR_ROUTER) */
+
+FUNCTION_END
+
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//
+//  Caution:
+//      The following 4 commands, do <line>, end, exit, help, will be
+//      used for auto-generation so the location and sequence can not
+//      be changed. otherwise, it will cause error condition. If these
+//      must be changed, please contact with CP, cpwang@vitesse.com
+//
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = do <line>
+PRIVILEGE = ICLI_PRIVILEGE_0
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR   =
+CMD_VAR   = command
+
+BYWORD    =
+BYWORD    = LINE
+
+HELP      = ##ICLI_HELP_DO
+HELP      = ##ICLI_HELP_DO_LINE
+
+CODE_BEGIN
+    i32 rc = icli_config_exec_do(session_id, command);
+    if (rc != ICLI_RC_OK) {
+        return rc;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = end
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = ##ICLI_HELP_END
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_EXEC
+
+CODE_BEGIN
+    if ( icli_config_go_to_exec_mode(session_id) == FALSE ) {
+        ICLI_PRINTF("%% Fail to exit Configuration mode.\n\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = exit
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = Exit from current mode
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+!GOTO_MODE = ICLI_CMD_MODE_EXEC
+FUNC_NAME = exit_from_sub_mode
+CODE_BEGIN
+    if (ICLI_MODE_EXIT() < 0) {
+        ICLI_PRINTF("%% Fail to exit current mode.\n\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = help
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = Description of the interactive help system
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+CODE_BEGIN
+    icli_config_help_print(session_id);
+    ICLI_PRINTF("Help may be requested at any point in a command by entering\n");
+    ICLI_PRINTF("a question mark '?'.  If nothing matches, the help list will\n");
+    ICLI_PRINTF("be empty and you must backup until entering a '?' shows the\n");
+    ICLI_PRINTF("available options.\n");
+    ICLI_PRINTF("Two styles of help are provided:\n");
+    ICLI_PRINTF("1. Full help is available when you are ready to enter a\n");
+    ICLI_PRINTF("   command argument (e.g. 'show ?') and describes each possible\n");
+    ICLI_PRINTF("   argument.\n");
+    ICLI_PRINTF("2. Partial help is provided when an abbreviated argument is entered\n");
+    ICLI_PRINTF("   and you want to know what arguments match the input\n");
+    ICLI_PRINTF("   (e.g. 'show pr?'.)\n");
+    ICLI_PRINTF("\n");
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+
+HELP_BANNER_LOGIN = Set login banner
+HELP_BANNER_EXEC = Set EXEC process creation banner
+
+CMD_BEGIN
+COMMAND   = banner [motd|login|exec] <line>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+CMD_VAR   =
+HELP      = ##ICLI_HELP_BANNER
+
+CMD_VAR   =
+HELP      = ##ICLI_HELP_MOTD
+
+CMD_VAR   = has_login
+HELP      = ##HELP_BANNER_LOGIN
+
+CMD_VAR   = has_exec
+HELP      = ##HELP_BANNER_EXEC
+
+CMD_VAR   = banner
+BYWORD    = LINE
+
+HELP      = c banner-text c, where 'c' is a delimiting character
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_MULTILINE
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    //for lint
+    if ( banner == NULL ) {
+        return ICLI_RC_ERROR;
+    }
+    /* The entire text could already be inside the provided banner string
+     * or it might require consecutive multiline input from the caller.
+     * The following will process both cases and enter multiline mode if needed.
+     */
+
+    if (has_exec) {
+        return icli_multiline_input_start(session_id, icli_banner_exec_set, banner);
+    } else if (has_login) {
+        return icli_multiline_input_start(session_id, icli_banner_login_set, banner);
+    } else {
+        return icli_multiline_input_start(session_id, icli_banner_motd_set, banner);
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no banner [motd|login|exec]
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_VAR   =
+HELP      = ##ICLI_HELP_NO
+
+CMD_VAR   =
+HELP      = ##ICLI_HELP_BANNER
+
+CMD_VAR   =
+HELP      = ##ICLI_HELP_MOTD
+
+CMD_VAR   = has_login
+HELP      = ##HELP_BANNER_LOGIN
+
+CMD_VAR   = has_exec
+HELP      = ##HELP_BANNER_EXEC
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    mesa_rc rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_exec) {
+        rc = icli_banner_exec_set(NULL);
+    } else if (has_login) {
+        rc = icli_banner_login_set(NULL);
+    } else {
+        rc = icli_banner_motd_set(NULL);
+    }
+    if ( rc != ICLI_RC_OK ) {
+        ICLI_PRINTF("%% Fail to clear banner.\n\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_HOSTNAME = Set system's network name
+HELP_HOSTNAME_WORD = This system's network name
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = hostname <host_name>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+CMD_VAR   =
+CMD_VAR   = hostname
+
+RUNTIME   =
+
+BYWORD    =
+BYWORD    = WORD
+
+HELP      = ##HELP_HOSTNAME
+HELP      = ##HELP_HOSTNAME_WORD
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+#ifdef VTSS_SW_OPTION_SYSUTIL
+    system_conf_t       conf;
+#endif
+VARIABLE_END
+
+CODE_BEGIN
+#ifdef VTSS_SW_OPTION_SYSUTIL
+    if ( system_get_config(&conf) != VTSS_RC_OK ) {
+        ICLI_PRINTF("%% Fail to get system configuration.\n\n");
+        return ICLI_RC_ERROR;
+    }
+
+    (void)vtss_icli_str_cpy(conf.sys_name, hostname);
+    if ( system_set_config( &conf ) != VTSS_RC_OK ) {
+        ICLI_PRINTF("%% Fail to set system configuration.\n\n");
+        return ICLI_RC_ERROR;
+    }
+#else
+    if ( icli_dev_name_set(hostname) != ICLI_RC_OK ) {
+        ICLI_PRINTF("%% Fail to set hostname.\n\n");
+        return ICLI_RC_ERROR;
+    }
+#endif
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no hostname
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_HOSTNAME
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+#ifdef VTSS_SW_OPTION_SYSUTIL
+    system_conf_t       conf;
+#endif
+VARIABLE_END
+
+CODE_BEGIN
+#ifdef VTSS_SW_OPTION_SYSUTIL
+    if ( system_get_config(&conf) != VTSS_RC_OK ) {
+        ICLI_PRINTF("%% Fail to get system configuration.\n\n");
+        return ICLI_RC_ERROR;
+    }
+
+    (void)vtss_icli_str_cpy(conf.sys_name, ICLI_DEFAULT_DEVICE_NAME);
+    if ( system_set_config( &conf ) != VTSS_RC_OK ) {
+        ICLI_PRINTF("%% Fail to set system configuration.\n\n");
+        return ICLI_RC_ERROR;
+    }
+#else
+    if ( icli_dev_name_set(ICLI_DEFAULT_DEVICE_NAME) != ICLI_RC_OK ) {
+        ICLI_PRINTF("%% Fail to set hostname.\n\n");
+        return ICLI_RC_ERROR;
+    }
+#endif
+CODE_END
+
+CMD_END
+
+HELP_ENABLE       = Modify enable password parameters
+HELP_PASSWORD     = Assign the privileged level clear password
+HELP_LEVEL        = Set exec level password
+HELP_LEVEL_NUMBER = Level number
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = enable password [level <1-15>] <word32>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_level
+CMD_VAR   = priv
+CMD_VAR   = password
+
+RUNTIME   =
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = WORD
+
+HELP      = ##HELP_ENABLE
+HELP      = ##HELP_PASSWORD
+HELP      = ##HELP_LEVEL
+HELP      = ##HELP_LEVEL_NUMBER
+HELP      = The UNENCRYPTED (clear-text) password
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if ( b_level == FALSE ) {
+        priv = ICLI_PRIVILEGE_15;
+    }
+    if ( icli_enable_password_set((icli_privilege_t)priv, password) == FALSE ) {
+        ICLI_PRINTF("%% Fail to set password.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no enable password [level <1-15>]
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_level
+CMD_VAR   = priv
+
+RUNTIME   =
+
+BYWORD    =
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_ENABLE
+HELP      = ##HELP_PASSWORD
+HELP      = ##HELP_LEVEL
+HELP      = ##HELP_LEVEL_NUMBER
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    const char    *default_password = NULL;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( b_level == FALSE ) {
+        priv = ICLI_PRIVILEGE_15;
+        default_password = ICLI_DEFAULT_ENABLE_PASSWORD;
+    }
+    if ( icli_enable_password_set((icli_privilege_t)priv, default_password) == FALSE ) {
+        ICLI_PRINTF("%% Fail to clear password.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_SECRET   = Assign the privileged level secret
+HELP_SECRET_0 = Specifies an UNENCRYPTED password will follow
+HELP_SECRET_5 = Specifies an ENCRYPTED secret will follow
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = enable secret { 0 | 5 } [level <1-15>] <word32>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined( VTSS_SW_OPTION_MD5 )
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_0
+CMD_VAR   =
+CMD_VAR   = b_level
+CMD_VAR   = priv
+CMD_VAR   = password
+
+RUNTIME   =
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = WORD
+
+HELP      = ##HELP_ENABLE
+HELP      = ##HELP_SECRET
+HELP      = ##HELP_SECRET_0
+HELP      = ##HELP_SECRET_5
+HELP      = ##HELP_LEVEL
+HELP      = ##HELP_LEVEL_NUMBER
+HELP      = Password
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if ( b_level == FALSE ) {
+        priv = ICLI_PRIVILEGE_15;
+    }
+    if ( b_0 ) {
+        if ( icli_enable_secret_clear_set((icli_privilege_t)priv, password) == FALSE ) {
+            ICLI_PRINTF("%% Fail to set password.\n");
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        if ( icli_enable_secret_set((icli_privilege_t)priv, password) == FALSE ) {
+            ICLI_PRINTF("%% Fail to set password.\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no enable secret { [ 0 | 5 ] } [ level <1-15> ]
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined( VTSS_SW_OPTION_MD5 )
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_level
+CMD_VAR   = priv
+
+RUNTIME   =
+
+BYWORD    =
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_ENABLE
+HELP      = ##HELP_SECRET
+HELP      = ##HELP_SECRET_0
+HELP      = ##HELP_SECRET_5
+HELP      = ##HELP_LEVEL
+HELP      = ##HELP_LEVEL_NUMBER
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    const char    *default_password = NULL;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( b_level == FALSE ) {
+        priv = ICLI_PRIVILEGE_15;
+        default_password = ICLI_DEFAULT_ENABLE_PASSWORD;
+    }
+    if ( icli_enable_secret_set((icli_privilege_t)priv, default_password) == FALSE ) {
+        ICLI_PRINTF("%% Fail to clear password.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_VLAN      = VLAN commands
+HELP_VLAN_LIST = ISL VLAN IDs
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = vlan <vlan_list>
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_VAR   =
+CMD_VAR   = vlist
+
+HELP      = ##HELP_VLAN
+HELP      = ##HELP_VLAN_LIST
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_CONFIG_VLAN
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_vlan_mode_enter(session_id, vlist) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = interface <port_type_list>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_VAR   =
+CMD_VAR   = plist
+
+HELP      = ##ICLI_HELP_INTERFACE
+HELP      = ##ICLI_HELP_PORT_TYPE
+HELP      = ##ICLI_HELP_PORT_LIST
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_interface_port_mode_enter(session_id, plist) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_INTERFACE_VLAN      = VLAN interface configurations
+HELP_INTERFACE_VLAN_LIST = List of VLAN interface numbers
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = interface vlan <vlan_list>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = vlist
+
+RUNTIME   =
+
+BYWORD    =
+
+HELP      = ##ICLI_HELP_INTERFACE
+HELP      = ##HELP_INTERFACE_VLAN
+HELP      = ##HELP_INTERFACE_VLAN_LIST
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_interface_vlan_enter(session_id, vlist) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no interface vlan <vlan_list>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = vlist
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##ICLI_HELP_INTERFACE
+HELP      = ##HELP_INTERFACE_VLAN
+HELP      = ##HELP_INTERFACE_VLAN_LIST
+
+CODE_BEGIN
+    _interface_vlan_disable( session_id, vlist );
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = cfm domain <kword1-15>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify a maintenance domain
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify a maintenance domain
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_cfm_domain_create
+IF_FLAG   = defined(VTSS_SW_OPTION_CFM)
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+
+HELP      = Connectivity Fault Management (CFM)
+HELP      = Maintenance Domain (MD)
+HELP      = Domain name
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_CFM_MD
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = md_name
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    rc = vtss_appl_cfm_md_conf_get(key, &md_conf);
+
+    if ((rc = vtss_appl_cfm_md_conf_get(key, &md_conf)) == VTSS_APPL_CFM_RC_NO_SUCH_INSTANCE) {
+        // This domain has not been created before. Get a default MD conf
+        if ((rc = vtss_appl_cfm_md_conf_default_get(&md_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        if ((rc = vtss_appl_cfm_md_conf_set(key, &md_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        switch (rc) {
+        case VTSS_APPL_CFM_RC_INVALID_NAME_KEY_CONTENTS:
+        case VTSS_APPL_CFM_RC_INVALID_NAME_KEY_CONTENTS_COLON:
+        case VTSS_APPL_CFM_RC_INVALID_NAME_KEY_CONTENTS_ALL:
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+
+        default:
+            // Assert that this MD has already been created.
+            if (rc != VTSS_RC_OK) {
+                T_E("Internal error: MD name %s NOT already created: %s", key.md.c_str(), error_txt(rc));
+                return ICLI_RC_ERROR;
+            }
+        }
+    }
+
+    // Go to CFM-Domain submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_CFM_MD) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter cfm-dmn sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = aps <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify APS instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify APS instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_aps_create
+IF_FLAG   = defined(VTSS_SW_OPTION_APS)
+
+RUNTIME   =
+RUNTIME   = aps_instance_range
+
+HELP      = Automatic Protection Switching
+HELP      = APS instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_APS
+
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t aps_conf;
+    mesa_rc              rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_aps_conf_get(inst, &aps_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_aps_conf_default_get(&aps_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_aps_conf_set(inst, &aps_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to APS submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_APS) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter aps sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = erps <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify ERPS instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify ERPS instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_erps_create
+IF_FLAG   = defined(VTSS_SW_OPTION_ERPS)
+
+RUNTIME   =
+RUNTIME   = erps_instance_range
+
+HELP      = Ethernet Ring Protection Switching
+HELP      = ERPS instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_ERPS
+
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t erps_conf;
+    mesa_rc               rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_erps_conf_get(inst, &erps_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_erps_conf_default_get(&erps_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_erps_conf_set(inst, &erps_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to ERPS submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_ERPS) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter erps sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = media-redundancy <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify media-redundancy instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify media-redundancy instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_mrp_create
+IF_FLAG   = defined(VTSS_SW_OPTION_IEC_MRP)
+
+RUNTIME   =
+RUNTIME   = mrp_instance_range
+
+HELP      = Media Redundancy Protocol
+HELP      = Media redundancy instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_IEC_MRP
+
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t mrp_conf;
+    mesa_rc                  rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_iec_mrp_conf_get(inst, &mrp_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_iec_mrp_conf_default_get(&mrp_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_iec_mrp_conf_set(inst, &mrp_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to MRP submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_IEC_MRP) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter media-redundancy sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = redbox <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify a redbox instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify a redbox instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_redbox_create
+IF_FLAG   = defined(VTSS_SW_OPTION_REDBOX)
+
+RUNTIME   = redbox_supported
+RUNTIME   = redbox_instance_range
+
+HELP      = HSR/PRP RedBox
+HELP      = HSR/PRP RedBox instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_REDBOX
+
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t redbox_conf;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_redbox_conf_get(inst, &redbox_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_redbox_conf_default_get(&redbox_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_redbox_conf_set(inst, &redbox_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to RedBox submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_REDBOX) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter redbox sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = stream <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify stream instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify stream instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_stream_create
+IF_FLAG   = defined(VTSS_SW_OPTION_STREAM)
+
+RUNTIME   =
+RUNTIME   = stream_instance_range
+
+HELP      = Stream definition
+HELP      = Stream instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_STREAM
+
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t stream_conf;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_stream_conf_get(inst, &stream_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_stream_conf_default_get(&stream_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_stream_conf_set(inst, &stream_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to stream submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_STREAM) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter stream submode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = stream-collection <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify stream collection instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify stream collection instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_stream_collection_create
+IF_FLAG   = defined(VTSS_SW_OPTION_STREAM)
+
+RUNTIME   =
+RUNTIME   = stream_collection_instance_range
+
+HELP      = Stream collection definition
+HELP      = Stream collection instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_STREAM_COLLECTION
+
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_stream_collection_conf_t stream_collection_conf;
+    mesa_rc                            rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_stream_collection_conf_get(inst, &stream_collection_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_stream_collection_conf_default_get(&stream_collection_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_stream_collection_conf_set(inst, &stream_collection_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to stream-collection submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_STREAM_COLLECTION) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter stream-collection submode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = tsn flow meter <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify flow meter instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify flow meter instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_psfp_flow_meter_create
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_PSFP)
+
+RUNTIME   = psfp_supported
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = psfp_flow_meter_instance_range
+
+HELP      = TSN configuration
+HELP      = Flow Meter
+HELP      = Flow Meter
+HELP      = Flow meter instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+    mesa_rc                          rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_psfp_flow_meter_conf_get(inst, &flow_meter_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_psfp_flow_meter_conf_set(inst, &flow_meter_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to PSFP submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_TSN_PSFP_FLOW_METER) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter flow meter sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = tsn stream gate <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify stream gate instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify stream gate instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_psfp_gate_create
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_PSFP)
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = psfp_gate_instance_range
+
+HELP      = TSN configuration
+HELP      = Stream Gate
+HELP      = Stream Gate
+HELP      = Stream Gate instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = gate_id
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+    mesa_rc                    rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_psfp_gate_conf_default_get(&gate_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to PSFP submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_TSN_PSFP_GATE) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter stream gate sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = tsn stream filter <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify stream filter instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify stream filter instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_psfp_filter_create
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_PSFP)
+
+RUNTIME   = psfp_supported
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = psfp_filter_instance_range
+
+HELP      = TSN configuration
+HELP      = Stream Filter
+HELP      = Stream Filter
+HELP      = Stream Filter instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = filter_id
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+    mesa_rc                      rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_psfp_filter_conf_default_get(&filter_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to PSFP submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_TSN_PSFP_FILTER) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter stream filter sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = tsn frer <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+DOC_CMD_DESC    = Create or modify FRER instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Create or modify FRER instance
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_frer_create
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_FRER)
+
+RUNTIME   = frer_supported
+RUNTIME   =
+RUNTIME   = frer_instance_range
+
+HELP      = TSN configuration
+HELP      = Frame Replication and Elimination for Reliability (802.1CB)
+HELP      = FRER instance number
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_TSN_FRER
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = inst
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t frer_conf;
+    mesa_rc               rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_frer_conf_get(inst, &frer_conf) != VTSS_RC_OK) {
+        // Not created. Get a default configuration.
+        if ((rc = vtss_appl_frer_conf_default_get(&frer_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        // Set it.
+        if ((rc = vtss_appl_frer_conf_set(inst, &frer_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // Already created. Nothing more to do except entering the submode.
+    }
+
+    // Go to FRER Instance submode
+    if (_submode_enter(session_id, ICLI_CMD_MODE_TSN_FRER) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter FRER sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+HELP_LINE_LIST = List of line numbers
+HELP_CONSOLE   = Console terminal line
+HELP_CONSOLE_0 = Console Line number
+HELP_VTY       = Virtual terminal
+HELP_VTY_LIST  = List of VTY numbers
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = line { <0~16> | console 0 | vty <0~15> }
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+
+RUNTIME   =
+
+BYWORD    =
+
+HELP      = ##ICLI_HELP_LINE
+HELP      = ##HELP_LINE_LIST
+HELP      = ##HELP_CONSOLE
+HELP      = ##HELP_CONSOLE_0
+HELP      = ##HELP_VTY
+HELP      = ##HELP_VTY_LIST
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_CONFIG_LINE
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_line_mode_enter(session_id) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = ipmc profile <word1-16>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+IF_FLAG   = defined(VTSS_SW_OPTION_SMB_IPMC)
+
+HELP      = ##ICLI_HELP_IPMC
+HELP      = IPMC profile configuration
+HELP      = Name of profilee (1-16 characters in ASCII range [33; 126]. Cannot be 'all' (case-insensitively))
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_IPMC_PROFILE
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = profile_name
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t  key;
+    vtss_appl_ipmc_lib_profile_conf_t conf;
+    mesa_rc                           rc;
+VARIABLE_END
+
+CODE_BEGIN
+    strncpy(key.name, profile_name, sizeof(key.name));
+
+    if ((rc = vtss_appl_ipmc_lib_profile_conf_get(&key, &conf)) == VTSS_APPL_IPMC_LIB_RC_PROFILE_NO_SUCH) {
+        // This profile has not been created before.
+        vtss_clear(conf);
+        if ((rc = vtss_appl_ipmc_lib_profile_conf_set(&key, &conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        switch (rc) {
+        case VTSS_APPL_IPMC_LIB_RC_PROFILE_NAME_EMPTY:
+        case VTSS_APPL_IPMC_LIB_RC_PROFILE_NAME_TOO_LONG:
+        case VTSS_APPL_IPMC_LIB_RC_PROFILE_NAME_CONTENTS:
+        case VTSS_APPL_IPMC_LIB_RC_PROFILE_NAME_CONTENTS_ALL:
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+
+        default:
+            if (rc != VTSS_RC_OK) {
+                T_E("Internal error: Profile name %s NOT already created: %s", key.name, error_txt(rc));
+                return ICLI_RC_ERROR;
+            }
+        }
+    }
+
+    if (!_submode_enter(session_id, ICLI_CMD_MODE_IPMC_PROFILE)) {
+        ICLI_PRINTF("%% Unable to enter IPMC Profile sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = snmp-server host <word32>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+IF_FLAG   = defined(VTSS_SW_OPTION_SNMP) && defined(VTSS_SW_OPTION_JSON_RPC)
+
+HELP      = ##ICLI_HELP_SNMP
+HELP      = ##ICLI_HELP_SNMP_HOST
+HELP      = ##ICLI_HELP_SNMP_HOST_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_SNMPS_HOST
+
+RUNTIME = snmp_present
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = conf_name
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_snmp_server_host_mode_enter(session_id, conf_name) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = spanning-tree aggregation
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+HELP      = ##ICLI_HELP_STP
+HELP      = ##ICLI_HELP_AGGREGATION
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_STP_AGGR
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_stp_aggr_mode_enter(session_id) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_POOL = Configure DHCP address pools
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = ip dhcp pool <word32>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+IF_FLAG   = defined(VTSS_SW_OPTION_DHCP_SERVER)
+
+HELP      = ##ICLI_HELP_IP
+HELP      = ##ICLI_HELP_IP_DHCP
+HELP      = ##HELP_POOL
+HELP      = ##ICLI_HELP_DHCP_POOL_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_DHCP_POOL
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = pool_name
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = WORD
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_dhcp_pool_mode_enter(session_id, pool_name) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_JSON                = JavaScript Object Notation RPC
+HELP_JSON_NOTI           = Notification request object
+HELP_JSON_NOTI_HOST      = Notification host
+HELP_JSON_NOTI_HOST_NAME = Name of Notification host
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = json notification host <word32>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+IF_FLAG   = defined(VTSS_SW_OPTION_JSON_RPC_NOTIFICATION)
+
+HELP      = ##HELP_JSON
+HELP      = ##HELP_JSON_NOTI
+HELP      = ##HELP_JSON_NOTI_HOST
+HELP      = ##HELP_JSON_NOTI_HOST_NAME
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_JSON_NOTI_HOST
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = hname
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_json_noti_host_mode_enter(session_id, hname) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_INTERFACE_LLAG    = Local link aggregation interface configuration
+HELP_INTERFACE_LLAG_ID = ID of LLAG interface
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = interface llag <uint>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+IF_FLAG   = defined(VTSS_SW_OPTION_AGGR)
+
+HELP      = ##ICLI_HELP_INTERFACE
+HELP      = ##HELP_INTERFACE_LLAG
+HELP      = ##HELP_INTERFACE_LLAG_ID
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_LLAG
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = llag_id
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = ICLI_CONFIG_aggr_mgmt_group_range
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_llag_mode_enter(session_id, llag_id) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+CMD_BEGIN
+COMMAND   = no interface llag <uint>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+IF_FLAG   = defined(VTSS_SW_OPTION_AGGR)
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = llag_id
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = ICLI_CONFIG_aggr_mgmt_group_range
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##ICLI_HELP_INTERFACE
+HELP      = ##HELP_INTERFACE_LLAG
+HELP      = ##HELP_INTERFACE_LLAG_ID
+
+CODE_BEGIN
+    _interface_llag_disable( session_id, llag_id );
+CODE_END
+
+CMD_END
+
+HELP_QOS_INGRESS_MAP    = Map for ingress configuration
+HELP_QOS_INGRESS_MAP_ID = Map ID
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = qos map ingress <0-1>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+IF_FLAG   = defined(VTSS_SW_OPTION_QOS_ADV)
+
+RUNTIME   = _qos_runtime_ingress_map
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = _qos_runtime_ingress_map
+
+HELP      =
+HELP      =
+HELP      = ##HELP_QOS_INGRESS_MAP
+HELP      = ##HELP_QOS_INGRESS_MAP_ID
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_QOS_INGRESS_MAP
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = map_id
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_qos_ingress_map_mode_enter(session_id, map_id) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_QOS_EGRESS_MAP    = Map for egress configuration
+HELP_QOS_EGRESS_MAP_ID = Map ID
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = qos map egress <0-1>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+IF_FLAG   = defined(VTSS_SW_OPTION_QOS_ADV)
+
+RUNTIME   = _qos_runtime_egress_map
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = _qos_runtime_egress_map
+
+HELP      =
+HELP      =
+HELP      = ##HELP_QOS_EGRESS_MAP
+HELP      = ##HELP_QOS_EGRESS_MAP_ID
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_QOS_EGRESS_MAP
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = map_id
+
+SUB_MODE  = 1
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (_qos_egress_map_mode_enter(session_id, map_id) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+IF_FLAG   = defined(VTSS_SW_OPTION_FRR_OSPF)
+COMMAND   = router ospf
+//COMMAND   = router ospf <1-65535>
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+SUB_MODE  = 1
+PROPERTY  =
+
+RUNTIME   = ICLI_runtime_frr_ospf_supported
+RUNTIME   =
+//RUNTIME   =
+
+HELP      = ##ICLI_HELP_ROUTER
+HELP      = ##ICLI_HELP_OSPF
+//HELP      = ##ICLI_HELP_OSPF_PROCESS_ID
+
+CMD_VAR   =
+CMD_VAR   =
+//CMD_VAR   = process_id
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (ICLI_CONFIG_ospf_router_mode_enter(session_id, FRR_OSPF_DEFAULT_INSTANCE_ID) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+IF_FLAG   = defined(VTSS_SW_OPTION_FRR_OSPF6)
+COMMAND   = router ospf6
+//COMMAND   = router ospf6 <1-65535>
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF6
+SUB_MODE  = 1
+PROPERTY  =
+
+RUNTIME   = ICLI_runtime_frr_ospf6_supported
+RUNTIME   =
+//RUNTIME   =
+
+HELP      = ##ICLI_HELP_ROUTER
+HELP      = ##ICLI_HELP_OSPF6
+//HELP      = ##ICLI_HELP_OSPF6_PROCESS_ID
+
+CMD_VAR   =
+CMD_VAR   =
+//CMD_VAR   = process_id
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (ICLI_CONFIG_ospf6_router_mode_enter(session_id, FRR_OSPF6_DEFAULT_INSTANCE_ID) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+IF_FLAG   = defined(VTSS_SW_OPTION_FRR_RIP)
+COMMAND   = router rip
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+SUB_MODE  = 1
+PROPERTY  =
+
+RUNTIME   = ICLI_runtime_frr_rip_supported
+RUNTIME   =
+
+HELP      = ##ICLI_HELP_ROUTER
+HELP      = ##ICLI_HELP_RIP
+
+CMD_VAR   =
+CMD_VAR   =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (ICLI_CONFIG_rip_router_mode_enter(session_id) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+IF_FLAG   = defined(VTSS_SW_OPTION_FRR_ROUTER)
+COMMAND   = key chain <word31>
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+GOTO_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_KEYCHAIN
+SUB_MODE  = 1
+PROPERTY  =
+
+RUNTIME   = ICLI_runtime_frr_router_supported
+RUNTIME   =
+RUNTIME   =
+
+HELP      = Authentication key management
+HELP      = Key-chain management
+HELP      =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = keychain_name
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (ICLI_CONFIG_keychain_router_mode_enter(session_id, keychain_name) == FALSE) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug parsing
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)ICLI_CMD_PARSING_BEGIN();
+    (void)ICLI_CMD_EXEC("! go to interface mode", FALSE);
+    (void)ICLI_CMD_EXEC("interface vlan 1", FALSE);
+    (void)ICLI_CMD_EXEC_ERR_DISPLAY("debug mo", TRUE, "% error 1", TRUE);
+    (void)ICLI_CMD_EXEC("interface gi 1/1", FALSE);
+    (void)ICLI_CMD_EXEC("  ! go to interface mode", FALSE);
+    (void)ICLI_CMD_EXEC_ERR_DISPLAY("  debug m", FALSE, "% error 2", TRUE);
+    //(void)ICLI_CMD_EXEC(" exit", TRUE);
+    (void)ICLI_CMD_EXEC("   hostname test", FALSE);
+    (void)ICLI_CMD_EXEC(" interface ten 1/1", TRUE);
+    (void)ICLI_CMD_EXEC("  ! go to interface mode", FALSE);
+    //(void)ICLI_CMD_EXEC(" exit", FALSE);
+    //(void)ICLI_CMD_EXEC("end", FALSE);
+    //(void)ICLI_CMD_EXEC_ERR_DISPLAY("conf t", TRUE, NULL, TRUE);
+    (void)ICLI_CMD_EXEC("! go to interface mode", FALSE);
+    (void)ICLI_CMD_EXEC(" banner login test", TRUE);
+    (void)ICLI_CMD_EXEC("  ! go to line mode", FALSE);
+    (void)ICLI_CMD_EXEC_ERR_DISPLAY("  line 0,2,4,6,8-15", FALSE, "% error 3", TRUE);
+    (void)ICLI_CMD_PARSING_END();
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+
+COMMAND   = debug enable password
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+HELP      = ##ICLI_HELP_DEBUG
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    icli_privilege_t    priv;
+    char                password[ICLI_PASSWORD_MAX_LEN + 1];
+VARIABLE_END
+
+CODE_BEGIN
+    for ( priv = (icli_privilege_t)0; priv < ICLI_PRIVILEGE_MAX; ++priv ) {
+        if ( icli_enable_password_get(priv, password) == FALSE ) {
+            ICLI_PRINTF("%% Fail to get password at priv %d\n", priv);
+            continue;
+        }
+        ICLI_PRINTF("priv = %d -> %s, %s\n",
+            priv,
+            icli_enable_password_if_secret_get(priv)?"secret":"clear",
+            password);
+    }
+CODE_END
+
+CMD_END
+
+HELP_PRIV                   = Command privilege parameters
+HELP_PRIV_EXEC              = Exec mode
+HELP_PRIV_CONFIG            = Global configuration mode
+HELP_PRIV_CONFIG_VLAN       = VLAN Configuration Mode
+HELP_PRIV_CONFIG_LINE       = Line configuration mode
+HELP_PRIV_INTERFACE         = Port List Interface Mode
+HELP_PRIV_IF_VLAN           = VLAN Interface Mode
+HELP_PRIV_IPMC_PROFILE      = IPMC Profile Mode
+HELP_PRIV_SNMP_HOST         = SNMP Server Host Mode
+HELP_PRIV_STP_AGGR          = STP Aggregation Mode
+HELP_PRIV_DHCP_POOL         = DHCP Pool Configuration Mode
+HELP_PRIV_IF_TTP            = Interface TP Tunnel Mode
+HELP_PRIV_JSON_NOTI_HOST    = JSON Notification Host Mode
+HELP_PRIV_LLAG              = Local Link Aggregation Mode
+HELP_PRIV_LEVEL             = Set privilege level of command
+HELP_PRIV_LEVEL_PRIV        = Privilege level
+HELP_PRIV_CMD               = Initial valid words and literals of the command to modify, in 128 characters
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = privilege <cword> level <0-15> <line128>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+IF_FLAG   =
+
+CMD_VAR   =
+CMD_VAR   = mode_name
+CMD_VAR   =
+CMD_VAR   = privilege
+CMD_VAR   = cmd
+
+HELP      = ##HELP_PRIV
+HELP      =
+HELP      = ##HELP_PRIV_LEVEL
+HELP      = ##HELP_PRIV_LEVEL_PRIV
+HELP      = ##HELP_PRIV_CMD
+
+RUNTIME   =
+RUNTIME   = _runtime_privilege_cword
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+
+VARIABLE_BEGIN
+    icli_priv_cmd_conf_t    conf;
+    i32                     rc;
+VARIABLE_END
+
+CODE_BEGIN
+    /* mode */
+    conf.mode = icli_mode_get_by_name(mode_name);
+
+    /* command string */
+    (void)icli_str_cpy( conf.cmd, cmd );
+
+    /* set privilege */
+    conf.privilege = (icli_privilege_t)privilege;
+
+    rc = icli_priv_set( &conf );
+    if ( rc != ICLI_RC_OK ) {
+        ICLI_PRINTF("%% Fail to set privilege ");
+        switch ( rc ) {
+        case ICLI_RC_ERR_MEMORY:
+            ICLI_PRINTF("as the database is full.\n");
+            break;
+        case ICLI_RC_ERR_INCOMPLETE:
+            ICLI_PRINTF("as command \"%s\" is incomplete.\n", conf.cmd);
+            break;
+        case ICLI_RC_ERR_MATCH:
+        default:
+            ICLI_PRINTF("as command \"%s\" is invalid.\n", conf.cmd);
+            break;
+        }
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no privilege <cword> level <0-15> <line128>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+IF_FLAG   =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = mode_name
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = cmd
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_PRIV
+HELP      =
+HELP      = ##HELP_PRIV_LEVEL
+HELP      = ##HELP_PRIV_LEVEL_PRIV
+HELP      = ##HELP_PRIV_CMD
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = _runtime_privilege_cword
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+
+VARIABLE_BEGIN
+    icli_priv_cmd_conf_t    conf;
+    i32                     rc;
+VARIABLE_END
+
+CODE_BEGIN
+    /* mode */
+    conf.mode = icli_mode_get_by_name(mode_name);
+
+    /* command string */
+    (void)icli_str_cpy( conf.cmd, cmd );
+
+    /* delete privilege */
+    rc = icli_priv_delete( &conf );
+    if ( rc != ICLI_RC_OK ) {
+        ICLI_PRINTF("%% Command not exist in the mode\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_VLAN
+MODE_VAR  = vlist
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     vid;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current VLAN List is");
+    for ( i = 0; i < vlist->cnt; ++i ) {
+        for ( vid = vlist->range[i].min; vid <= vlist->range[i].max; ++vid ) {
+            ICLI_PRINTF(" %u", vid);
+        }
+    }
+    ICLI_PRINTF("\n");
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_DHCP_SERVER)
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_DHCP_POOL
+
+MODE_VAR  = pool_name
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current DHCP pool name is %s\n", pool_name);
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = list
+
+VARIABLE_BEGIN
+    port_iter_t pit;
+    char        if_str[40];
+VARIABLE_END
+
+CODE_BEGIN
+    (void)icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_ALL);
+
+    ICLI_PRINTF("Interface  uport iport cport\n");
+    ICLI_PRINTF("---------- ----- ----- -----\n");
+
+    while (icli_port_iter_getnext(&pit, list)) {
+        ICLI_PRINTF("%-10s %5u %5u %5d\n",
+                    icli_port_info_txt_short(VTSS_USID_START, pit.uport, if_str),
+                    pit.uport,
+                    pit.iport,
+                    port_custom_table[pit.iport].map.chip_port);
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlist
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     vid;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current VLAN List is");
+    for ( i = 0; i < vlist->cnt; ++i ) {
+        for ( vid = vlist->range[i].min; vid <= vlist->range[i].max; ++vid ) {
+            ICLI_PRINTF(" %u", vid);
+        }
+    }
+    ICLI_PRINTF("\n");
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = ((defined(VTSS_SW_OPTION_SMB_IPMC) || defined(VTSS_SW_OPTION_MVR)) && defined(VTSS_SW_OPTION_IPMC_LIB))
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_IPMC_PROFILE
+
+MODE_VAR  = profile_name
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current profile name is %s\n", profile_name);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_SNMP)
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_SNMPS_HOST
+
+MODE_VAR  = conf_name
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current config name is %s\n", conf_name);
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_STP_AGGR
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("No mode parameter.\n");
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_LINE
+
+MODE_VAR  = session_list
+MODE_VAR  = vty_list
+
+VARIABLE_BEGIN
+    u32     sid;
+    u32     i;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( session_list ) {
+        ICLI_PRINTF("Current line is Line");
+        for ( i = 0; i < session_list->cnt; ++i ) {
+            for ( sid = session_list->range[i].min; sid <= session_list->range[i].max; ++sid ) {
+                ICLI_PRINTF(" %u", sid);
+            }
+        }
+        ICLI_PRINTF("\n");
+    } else if ( vty_list ) {
+        ICLI_PRINTF("Current line is VTY");
+        for ( i = 0; i < vty_list->cnt; ++i ) {
+            for ( sid = vty_list->range[i].min; sid <= vty_list->range[i].max; ++sid ) {
+                ICLI_PRINTF(" %u", sid);
+            }
+        }
+        ICLI_PRINTF("\n");
+    } else {
+        ICLI_PRINTF("Current line is Console 0\n");
+    }
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_JSON_RPC_NOTIFICATION)
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_JSON_NOTI_HOST
+
+MODE_VAR  = hname
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current JSON notification host name is %s\n", hname);
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_AGGR)
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_LLAG
+MODE_VAR  = llag_id
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current LLAG ID is %u\n", llag_id);
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_QOS_ADV)
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_QOS_INGRESS_MAP
+MODE_VAR  = qos_ingress_map_id
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current QoS Ingress Map ID is %u\n", qos_ingress_map_id);
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_QOS_ADV)
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+CMD_MODE  = ICLI_CMD_MODE_QOS_EGRESS_MAP
+MODE_VAR  = qos_egress_map_id
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Current QoS Egress Map ID is %u\n", qos_egress_map_id);
+CODE_END
+
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_CFM)
+FUNC_NAME = icli_cfm_domain_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_CFM_MD
+
+MODE_VAR  = md_name
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    if ((rc = vtss_appl_cfm_md_conf_get(key, &md_conf)) != VTSS_RC_OK) {
+        T_E("Unable to get CFM domain configuration for %s: %s", key.md.c_str(), error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current CFM domain is %s (format %s, name = \"%s\", level = %u)\n", key.md.c_str(), cfm_util_md_format_to_str(md_conf.format, false), md_conf.name, md_conf.level);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_APS)
+FUNC_NAME = icli_aps_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_APS
+
+MODE_VAR  = inst
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+    mesa_rc              rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_aps_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_E("Unable to get APS configuration for %u: %s", inst, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current APS instance is %u (W-port = %u, W-MEP = %s:%s:%u, P-port = %u P-MEP = %s:%s:%u)\n",
+                inst,
+                VTSS_IFINDEX_PRINTF_ARG(conf.w_port_conf.ifindex), conf.w_port_conf.mep.md.c_str(), conf.w_port_conf.mep.ma.c_str(), conf.w_port_conf.mep.mepid,
+                VTSS_IFINDEX_PRINTF_ARG(conf.p_port_conf.ifindex), conf.p_port_conf.mep.md.c_str(), conf.p_port_conf.mep.ma.c_str(), conf.p_port_conf.mep.mepid);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_ERPS)
+FUNC_NAME = icli_erps_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_ERPS
+
+MODE_VAR  = inst
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+    mesa_rc               rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_erps_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_E("Unable to get ERPS configuration for %u: %s", inst, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current ERPS instance is %u, which is a %d ring\n", inst, conf.ring_type);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_IEC_MRP)
+FUNC_NAME = icli_mrp_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_IEC_MRP
+
+MODE_VAR  = inst
+
+VARIABLE_BEGIN
+    vtss_appl_iec_mrp_conf_t conf;
+    mesa_rc                  rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_iec_mrp_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_E("Unable to get MRP configuration for %u: %s", inst, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current media-redundancy instance is %u\n", inst);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_REDBOX)
+FUNC_NAME = icli_redbox_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_REDBOX
+
+MODE_VAR  = inst
+
+VARIABLE_BEGIN
+    vtss_appl_redbox_conf_t conf;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_redbox_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_E("Unable to get Redbox configuration for %u: %s", inst, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current redbox instance is %u\n", inst);
+CODE_END
+CMD_END
+
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_STREAM)
+FUNC_NAME = icli_stream_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+
+MODE_VAR  = stream_id
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_stream_conf_get(stream_id, &conf)) != VTSS_RC_OK) {
+        T_E("Unable to get stream configuration for %u: %s", stream_id, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current stream ID is %u\n", stream_id);
+CODE_END
+CMD_END
+
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_STREAM)
+FUNC_NAME = icli_stream_collection_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_STREAM_COLLECTION
+
+MODE_VAR  = stream_collection_id
+
+VARIABLE_BEGIN
+    vtss_appl_stream_collection_conf_t conf;
+    mesa_rc                            rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_stream_collection_conf_get(stream_collection_id, &conf)) != VTSS_RC_OK) {
+        T_E("Unable to get stream-collection configuration for %u: %s", stream_collection_id, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current stream-collection ID is %u\n", stream_collection_id);
+CODE_END
+CMD_END
+
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_PSFP)
+FUNC_NAME = icli_psfp_flow_meter_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR  = inst
+
+CODE_BEGIN
+    ICLI_PRINTF("Current PSFP Flow Meter instance is %u\n", inst);
+CODE_END
+CMD_END
+
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_PSFP)
+FUNC_NAME = icli_psfp_gate_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR  = inst
+
+CODE_BEGIN
+    ICLI_PRINTF("Current PSFP Stream Gate instance is %u\n", inst);
+CODE_END
+CMD_END
+
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_PSFP)
+FUNC_NAME = icli_psfp_filter_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR  = inst
+
+CODE_BEGIN
+    ICLI_PRINTF("Current PSFP Stream Filter instance is %u\n", inst);
+CODE_END
+CMD_END
+
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   = defined(VTSS_SW_OPTION_TSN_FRER)
+FUNC_NAME = icli_frer_debug_mode
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_TSN_FRER
+
+MODE_VAR  = inst
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+    mesa_rc               rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_frer_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_E("Unable to get FRER configuration for %u: %s", inst, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current FRER instance is %u\n", inst);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = prompt <word32>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR   =
+CMD_VAR   = prompt
+
+HELP      = Set prompt
+HELP      = Up to 32 chars of prompt. Precede prompt variables with a percent sign (%). Prompt variables: %h = hostname, %% = percent sign, %s = space, %t = tab, %D = date, %T = time, %Z = date and time (like '%DT%T' but ensures atomicity in case of %T rollover)
+
+CODE_BEGIN
+    if (icli_prompt_set(prompt) != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Failed to set prompt. Please check syntax\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = no prompt
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR   =
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_NO
+HELP      = Default the prompt to hostname
+
+VARIABLE_BEGIN
+    char prompt[ICLI_PROMPT_UNINTERPRETED_MAX_LEN + 1] = {0};
+VARIABLE_END
+
+CODE_BEGIN
+    if (icli_prompt_set(prompt) != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Failed to default the prompt\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+

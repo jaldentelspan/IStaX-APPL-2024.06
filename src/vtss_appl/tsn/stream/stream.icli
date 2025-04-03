@@ -1,0 +1,3166 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "vtss_icli_session.h" /* For vtss_icli_session_mode_para_get()    */
+#include "stream_api.h"
+#include "mgmt_api.h"
+#include "ip_utils.hxx"
+#include "misc_api.h"          /* For uport2iport(), iport2uport()         */
+#include "port_iter.hxx"       /* For switch_iter_init(), port_iter_init() */
+#include "topo_api.h"          /* For topo_usid2isid(), topo_isid2usid()   */
+#include "icfg_api.h"
+#include "mac_utils.hxx"       /* For mesa_mac_t::operator==()             */
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include stream's trace here, because ICLI defines its own that I
+// don't want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "stream_trace.h"
+
+// Simple way of ICLI printing to both avoid session_id and to void the return
+// value of icli_session_self_printf()
+#define STREAM_ICLI_PRINTF(...) (void)icli_session_self_printf(__VA_ARGS__)
+
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_STREAM
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define STREAM_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {STREAM_ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+/******************************************************************************/
+// ICFG Functions
+/******************************************************************************/
+
+/******************************************************************************/
+// STREAM_ICFG_ipv4_to_buf()
+/******************************************************************************/
+static void STREAM_ICFG_ipv4_to_buf(char *buf, const char *name, const mesa_ipv4_network_t &ip, bool all_defaults)
+{
+    char ipv4_buf[20];
+
+    if (ip.prefix_size) {
+        sprintf(buf, " %s %s/%u", name, misc_ipv4_txt(ip.address, ipv4_buf), ip.prefix_size);
+    } else if (all_defaults) {
+        sprintf(buf, " %s any", name);
+    } else {
+        buf[0] = '\0';
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICFG_ipv6_to_buf()
+/******************************************************************************/
+static void STREAM_ICFG_ipv6_to_buf(char *buf, const char *name, const mesa_ipv6_network_t &ip, bool all_defaults)
+{
+    char ipv6_buf[40];
+
+    if (ip.prefix_size) {
+        sprintf(buf, " %s %s/%u", name, misc_ipv6_txt(&ip.address, ipv6_buf), ip.prefix_size);
+    } else if (all_defaults) {
+        sprintf(buf, " %s any", name);
+    } else {
+        buf[0] = '\0';
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICFG_range_to_buf()
+/******************************************************************************/
+static void STREAM_ICFG_range_to_buf(char *buf, const char *name, const vtss_appl_stream_range_t &range, bool all_defaults)
+{
+    if (range.match_type == VTSS_APPL_STREAM_RANGE_MATCH_TYPE_VALUE) {
+        sprintf(buf, " %s %u", name, range.low);
+    } else if (range.match_type == VTSS_APPL_STREAM_RANGE_MATCH_TYPE_RANGE) {
+        sprintf(buf, " %s %u-%u", name, range.low, range.high);
+    } else if (all_defaults) {
+        sprintf(buf, " %s any", name);
+    } else {
+        buf[0] = '\0';
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICFG_fragment_to_buf()
+/******************************************************************************/
+static void STREAM_ICFG_fragment_to_buf(char *buf, mesa_vcap_bit_t fragment, bool all_defaults)
+{
+    if (fragment != MESA_VCAP_BIT_ANY) {
+        sprintf(buf, " fragment %s", fragment == MESA_VCAP_BIT_0 ? "no" : "yes");
+    } else if (all_defaults) {
+        strcpy(buf, " fragment any");
+    } else {
+        buf[0] = '\0';
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICFG_ip_proto_to_buf()
+/******************************************************************************/
+static void STREAM_ICFG_ip_proto_to_buf(char *buf, const vtss_appl_stream_ip_protocol_t &proto, bool all_defaults)
+{
+    switch (proto.type) {
+    case VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_CUSTOM:
+        sprintf(buf, " proto %u", proto.value);
+        break;
+
+    case VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_TCP:
+        strcpy(buf, " proto tcp");
+        break;
+
+    case VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_UDP:
+        strcpy(buf, " proto udp");
+        break;
+
+    case VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_ANY:
+    default:
+        if (all_defaults) {
+            strcpy(buf, " proto any");
+        } else {
+            buf[0] = '\0';
+        }
+
+        break;
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICFG_conf_tag_print()
+/******************************************************************************/
+static mesa_rc STREAM_ICFG_conf_tag_print(bool all_defaults, vtss_icfg_query_result_t *result, const char *tag_name, const vtss_appl_stream_vlan_tag_t &conf)
+{
+    // [no] outer-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+    // [no] inner-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+
+    if (conf.match_type == VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_BOTH) {
+        if (all_defaults) {
+            VTSS_RC(vtss_icfg_printf(result, " no %s\n", tag_name));
+        }
+
+        return VTSS_RC_OK;
+    }
+
+    if (conf.match_type == VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_UNTAGGED) {
+        VTSS_RC(vtss_icfg_printf(result, " %s none\n", tag_name));
+        return VTSS_RC_OK;
+    }
+
+    // match_type == VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_TAGGED
+
+    VTSS_RC(vtss_icfg_printf(result, " %s vid", tag_name));
+
+    // VID
+    if (conf.vid_mask == 0) {
+        VTSS_RC(vtss_icfg_printf(result, " any"));
+    } else {
+        VTSS_RC(vtss_icfg_printf(result, " %u", conf.vid_value));
+
+        if (all_defaults || conf.vid_mask != 0xFFF) {
+            VTSS_RC(vtss_icfg_printf(result, " / 0x%03x", conf.vid_mask));
+        }
+    }
+
+    // PCP
+    if (conf.pcp_mask) {
+        VTSS_RC(vtss_icfg_printf(result, " pcp %u", conf.pcp_value));
+        if (all_defaults || conf.pcp_mask != 0x7) {
+            VTSS_RC(vtss_icfg_printf(result, " / 0x%x", conf.pcp_mask));
+        }
+    }
+
+    // DEI
+    if (conf.dei != MESA_VCAP_BIT_ANY) {
+        VTSS_RC(vtss_icfg_printf(result, " dei %u", conf.dei == MESA_VCAP_BIT_0 ? 0 : 1));
+    }
+
+    // Tag Type
+    if (conf.tag_type == VTSS_APPL_STREAM_VLAN_TAG_TYPE_C_TAGGED) {
+        VTSS_RC(vtss_icfg_printf(result, " c-tag"));
+    } else if (conf.tag_type == VTSS_APPL_STREAM_VLAN_TAG_TYPE_S_TAGGED) {
+        VTSS_RC(vtss_icfg_printf(result, " s-tag"));
+    }
+
+    return vtss_icfg_printf(result, "\n");
+}
+
+/******************************************************************************/
+// STREAM_ICFG_conf()
+/******************************************************************************/
+static mesa_rc STREAM_ICFG_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_stream_id_t         stream_id;
+    vtss_appl_stream_conf_t       conf;
+    vtss_appl_stream_proto_snap_t *snap;
+    vtss_appl_stream_proto_ipv4_t *ipv4;
+    vtss_appl_stream_proto_ipv6_t *ipv6;
+    const char                    *txt, *txt2;
+    char                          mac_buf1[20], mac_buf2[30], proto_buf[20], sip_buf[100], dip_buf[100], dscp_buf[30], fragment_buf[20], dport_buf[30];
+
+    // Format:
+    // stream <1-max>
+    //  [no] dmac {<mac_addr> [/ <mac_addr>] | multicast | broadcast | unicast | not-broadcast | not-unicast | any} /* 'no dmac' is the same as 'dmac any' */
+    //  [no] smac {<mac_addr> [/ <mac_addr>] | any}                                                                 /* 'no smac' is the same as 'smac any' */
+    //  [no] outer-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+    //  [no] inner-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+    //  [no] etype <0x600-0xffff>
+    //  [no] llc <0x0-0xff> <0x0-0xff>
+    //  [no] snap {<0x0-0xffffff> | rfc-1042 | snap-8021h} <0x0-0xffff>
+    //  [no] ipv4 [sip {<ipv4_subnet> | any}] [dip {<ipv4_subnet> | any}] [dscp {<vcap_vr> | <dscp> | any}] [fragment {yes | no | any}] [proto {<0-255> | tcp | udp | any}] [dport {<vcap_vr> | any}]
+    //  [no] ipv6 [sip {<ipv6_subnet> | any}] [dip {<ipv6_subnet> | any}] [dscp {<vcap_vr> | <dscp> | any}]                             [proto {<0-255> | tcp | udp | any}] [dport {<vcap_vr> | any}]
+
+    stream_id = req->instance_id.generic_u32;
+    VTSS_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+
+    // [no] dmac {<mac_addr> [/ <mac_addr>] | multicast | broadcast | unicast | not-broadcast | not-unicast | any}
+    txt2 = nullptr;
+    if (conf.dmac.match_type == VTSS_APPL_STREAM_DMAC_MATCH_TYPE_VALUE) {
+        txt = misc_mac_txt(conf.dmac.value.addr, mac_buf1);
+
+        if (req->all_defaults || !mac_is_broadcast(conf.dmac.mask)) {
+            txt2 = misc_mac_txt(conf.dmac.mask.addr, mac_buf2);
+        }
+    } else if (req->all_defaults || conf.dmac.match_type != VTSS_APPL_STREAM_DMAC_MATCH_TYPE_ANY) {
+        txt = stream_util_dmac_match_type_to_str(conf.dmac.match_type);
+    } else {
+        txt = nullptr;
+    }
+
+    if (txt) {
+        VTSS_RC(vtss_icfg_printf(result, " dmac %s", txt));
+        if (txt2) {
+            VTSS_RC(vtss_icfg_printf(result, " / %s", txt2));
+        }
+
+        VTSS_RC(vtss_icfg_printf(result, "\n"));
+    }
+
+    // [no] smac {<mac_addr> [/ <mac_addr>] | any} /* 'no smac' is the same as 'smac any' */
+    if (!mac_is_zero(conf.smac.mask)) {
+        VTSS_RC(vtss_icfg_printf(result, " smac %s", misc_mac_txt(conf.smac.value.addr, mac_buf1)));
+
+        if (!mac_is_broadcast(conf.smac.mask)) {
+            VTSS_RC(vtss_icfg_printf(result, " / %s", misc_mac_txt(conf.smac.mask.addr, mac_buf1)));
+        }
+
+        VTSS_RC(vtss_icfg_printf(result, "\n"));
+    } else if (req->all_defaults) {
+        VTSS_RC(vtss_icfg_printf(result, " smac any\n"));
+    }
+
+    // [no] outer-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+    VTSS_RC(STREAM_ICFG_conf_tag_print(req->all_defaults, result, "outer-tag", conf.outer_tag));
+
+    // [no] inner-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+    VTSS_RC(STREAM_ICFG_conf_tag_print(req->all_defaults, result, "inner-tag", conf.inner_tag));
+
+    // Protocol
+    switch (conf.protocol.type) {
+    case MESA_VCE_TYPE_ETYPE:
+        // [no] etype <0x600-0xffff>
+        VTSS_RC(vtss_icfg_printf(result, " etype 0x%x\n", conf.protocol.value.etype.etype));
+        break;
+
+    case MESA_VCE_TYPE_LLC:
+        // [no] llc <0x0-0xff> <0x0-0xff>
+        VTSS_RC(vtss_icfg_printf(result, " llc 0x%x 0x%x\n", conf.protocol.value.llc.dsap, conf.protocol.value.llc.ssap));
+        break;
+
+    case MESA_VCE_TYPE_SNAP:
+        // [no] snap {<0x0-0xffffff> | rfc-1042 | snap-8021h} <0x0-0xffff>
+         snap = &conf.protocol.value.snap;
+
+        // One can wonder why we have to use special enumerations for two
+        // rather simple OUI types. I have made an enumeration of them, because
+        // they were already implemented in ICLI when I refactored it...
+        switch (snap->oui_type) {
+        case VTSS_APPL_STREAM_PROTO_SNAP_OUI_TYPE_8021H:
+            VTSS_RC(vtss_icfg_printf(result, " snap snap-8021h 0x%x\n", snap->pid));
+            break;
+
+        case VTSS_APPL_STREAM_PROTO_SNAP_OUI_TYPE_RFC1042:
+            VTSS_RC(vtss_icfg_printf(result, " snap rfc-1042 0x%x\n", snap->pid));
+            break;
+
+        default:
+        case VTSS_APPL_STREAM_PROTO_SNAP_OUI_TYPE_CUSTOM:
+            VTSS_RC(vtss_icfg_printf(result, " snap 0x%06x 0x%x\n", snap->oui, snap->pid));
+            break;
+        }
+
+        break;
+
+    case MESA_VCE_TYPE_IPV4:
+        // [no] ipv4 [sip {<ipv4_subnet> | any}] [dip {<ipv4_subnet> | any}] [dscp {<vcap_vr> | <dscp> | any}] [fragment {yes | no | any}] [proto {<0-255> | tcp | udp | any}] [dport {<vcap_vr> | any}]
+        ipv4 = &conf.protocol.value.ipv4;
+
+        STREAM_ICFG_ipv4_to_buf(    sip_buf,     "sip",   ipv4->sip,      req->all_defaults);
+        STREAM_ICFG_ipv4_to_buf(    dip_buf,     "dip",   ipv4->dip,      req->all_defaults);
+        STREAM_ICFG_range_to_buf(   dscp_buf,    "dscp",  ipv4->dscp,     req->all_defaults);
+        STREAM_ICFG_fragment_to_buf(fragment_buf,         ipv4->fragment, req->all_defaults);
+        STREAM_ICFG_ip_proto_to_buf(proto_buf,            ipv4->proto,    req->all_defaults);
+        STREAM_ICFG_range_to_buf(   dport_buf,   "dport", ipv4->dport,    req->all_defaults);
+
+        VTSS_RC(vtss_icfg_printf(result, " ipv4%s%s%s%s%s%s\n", sip_buf, dip_buf, dscp_buf, fragment_buf,  proto_buf, dport_buf));
+        break;
+
+    case MESA_VCE_TYPE_IPV6:
+        // [no] ipv6 [sip {<ipv6_subnet> | any}] [dip {<ipv6_subnet> | any}] [dscp {<vcap_vr> | <dscp> | any}] [proto {<0-255> | tcp | udp | any}] [dport {<vcap_vr> | any}]
+        ipv6 = &conf.protocol.value.ipv6;
+
+        STREAM_ICFG_ipv6_to_buf(    sip_buf,   "sip",   ipv6->sip,   req->all_defaults);
+        STREAM_ICFG_ipv6_to_buf(    dip_buf,   "dip",   ipv6->dip,   req->all_defaults);
+        STREAM_ICFG_range_to_buf(   dscp_buf,  "dscp",  ipv6->dscp,  req->all_defaults);
+        STREAM_ICFG_ip_proto_to_buf(proto_buf,          ipv6->proto, req->all_defaults);
+        STREAM_ICFG_range_to_buf(   dport_buf, "dport", ipv6->dport, req->all_defaults);
+
+        VTSS_RC(vtss_icfg_printf(result, " ipv6%s%s%s%s%s\n", sip_buf, dip_buf, dscp_buf, proto_buf, dport_buf));
+        break;
+
+    default:
+        break;
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// STREAM_ICFG_port_conf()
+/******************************************************************************/
+static mesa_rc STREAM_ICFG_port_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    mesa_port_no_t          port_no   = uport2iport(req->instance_id.port.begin_uport);
+    vtss_appl_stream_id_t   stream_id = VTSS_APPL_STREAM_ID_NONE;
+    vtss_appl_stream_conf_t conf;
+    mesa_rc                 rc;
+
+    // stream-id <stream_id>
+    while (vtss_appl_stream_itr(&stream_id, &stream_id) == VTSS_RC_OK) {
+        if ((rc = vtss_appl_stream_conf_get(stream_id, &conf)) != VTSS_RC_OK) {
+            // Could be it just got deleted, so don't throw a trace error.
+            T_IG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_conf_get(%u) failed: %s", stream_id, error_txt(rc));
+            continue;
+        }
+
+        if (conf.port_list[port_no]) {
+            VTSS_RC(vtss_icfg_printf(result, " stream-id %d\n", stream_id));
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// STREAM_COLLECTION_ICFG_conf()
+/******************************************************************************/
+static mesa_rc STREAM_COLLECTION_ICFG_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_stream_collection_id_t   stream_collection_id;
+    vtss_appl_stream_collection_conf_t conf;
+    char                               buf[1000];
+
+    // Format:
+    // stream-collection <1-max>
+    //  [no] stream-id-list <a~b>
+    stream_collection_id = req->instance_id.generic_u32;
+    VTSS_RC(vtss_appl_stream_collection_conf_get(stream_collection_id, &conf));
+
+    // [no] ingress stream-id-list <a~b>
+    // First convert to a string.
+    (void)stream_collection_util_stream_id_list_to_str(conf.stream_ids, ARRSZ(conf.stream_ids), buf);
+
+    // If resulting string is empty, no stream-ids are defined (yet)
+    if (buf[0] == '\0') {
+        if (req->all_defaults) {
+            VTSS_RC(vtss_icfg_printf(result, " no stream-id-list\n"));
+        }
+    } else {
+        VTSS_RC(vtss_icfg_printf(result, " stream-id-list %s\n", buf));
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// stream_icfg_init()
+/******************************************************************************/
+mesa_rc stream_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_STREAM_CONF,            "tsn", STREAM_ICFG_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_STREAM_PORT_CONF,       "tsn", STREAM_ICFG_port_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_STREAM_COLLECTION_CONF, "tsn", STREAM_COLLECTION_ICFG_conf));
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// ICLI Functions
+/******************************************************************************/
+
+/******************************************************************************/
+// STREAM_ICLI_ipv4_set()
+/******************************************************************************/
+static void STREAM_ICLI_ipv4_set(mesa_ipv4_network_t &stream_ip, const icli_ipv4_subnet_t &cli_ip, bool has_ip, bool has_ip_any, bool protocol_change)
+{
+   if (has_ip) {
+        if (has_ip_any) {
+            stream_ip.prefix_size = 0;
+        } else {
+            stream_ip.address = cli_ip.ip;
+            (void)vtss_conv_ipv4mask_to_prefix(cli_ip.netmask, &stream_ip.prefix_size);
+        }
+    } else if (protocol_change) {
+        stream_ip.prefix_size = 0;
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICLI_ipv6_set()
+/******************************************************************************/
+static void STREAM_ICLI_ipv6_set(mesa_ipv6_network_t &stream_ip, const mesa_ipv6_network_t &cli_ip, bool has_ip, bool has_ip_any, bool protocol_change)
+{
+   if (has_ip) {
+        if (has_ip_any) {
+            stream_ip.prefix_size = 0;
+        } else {
+            stream_ip = cli_ip;
+        }
+    } else if (protocol_change) {
+        stream_ip.prefix_size = 0;
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICLI_dscp_set()
+/******************************************************************************/
+static void STREAM_ICLI_dscp_set(vtss_appl_stream_range_t &dscp, const icli_vcap_vr_t &dscp_vr, uint8_t dscp_value, bool has_dscp, bool has_dscp_any, bool protocol_change)
+{
+#define DSCP_ANY 0xff
+    if (has_dscp) {
+        if (has_dscp_any) {
+            dscp.match_type = VTSS_APPL_STREAM_RANGE_MATCH_TYPE_ANY;
+        } else if (dscp_value != DSCP_ANY) {
+            dscp.match_type = VTSS_APPL_STREAM_RANGE_MATCH_TYPE_VALUE;
+            dscp.low        = dscp_value;
+        } else {
+            // The stream module automatically adjusts this if low == high.
+            dscp.match_type = VTSS_APPL_STREAM_RANGE_MATCH_TYPE_RANGE;
+            dscp.low        = dscp_vr.low;
+            dscp.high       = dscp_vr.high;
+        }
+    } else if (protocol_change) {
+        dscp.match_type = VTSS_APPL_STREAM_RANGE_MATCH_TYPE_ANY;
+    }
+#undef DSCP_ANY
+}
+
+/******************************************************************************/
+// STREAM_ICLI_fragment_set()
+/******************************************************************************/
+static void STREAM_ICLI_fragment_set(mesa_vcap_bit_t &fragment, bool has_fragment, bool has_fragment_yes, bool has_fragment_no, bool protocol_change)
+{
+    if (has_fragment) {
+        if (has_fragment_yes) {
+            fragment = MESA_VCAP_BIT_1;
+        } else if (has_fragment_no) {
+            fragment = MESA_VCAP_BIT_0;
+        } else {
+            fragment = MESA_VCAP_BIT_ANY;
+        }
+    } else if (protocol_change) {
+        fragment = MESA_VCAP_BIT_ANY;
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICLI_ip_proto_set()
+/******************************************************************************/
+static void STREAM_ICLI_ip_proto_set(vtss_appl_stream_ip_protocol_t &proto, uint8_t proto_value, bool has_proto, bool has_proto_any, bool has_proto_tcp, bool has_proto_udp, bool protocol_change)
+{
+    if (has_proto) {
+        if (has_proto_any) {
+            proto.type = VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_ANY;
+        } else if (has_proto_tcp) {
+            proto.type = VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_TCP;
+        } else if (has_proto_udp) {
+            proto.type = VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_UDP;
+        } else {
+            proto.type  = VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_CUSTOM;
+            proto.value = proto_value;
+        }
+    } else if (protocol_change) {
+        proto.type = VTSS_APPL_STREAM_IP_PROTOCOL_TYPE_ANY;
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICLI_dport_set()
+/******************************************************************************/
+static void STREAM_ICLI_dport_set(vtss_appl_stream_range_t &dport, const icli_vcap_vr_t &dport_vr, bool has_dport, bool has_dport_any, bool protocol_change)
+{
+    if (has_dport) {
+        if (has_dport_any) {
+            dport.match_type = VTSS_APPL_STREAM_RANGE_MATCH_TYPE_ANY;
+        } else {
+            // The stream module automatically adjusts this if low == high.
+            dport.match_type = VTSS_APPL_STREAM_RANGE_MATCH_TYPE_RANGE;
+            dport.low        = dport_vr.low;
+            dport.high       = dport_vr.high;
+        }
+    } else if (protocol_change) {
+        dport.match_type = VTSS_APPL_STREAM_RANGE_MATCH_TYPE_ANY;
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICLI_protocol_is()
+/******************************************************************************/
+static BOOL STREAM_ICLI_protocol_is(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, mesa_vce_type_t type)
+{
+    vtss_appl_stream_id_t   stream_id;
+    vtss_appl_stream_conf_t conf;
+    icli_cmd_mode_t         cmd_mode;
+    icli_variable_value_t   v;
+    icli_rc_t               icli_rc;
+    mesa_rc                 rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // Get the stream instance number we are currently configuring.
+    if ((icli_rc = (icli_rc_t)vtss_icli_session_mode_para_get(session_id, &cmd_mode, &v)) != ICLI_RC_OK) {
+        T_EG(STREAM_TRACE_GRP_ICLI, "vtss_icli_session_mode_para_get() failed");
+        return FALSE;
+    }
+
+    if (cmd_mode != ICLI_CMD_MODE_STREAM) {
+        T_EG(STREAM_TRACE_GRP_ICLI, "Expected command mode to be stream (%d), but got %d", ICLI_CMD_MODE_STREAM, cmd_mode);
+        return FALSE;
+    }
+
+    stream_id = v.u.u_range_uint;
+
+    if ((rc = vtss_appl_stream_conf_get(stream_id, &conf)) != VTSS_RC_OK) {
+        T_EG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_conf_get(%u) failed: %s", stream_id, error_txt(rc));
+        // Allow user to say "no".
+        conf.protocol.type = type;
+    }
+
+    runtime->present = conf.protocol.type == type;
+    return TRUE;
+}
+
+/******************************************************************************/
+// STREAM_ICLI_protocol_is_etype()
+/******************************************************************************/
+static BOOL STREAM_ICLI_protocol_is_etype(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return STREAM_ICLI_protocol_is(session_id, ask, runtime, MESA_VCE_TYPE_ETYPE);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_protocol_is_llc()
+/******************************************************************************/
+static BOOL STREAM_ICLI_protocol_is_llc(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return STREAM_ICLI_protocol_is(session_id, ask, runtime, MESA_VCE_TYPE_LLC);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_protocol_is_snap()
+/******************************************************************************/
+static BOOL STREAM_ICLI_protocol_is_snap(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return STREAM_ICLI_protocol_is(session_id, ask, runtime, MESA_VCE_TYPE_SNAP);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_protocol_is_ipv4()
+/******************************************************************************/
+static BOOL STREAM_ICLI_protocol_is_ipv4(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return STREAM_ICLI_protocol_is(session_id, ask, runtime, MESA_VCE_TYPE_IPV4);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_protocol_is_ipv6()
+/******************************************************************************/
+static BOOL STREAM_ICLI_protocol_is_ipv6(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return STREAM_ICLI_protocol_is(session_id, ask, runtime, MESA_VCE_TYPE_IPV6);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_runtime_range()
+/******************************************************************************/
+static BOOL STREAM_ICLI_runtime_range(icli_runtime_ask_t ask, icli_runtime_t *runtime, uint32_t min, uint32_t max)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = min;
+        runtime->range.u.ur.range[0].max = max;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/******************************************************************************/
+// STREAM_ICLI_runtime_vr()
+/******************************************************************************/
+static BOOL STREAM_ICLI_runtime_vr(icli_runtime_ask_t ask, icli_runtime_t *runtime, uint32_t min, uint32_t max)
+{
+    if (ask == ICLI_ASK_VCAP_VR) {
+        runtime->vcap_vr.min = min;
+        runtime->vcap_vr.max = max;
+        runtime->vcap_vr.b_odd_range = TRUE; // I think this allows ranges that are not convertable to value/mask.
+        return TRUE;
+    }
+
+    return STREAM_ICLI_runtime_range(ask, runtime, min, max);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_runtime_dport()
+/******************************************************************************/
+static BOOL STREAM_ICLI_runtime_dport(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return STREAM_ICLI_runtime_vr(ask, runtime, 0, 0xffff);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_runtime_dscp()
+/******************************************************************************/
+static BOOL STREAM_ICLI_runtime_dscp(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return STREAM_ICLI_runtime_vr(ask, runtime, 0, 63);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_reset_protocol()
+/******************************************************************************/
+static mesa_rc STREAM_ICLI_reset_protocol(vtss_appl_stream_id_t stream_id)
+{
+    vtss_appl_stream_conf_t conf;
+
+    VTSS_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    conf.protocol.type = MESA_VCE_TYPE_ANY;
+    return vtss_appl_stream_conf_set(stream_id, &conf);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_id_cnt()
+// If range_list is a nullptr, we return 0, which indirectly indicates all
+// streams.
+/******************************************************************************/
+static uint32_t STREAM_ICLI_id_cnt(icli_range_t *range_list)
+{
+    uint32_t cnt_index, cnt = 0;
+
+    if (range_list) {
+        for (cnt_index = 0; cnt_index < range_list->u.ur.cnt; cnt_index++) {
+            cnt += range_list->u.ur.range[cnt_index].max - range_list->u.ur.range[cnt_index].min + 1;
+        }
+    }
+
+    return cnt;
+}
+
+/******************************************************************************/
+// STREAM_ICLI_member_of_range()
+/******************************************************************************/
+static bool STREAM_ICLI_member_of_range(const icli_range_t *range_list, vtss_appl_stream_id_t stream_id)
+{
+    uint32_t cnt_index;
+
+    if (range_list == NULL) {
+        // User has not given a list. Use wildcard
+        return true;
+    }
+
+    for (cnt_index = 0; cnt_index < range_list->u.ur.cnt; cnt_index++) {
+        if (stream_id >= range_list->u.ur.range[cnt_index].min && stream_id <= range_list->u.ur.range[cnt_index].max) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// STREAM_ICLI_range_itr()
+// If called with range_list == nullptr, all valid IDs will be returned one by
+// one.
+/******************************************************************************/
+static mesa_rc STREAM_ICLI_range_itr(const icli_range_t *range_list, vtss_appl_stream_id_t &stream_id)
+{
+    vtss_appl_stream_capabilities_t cap;
+    mesa_rc                         rc;
+
+    if ((rc = vtss_appl_stream_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 127;
+    }
+
+    if (stream_id == VTSS_APPL_STREAM_ID_NONE) {
+        stream_id = 1;
+    } else {
+        stream_id++;
+    }
+
+    // ICLI doesn't sort the range_list, so we need to run over all valid IDs.
+    for (; stream_id <= cap.inst_cnt_max; stream_id++) {
+        if (STREAM_ICLI_member_of_range(range_list, stream_id)) {
+            return VTSS_RC_OK;
+        }
+    }
+
+    return VTSS_RC_ERROR;
+}
+
+/******************************************************************************/
+// stream_icli_instance_range()
+// This function is also used by icli_config.icli and psfp.icli, which is why
+// it's not static.
+/******************************************************************************/
+BOOL stream_icli_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing)
+{
+    vtss_appl_stream_capabilities_t cap;
+    vtss_appl_stream_id_t           stream_id;
+    uint32_t                        cnt;
+    mesa_rc                         rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_stream_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 127;
+    }
+
+    cnt = 0;
+    runtime->range.type              = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt          = ++cnt;
+
+    // Notice: ICLI throws an error if range count is != 1 while using a
+    // <range_list>. Don't know why.
+    // If we include existing streams in the list, the range count will possibly
+    // be > 1, in which case ICLI will throw an error if the corresponding ICLI
+    // CMD_VAR is a <range_list>. Don't know why.
+    // If you want to include existing entries in the range, you must use <uint>
+    // as CMD_VAR.
+    if (!include_existing) {
+        return TRUE;
+    }
+
+    stream_id = VTSS_APPL_STREAM_ID_NONE;
+    while (vtss_appl_stream_itr(&stream_id, &stream_id) == VTSS_RC_OK) {
+        runtime->range.u.ur.range[cnt].min = stream_id;
+        runtime->range.u.ur.range[cnt].max = stream_id;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// STREAM_ICLI_instance_range()
+/******************************************************************************/
+static BOOL STREAM_ICLI_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return stream_icli_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// STREAM_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t STREAM_ICLI_show_capabilities(void)
+{
+    vtss_appl_stream_capabilities_t cap;
+    const int                       cap_width = 20;
+
+    STREAM_PRINT_RC(vtss_appl_stream_capabilities_get(&cap));
+
+    STREAM_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Instance count:", cap.inst_cnt_max);
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// STREAM_ICLI_bool_to_yes_no()
+/******************************************************************************/
+static const char *STREAM_ICLI_bool_to_yes_no(bool val)
+{
+    return val ? "YES!" : "No";
+}
+
+/******************************************************************************/
+// STREAM_ICLI_show_status()
+/******************************************************************************/
+static void STREAM_ICLI_show_status(vtss_appl_stream_id_t stream_id, vtss_appl_stream_status_t &status, bool first_print, bool has_details)
+{
+    vtss_appl_stream_client_t        client;
+    vtss_appl_stream_oper_warnings_t oper_warning;
+    char                             clients_str[100], buf[200];
+    bool                             first;
+    const int                        width = 25;
+    int                              i;
+
+    if (has_details) {
+        if (!first_print) {
+            // Not first print, but separate from previous detailed stream
+            STREAM_ICLI_PRINTF("\n------------------------------------------------------------------------\n\n");
+        }
+
+        STREAM_ICLI_PRINTF("%-*s %u\n", width, "Stream ID:", stream_id);
+
+        if (status.oper_warnings) {
+            // Print one configurational warning per line
+            first = true;
+
+            for (i = 0; i < 8 * sizeof(status.oper_warnings); i++) {
+                oper_warning = status.oper_warnings & (vtss_appl_stream_oper_warnings_t)VTSS_BIT(i);
+                if (oper_warning) {
+                    STREAM_ICLI_PRINTF("%-*s %s\n", width, first ? "Configurational Warnings:" : "", stream_util_oper_warnings_to_str(buf, sizeof(buf), oper_warning));
+                    first = false;
+                }
+            }
+        } else {
+            STREAM_ICLI_PRINTF("%-*s %s\n", width, "Configurational Warnings:", "None");
+        }
+
+        if (status.stream_collection_id == VTSS_APPL_STREAM_COLLECTION_ID_NONE) {
+            for (client = (vtss_appl_stream_client_t)0; client < ARRSZ(status.client_status.clients); client++) {
+                sprintf(clients_str, "%s:", stream_util_client_to_str(client, true));
+
+                if (status.client_status.clients[client].enable) {
+                    sprintf(buf, "Attached with ID %u", status.client_status.clients[client].client_id);
+                } else {
+                    strcpy(buf, "Not attached");
+                }
+
+                STREAM_ICLI_PRINTF("%-*s %s\n", width, clients_str, buf);
+            }
+        } else {
+            STREAM_ICLI_PRINTF("%-*s %u\n", width, "Stream Collection:", status.stream_collection_id);
+        }
+    } else {
+        if (first_print) {
+            STREAM_ICLI_PRINTF("Stream ID Warnings Attached Clients (ID)\n");
+            STREAM_ICLI_PRINTF("--------- -------- ---------------------------\n");
+        }
+
+        if (status.stream_collection_id == VTSS_APPL_STREAM_COLLECTION_ID_NONE) {
+            clients_str[0] = '\0';
+            first          = true;
+
+            for (client = (vtss_appl_stream_client_t)0; client < ARRSZ(status.client_status.clients); client++) {
+                if (!status.client_status.clients[client].enable) {
+                    // This client is not associated with this stream
+                    continue;
+                }
+
+                sprintf(buf, "%s%s (%u)", first ? "" : ", ", stream_util_client_to_str(client, true), status.client_status.clients[client].client_id);
+                strcat(clients_str, buf);
+                first = false;
+            }
+        } else {
+            strcpy(clients_str, "Part of a stream collection");
+        }
+
+        STREAM_ICLI_PRINTF("%9u %-8s %s\n", stream_id, STREAM_ICLI_bool_to_yes_no(status.oper_warnings != VTSS_APPL_STREAM_OPER_WARNING_NONE), clients_str);
+    }
+}
+
+/******************************************************************************/
+// STREAM_ICLI_show()
+/******************************************************************************/
+static void STREAM_ICLI_show(icli_range_t *stream_list, bool has_details)
+{
+    vtss_appl_stream_status_t status;
+    vtss_appl_stream_id_t     stream_id = VTSS_APPL_STREAM_ID_NONE, i;
+    bool                      first_print = true, show;
+    mesa_rc                   rc;
+
+    while (vtss_appl_stream_itr(&stream_id, &stream_id) == VTSS_RC_OK) {
+        // Figure out whether the user has specified this particular stream.
+        if (stream_list != nullptr) {
+            show = false;
+            for (i = 0; i < stream_list->u.sr.cnt; i++) {
+                if (stream_id >= stream_list->u.sr.range[i].min && stream_id <= stream_list->u.sr.range[i].max) {
+                    show = true;
+                    break;
+                }
+            }
+        } else {
+            show = true;
+        }
+
+        if (!show) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_stream_status_get(stream_id, &status)) != VTSS_RC_OK) {
+            T_EG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_status_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        STREAM_ICLI_show_status(stream_id, status, first_print, has_details);
+        first_print = false;
+    }
+
+    STREAM_ICLI_PRINTF("\n");
+}
+
+/******************************************************************************/
+// STREAM_COLLECTION_ICLI_range_itr()
+// If called with range_list == nullptr, all valid IDs will be returned one by
+// one.
+/******************************************************************************/
+static mesa_rc STREAM_COLLECTION_ICLI_range_itr(const icli_range_t *range_list, vtss_appl_stream_collection_id_t &stream_collection_id)
+{
+    vtss_appl_stream_collection_capabilities_t cap;
+    mesa_rc                                    rc;
+
+    if ((rc = vtss_appl_stream_collection_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_collection_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 63;
+    }
+
+    if (stream_collection_id == VTSS_APPL_STREAM_COLLECTION_ID_NONE) {
+        stream_collection_id = 1;
+    } else {
+        stream_collection_id++;
+    }
+
+    // ICLI doesn't sort the range_list, so we need to run over all valid IDs.
+    for (; stream_collection_id <= cap.inst_cnt_max; stream_collection_id++) {
+        if (STREAM_ICLI_member_of_range(range_list, stream_collection_id)) {
+            return VTSS_RC_OK;
+        }
+    }
+
+    return VTSS_RC_ERROR;
+}
+
+/******************************************************************************/
+// stream_collection_icli_instance_range()
+// This function is also used by icli_config.icli, which is why it's not static.
+/******************************************************************************/
+BOOL stream_collection_icli_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing)
+{
+    vtss_appl_stream_collection_capabilities_t cap;
+    vtss_appl_stream_collection_id_t           stream_collection_id;
+    uint32_t                                   cnt;
+    mesa_rc                                    rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_stream_collection_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_collection_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 127;
+    }
+
+    cnt = 0;
+    runtime->range.type              = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt          = ++cnt;
+
+    // Notice: ICLI throws an error if range count is != 1 while using a
+    // <range_list>. Don't know why.
+    // If we include existing stream collection in the list, the range count
+    // will possibly be > 1, in which case ICLI will throw an error if the
+    // corresponding ICLI CMD_VAR is a <range_list>. Don't know why.
+    // If you want to include existing entries in the range, you must use <uint>
+    // as CMD_VAR.
+    if (!include_existing) {
+        return TRUE;
+    }
+
+    stream_collection_id = VTSS_APPL_STREAM_COLLECTION_ID_NONE;
+    while (vtss_appl_stream_collection_itr(&stream_collection_id, &stream_collection_id) == VTSS_RC_OK) {
+        runtime->range.u.ur.range[cnt].min = stream_collection_id;
+        runtime->range.u.ur.range[cnt].max = stream_collection_id;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// STREAM_COLLECTION_ICLI_instance_range()
+/******************************************************************************/
+static BOOL STREAM_COLLECTION_ICLI_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return stream_collection_icli_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// STREAM_COLLECTION_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t STREAM_COLLECTION_ICLI_show_capabilities(void)
+{
+    vtss_appl_stream_collection_capabilities_t cap;
+    const int                                  cap_width = 38;
+
+    STREAM_PRINT_RC(vtss_appl_stream_collection_capabilities_get(&cap));
+
+    STREAM_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Instance count:",                   cap.inst_cnt_max);
+    STREAM_ICLI_PRINTF("%-*s %u\n", cap_width, "Max. number of streams per collection:", cap.streams_per_collection_max);
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// STREAM_COLLECTION_ICLI_show_status()
+/******************************************************************************/
+static void STREAM_COLLECTION_ICLI_show_status(vtss_appl_stream_collection_id_t stream_collection_id, vtss_appl_stream_collection_status_t &status, bool first_print, bool has_details)
+{
+    vtss_appl_stream_client_t                   client;
+    vtss_appl_stream_collection_oper_warnings_t oper_warning;
+    char                                        clients_str[100], buf[200];
+    bool                                        first;
+    const int                                   width = 25;
+    int                                         i;
+
+    if (has_details) {
+        if (!first_print) {
+            // Not first print, but separate from previous detailed stream
+            STREAM_ICLI_PRINTF("\n------------------------------------------------------------------------\n\n");
+        }
+
+        STREAM_ICLI_PRINTF("%-*s %u\n", width, "Stream Collection ID:", stream_collection_id);
+
+        if (status.oper_warnings) {
+            // Print one configurational warning per line
+            first = true;
+
+            for (i = 0; i < 8 * sizeof(status.oper_warnings); i++) {
+                oper_warning = status.oper_warnings & (vtss_appl_stream_collection_oper_warnings_t)VTSS_BIT(i);
+                if (oper_warning) {
+                    STREAM_ICLI_PRINTF("%-*s %s\n", width, first ? "Configurational Warnings:" : "", stream_collection_util_oper_warnings_to_str(buf, sizeof(buf), oper_warning));
+                    first = false;
+                }
+            }
+        } else {
+            STREAM_ICLI_PRINTF("%-*s %s\n", width, "Configurational Warnings:", "None");
+        }
+
+        for (client = (vtss_appl_stream_client_t)0; client < ARRSZ(status.client_status.clients); client++) {
+            sprintf(clients_str, "%s:", stream_util_client_to_str(client, true));
+
+            if (status.client_status.clients[client].enable) {
+                sprintf(buf, "Attached with ID %u", status.client_status.clients[client].client_id);
+            } else {
+                strcpy(buf, "Not attached");
+            }
+
+            STREAM_ICLI_PRINTF("%-*s %s\n", width, clients_str, buf);
+        }
+    } else {
+        if (first_print) {
+            STREAM_ICLI_PRINTF("Stream Coll. ID Warnings Attached Clients (ID)\n");
+            STREAM_ICLI_PRINTF("--------------- -------- ---------------------\n");
+        }
+
+        clients_str[0] = '\0';
+        first          = true;
+
+        for (client = (vtss_appl_stream_client_t)0; client < ARRSZ(status.client_status.clients); client++) {
+            if (!status.client_status.clients[client].enable) {
+                // This client is not associated with this stream
+                continue;
+            }
+
+            sprintf(buf, "%s%s (%u)", first ? "" : ", ", stream_util_client_to_str(client, true), status.client_status.clients[client].client_id);
+            strcat(clients_str, buf);
+            first = false;
+        }
+
+        STREAM_ICLI_PRINTF("%15u %-8s %s\n", stream_collection_id, STREAM_ICLI_bool_to_yes_no(status.oper_warnings != VTSS_APPL_STREAM_COLLECTION_OPER_WARNING_NONE), clients_str);
+    }
+}
+
+/******************************************************************************/
+// STREAM_COLLECTION_ICLI_show()
+/******************************************************************************/
+static void STREAM_COLLECTION_ICLI_show(icli_range_t *stream_collection_list, bool has_details)
+{
+    vtss_appl_stream_collection_status_t status;
+    vtss_appl_stream_collection_id_t     stream_collection_id = VTSS_APPL_STREAM_COLLECTION_ID_NONE, i;
+    bool                                 first_print = true, show;
+    mesa_rc                              rc;
+
+    while (vtss_appl_stream_collection_itr(&stream_collection_id, &stream_collection_id) == VTSS_RC_OK) {
+        // Figure out whether the user has specified this particular stream.
+        if (stream_collection_list != nullptr) {
+            show = false;
+            for (i = 0; i < stream_collection_list->u.sr.cnt; i++) {
+                if (stream_collection_id >= stream_collection_list->u.sr.range[i].min && stream_collection_id <= stream_collection_list->u.sr.range[i].max) {
+                    show = true;
+                    break;
+                }
+            }
+        } else {
+            show = true;
+        }
+
+        if (!show) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_stream_collection_status_get(stream_collection_id, &status)) != VTSS_RC_OK) {
+            T_EG(STREAM_TRACE_GRP_ICLI, "vtss_appl_stream_collection_status_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        STREAM_COLLECTION_ICLI_show_status(stream_collection_id, status, first_print, has_details);
+        first_print = false;
+    }
+
+    STREAM_ICLI_PRINTF("\n");
+}
+FUNCTION_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no stream {<range_list> | all}
+IF_FLAG =
+DOC_CMD_DESC    = Delete one, more or all streams
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Deletes one, more or all streams
+DOC_CMD_EXAMPLE = no stream 17-19,23
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Delete one, more or all streams
+
+! <range_list>
+CMD_VAR = stream_ids
+RUNTIME = STREAM_ICLI_instance_range
+HELP    = Delete one or more streams
+
+! all
+! This is the same as stream_ids == nullptr, and therefore doesn't need a
+! CMD_VAR
+CMD_VAR =
+RUNTIME =
+HELP    = Delete all streams
+
+VARIABLE_BEGIN
+    vtss_appl_stream_id_t stream_id;
+    uint32_t              stream_id_cnt;
+    mesa_rc               rc;
+VARIABLE_END
+
+CODE_BEGIN
+    stream_id_cnt = STREAM_ICLI_id_cnt(stream_ids);
+    stream_id = VTSS_APPL_STREAM_ID_NONE;
+
+    // has_all <=> stream_ids == nullptr
+    while (STREAM_ICLI_range_itr(stream_ids, stream_id) == VTSS_RC_OK) {
+        if ((rc = vtss_appl_stream_conf_del(stream_id)) != VTSS_RC_OK) {
+            if (stream_id_cnt == 0) {
+                // has_all. Don't print anything.
+            } else if (stream_id_cnt == 1) {
+                // Only one stream specified. No need to print which one.
+                STREAM_ICLI_PRINTF("%% %s\n", error_txt(rc));
+            } else {
+                // More than one stream is specified. Print which ones don't
+                // exist.
+                STREAM_ICLI_PRINTF("%% Stream ID %u: %s\n", stream_id, error_txt(rc));
+            }
+        }
+    }
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = dmac {<mac_addr> [/ <mac_addr>] | multicast | broadcast | unicast | not-broadcast | not-unicast | any}
+IF_FLAG =
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+MODE_VAR  = stream_id
+
+! dmac
+CMD_VAR =
+RUNTIME =
+HELP    = Specify a destination MAC to match against incoming frames
+
+! <mac_addr>
+CMD_VAR = dmac_addr
+RUNTIME =
+HELP    = A destination MAC address to match against incoming frames
+
+! /
+CMD_VAR = has_dmac_mask
+RUNTIME =
+HELP    = Specify a mask. If no mask is specified, all bits of the destination MAC address shall match the incoming frame
+
+! <mac_addr>
+CMD_VAR = dmac_mask
+RUNTIME =
+HELP    = A mask in the form xx:xx:xx:xx:xx:xx, that specifies which bits of the destination MAC address that shall match the incoming frames. Default is to match all 48 bits
+
+! multicast
+CMD_VAR = has_mc
+RUNTIME =
+HELP    = Match any multicast destination MAC address (excluding broadcast)
+
+! broadcast
+CMD_VAR = has_bc
+RUNTIME =
+HELP    = Match the broadcast destination MAC address
+
+! unicast
+CMD_VAR = has_uc
+RUNTIME =
+HELP    = Match any unicast MAC address
+
+! not-broadcast
+CMD_VAR = has_not_bc
+RUNTIME =
+HELP    = Match any MAC address, except the broadcast MAC address
+
+! not-unicast
+CMD_VAR = has_not_uc
+RUNTIME =
+HELP    = Match any multicast or the broadcast destination MAC address
+
+! any
+CMD_VAR = has_any
+RUNTIME =
+HELP    = Match any destination MAC address
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+    vtss_appl_stream_dmac_t &dmac = conf.dmac;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+
+    if (has_mc) {
+        dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_MC;
+    } else if (has_bc) {
+        dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_BC;
+    } else if (has_uc) {
+        dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_UC;
+    } else if (has_not_bc) {
+        dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_NOT_BC;
+    } else if (has_not_uc) {
+        dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_NOT_UC;
+    } else if (has_any) {
+        dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_ANY;
+    } else {
+        dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_VALUE;
+
+        dmac.value = dmac_addr;
+        if (has_dmac_mask) {
+            dmac.mask = dmac_mask;
+        } else {
+            dmac.mask = mac_broadcast; // From mac_utils.hxx
+        }
+    }
+
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no dmac
+IF_FLAG =
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+MODE_VAR  = stream_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! dmac
+CMD_VAR =
+RUNTIME =
+HELP    = Don't match on incoming destination MAC address
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    conf.dmac.match_type = VTSS_APPL_STREAM_DMAC_MATCH_TYPE_ANY;
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = smac {<mac_addr> [/ <mac_addr>] | any}
+IF_FLAG =
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! smac
+CMD_VAR =
+RUNTIME =
+HELP    = Specify a source MAC mask to match against incoming frames
+
+! <mac_addr>
+CMD_VAR = mac_addr
+RUNTIME =
+HELP    = A source MAC address to match against incoming frames
+
+! /
+CMD_VAR = has_mask
+RUNTIME =
+HELP    = Specify a mask. If no mask is specified, all bits of the source MAC address shall match the incoming frame
+
+! <mac_addr>
+CMD_VAR = mask_mac_addr
+RUNTIME =
+HELP    = A mask in the form xx:xx:xx:xx:xx:xx, that specifies which bits of the source MAC address that shall match the incoming frames. Default is to match all 48 bits
+
+! any
+CMD_VAR = has_smac_any
+RUNTIME =
+HELP    = Match any source mac address
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+
+    if (has_smac_any) {
+        vtss_clear(conf.smac.value);
+        vtss_clear(conf.smac.mask);
+    } else {
+        conf.smac.value = mac_addr;
+
+        if (has_mask) {
+            conf.smac.mask = mask_mac_addr;
+        } else {
+            memset(conf.smac.mask.addr, 0xff, sizeof(conf.smac.mask.addr));
+        }
+    }
+
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no smac
+IF_FLAG =
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+MODE_VAR  = stream_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! smac
+CMD_VAR =
+RUNTIME =
+HELP    = Don't match on incoming source MAC address
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    vtss_clear(conf.smac.mask);
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = outer-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! outer-tag
+CMD_VAR =
+RUNTIME =
+HELP    = Configuration of an outer tag to match against incoming frames
+
+! none
+CMD_VAR = has_none
+RUNTIME =
+HELP    = The frame must be untagged
+
+! has_vid
+CMD_VAR =
+RUNTIME =
+HELP    = The frame must be tagged. The next keyword tells whether all VLANs are matched or only a specific with an optional mask
+
+! vid
+CMD_VAR = vid
+RUNTIME =
+HELP    = VLAN ID to match incoming frames against
+
+! has_vid_mask
+CMD_VAR = has_vid_mask
+RUNTIME =
+HELP    = Specify a mask. If no mask is specified, all bits of the VLAN ID shall match the incoming frame
+
+! vid_mask
+CMD_VAR = vid_mask
+RUNTIME =
+HELP    = A mask specified as an integer, that specifies which bits of the VLAN ID that shall match the incoming frames
+
+! has_any_vid
+CMD_VAR = has_any_vid
+RUNTIME =
+HELP    = Match any incoming VLAN ID
+
+! has_pcp
+CMD_VAR = has_pcp
+RUNTIME =
+HELP    = Configuration of a PCP value to match against incoming frames
+
+! <0-7>
+CMD_VAR = pcp_val
+RUNTIME =
+HELP    = The PCP value to match the incoming frames against
+
+!
+CMD_VAR = has_pcp_mask
+RUNTIME =
+HELP    = Configuration of a mask. If no mask is specified, all bits of the PCP value shall match the incoming frame
+
+! <0-7>
+CMD_VAR = pcp_mask
+RUNTIME =
+HELP    = A mask that specifies the bits of the PCP value that shall match the incoming frame
+
+! dei
+CMD_VAR = has_dei
+RUNTIME =
+HELP    = Specify a DEI value to match the incoming frame against
+
+! <0-1>
+CMD_VAR = dei_val
+RUNTIME =
+HELP    = The DEI value that shall match the incoming frame
+
+! c-tag
+CMD_VAR = has_c_tag
+RUNTIME =
+HELP    = If specified, only match C-tagged frames (EtherType = 0x8100)
+
+! s-tag
+CMD_VAR = has_s_tag
+RUNTIME =
+HELP    = If specified, only match S-tagged frames (EtherType = 0x88a8)
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+
+    vtss_appl_stream_vlan_tag_t &c = conf.outer_tag;
+
+    vtss_clear(c);
+    if (has_none) {
+        c.match_type = VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_UNTAGGED;
+    } else {
+        c.match_type = VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_TAGGED;
+        c.tag_type   = has_s_tag ? VTSS_APPL_STREAM_VLAN_TAG_TYPE_S_TAGGED : has_c_tag ? VTSS_APPL_STREAM_VLAN_TAG_TYPE_C_TAGGED : VTSS_APPL_STREAM_VLAN_TAG_TYPE_ANY;
+
+        if (!has_any_vid) {
+            c.vid_value = vid;
+            c.vid_mask  = has_vid_mask ? vid_mask : 0xFFF;
+        }
+
+        if (has_pcp) {
+            c.pcp_value = pcp_val;
+            c.pcp_mask  = has_pcp_mask ? pcp_mask : 0x7;
+        }
+
+        if (has_dei) {
+            c.dei = dei_val ? MESA_VCAP_BIT_1 : MESA_VCAP_BIT_0;
+        } else {
+            c.dei = MESA_VCAP_BIT_ANY;
+        }
+    }
+
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no outer-tag
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! outer-tag
+CMD_VAR =
+RUNTIME =
+HELP    = Don't use outer tag for matching. It may be both tagged and untagged
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    vtss_clear(conf.outer_tag);
+    conf.outer_tag.match_type = VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_BOTH;
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = inner-tag {none | vid {{<0-'VTSS_APPL_VLAN_ID_MAX'> [/ <uint16>] | any} [pcp <0-7> [/ <0-7>]] [dei <0-1>] [{c-tag | s-tag}]}}
+IF_FLAG =
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! inner-tag
+CMD_VAR =
+RUNTIME =
+HELP    = Configuration of an inner tag to match against incoming frames
+
+! none
+CMD_VAR = has_none
+RUNTIME =
+HELP    = There must be no inner tag
+
+! has_vid
+CMD_VAR =
+RUNTIME =
+HELP    = The frame must be double-tagged. The next keyword tells whether all VLANs are matched or only a specific with an optional mask
+
+! vid
+CMD_VAR = vid
+RUNTIME =
+HELP    = VLAN ID to match incoming frames against
+
+! has_vid_mask
+CMD_VAR = has_vid_mask
+RUNTIME =
+HELP    = A mask specified as an integer, that specifies which bits of the VLAN ID that shall match the incoming frames
+
+! vid_mask
+CMD_VAR = vid_mask
+RUNTIME =
+HELP    = A mask specified as an integer, that specifies which bits of the VID that shall match the incoming frames
+
+! has_any_vid
+CMD_VAR = has_any_vid
+RUNTIME =
+HELP    = Match any incoming VLAN ID
+
+! has_pcp
+CMD_VAR = has_pcp
+RUNTIME =
+HELP    = Configuration of a PCP value to match against incoming frames
+
+! <0-7>
+CMD_VAR = pcp_val
+RUNTIME =
+HELP    = The PCP value to match the incoming frames against
+
+!
+CMD_VAR = has_pcp_mask
+RUNTIME =
+HELP    = Configuration of a mask. If no mask is specified, all bits of the PCP value shall match the incoming frame
+
+! <0-7>
+CMD_VAR = pcp_mask
+RUNTIME =
+HELP    = A mask that specifies the bits of the PCP value that shall match the incoming frame
+
+! dei
+CMD_VAR = has_dei
+RUNTIME =
+HELP    = Specify a DEI value to match the incoming frame against
+
+! <0-1>
+CMD_VAR = dei_val
+RUNTIME =
+HELP    = The DEI value that shall match the incoming frame
+
+! c-tag
+CMD_VAR = has_c_tag
+RUNTIME =
+HELP    = If specified, only match C-tagged frames (EtherType = 0x8100)
+
+! s-tag
+CMD_VAR = has_s_tag
+RUNTIME =
+HELP    = If specified, only match S-tagged frames (EtherType = 0x88a8)
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+
+    vtss_appl_stream_vlan_tag_t &c = conf.inner_tag;
+
+    vtss_clear(c);
+    if (has_none) {
+        c.match_type = VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_UNTAGGED;
+    } else {
+        c.match_type = VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_TAGGED;
+        c.tag_type   = has_s_tag ? VTSS_APPL_STREAM_VLAN_TAG_TYPE_S_TAGGED : has_c_tag ? VTSS_APPL_STREAM_VLAN_TAG_TYPE_C_TAGGED : VTSS_APPL_STREAM_VLAN_TAG_TYPE_ANY;
+
+        if (!has_any_vid) {
+            c.vid_value = vid;
+            c.vid_mask  = has_vid_mask ? vid_mask : 0xFFF;
+        }
+
+        if (has_pcp) {
+            c.pcp_value = pcp_val;
+            c.pcp_mask  = has_pcp_mask ? pcp_mask : 0x7;
+        }
+
+        if (has_dei) {
+            c.dei = dei_val ? MESA_VCAP_BIT_1 : MESA_VCAP_BIT_0;
+        } else {
+            c.dei = MESA_VCAP_BIT_ANY;
+        }
+    }
+
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no inner-tag
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! inner-tag
+CMD_VAR =
+RUNTIME =
+HELP    = Don't use inner tag for matching. It may be both tagged and untagged
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    vtss_clear(conf.inner_tag);
+    conf.inner_tag.match_type = VTSS_APPL_STREAM_VLAN_TAG_MATCH_TYPE_BOTH;
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = etype <0x600-0xffff>
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = etype 0x7777
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! etype
+CMD_VAR =
+RUNTIME =
+HELP    = Match EtherType frames
+
+! <0x600-0xffff>
+CMD_VAR = etype
+RUNTIME =
+HELP    = Matched EtherType
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    conf.protocol.type = MESA_VCE_TYPE_ETYPE;
+    conf.protocol.value.etype.etype = etype;
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no etype
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no etype
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME  =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+MODE_VAR  = stream_id
+
+! no
+! This command is only available if the current protocol is etype. It used to be
+! available at all times, but I find this very misleading.
+CMD_VAR =
+RUNTIME = STREAM_ICLI_protocol_is_etype
+HELP    = ##ICLI_HELP_NO
+
+! etype
+CMD_VAR =
+RUNTIME =
+HELP    = Don't match incoming frames' EtherType
+
+CODE_BEGIN
+    STREAM_PRINT_RC(STREAM_ICLI_reset_protocol(stream_id));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = llc <0x0-0xff> <0x0-0xff>
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = llc 8 8
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! llc
+CMD_VAR =
+RUNTIME =
+HELP    = Match Logical Link Control (LLC) frames, i.e. frames with EtherType/TypeLength field less than 0x600
+
+! <0x0-0xff>
+CMD_VAR = dsap
+RUNTIME =
+HELP    = Matched LLC Destination Service Access Point (DSAP)
+
+! <0x0-0xff>
+CMD_VAR = ssap
+RUNTIME =
+HELP    = Matched LLC Source Service Access Point (SSAP)
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    conf.protocol.type = MESA_VCE_TYPE_LLC;
+    conf.protocol.value.llc.dsap = dsap;
+    conf.protocol.value.llc.ssap = ssap;
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no llc
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+MODE_VAR  = stream_id
+
+! no
+! This command is only available if the current protocol is llc. It used to be
+! available at all times, but I find this very misleading.
+CMD_VAR =
+RUNTIME = STREAM_ICLI_protocol_is_llc
+HELP    = ##ICLI_HELP_NO
+
+! llc
+CMD_VAR =
+RUNTIME =
+HELP    = Don't match LLC frames
+
+CODE_BEGIN
+    STREAM_PRINT_RC(STREAM_ICLI_reset_protocol(stream_id));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = snap {<0x0-0xffffff> | rfc-1042 | snap-8021h} <0x0-0xffff>
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! snap
+CMD_VAR =
+RUNTIME =
+HELP    = Match Subnetwork Access Protocol (SNAP) frames, i.e. frames with EtherType/TypeLength field less than 0x600 and DSAP = 0xaa and SSAP = 0xAA and Control field = 0x03
+
+! <0-0xffff>
+CMD_VAR = oui
+RUNTIME =
+HELP = SNAP OUI (Range 0x000000 - 0XFFFFFF)
+
+! rfc-1042
+CMD_VAR = has_rfc1042
+RUNTIME =
+HELP    = SNAP OUI is speficied in RFC1042, that is, 00:00:00
+
+! snap-8021h
+CMD_VAR = has_8021h
+RUNTIME =
+HELP    = SNAP OUI is specified in 802.1H, that is, 00:00:F8
+
+! pid
+CMD_VAR = pid
+RUNTIME =
+HELP    = Protocol ID (Range: 0x0 - 0xFFFF). If OUI is all-zeros (rfc-1042), then this must be a valid EtherType (>= 0x600)
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+    conf.protocol.type = MESA_VCE_TYPE_SNAP;
+    if (has_rfc1042) {
+        conf.protocol.value.snap.oui_type = VTSS_APPL_STREAM_PROTO_SNAP_OUI_TYPE_RFC1042;
+    } else if (has_8021h) {
+        conf.protocol.value.snap.oui_type = VTSS_APPL_STREAM_PROTO_SNAP_OUI_TYPE_8021H;
+    } else {
+        conf.protocol.value.snap.oui_type = VTSS_APPL_STREAM_PROTO_SNAP_OUI_TYPE_CUSTOM;
+        conf.protocol.value.snap.oui      = oui;
+    }
+
+    conf.protocol.value.snap.pid = pid;
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no snap
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no snap
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+MODE_VAR  = stream_id
+
+! no
+! This command is only available if the current protocol is snap. It used to be
+! available at all times, but I find this very misleading.
+CMD_VAR =
+RUNTIME = STREAM_ICLI_protocol_is_snap
+HELP    = ##ICLI_HELP_NO
+
+! snap
+CMD_VAR =
+RUNTIME =
+HELP    = Don't match SNAP frames
+
+CODE_BEGIN
+    STREAM_PRINT_RC(STREAM_ICLI_reset_protocol(stream_id));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = ipv4 [sip {<ipv4_subnet> | any}] [dip {<ipv4_subnet> | any}] [dscp {<vcap_vr> | <dscp> | any}] [fragment {yes | no | any}] [proto {<0-255> | tcp | udp | any}] [dport {<vcap_vr> | any}]
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! ipv4
+CMD_VAR =
+RUNTIME =
+HELP    = Match IPv4 frames
+
+! sip
+CMD_VAR = has_sip
+RUNTIME =
+HELP    = Match on source IPv4 address
+
+! <ipv4_subnet>
+CMD_VAR = sip
+RUNTIME =
+HELP    = Match on source IPv4 address/mask, e.g. 1.2.3.4/32 or 1.2.0.0/16
+
+! any
+CMD_VAR = has_sip_any
+RUNTIME =
+HELP    = Match on any source IPv4 address
+
+! dip
+CMD_VAR = has_dip
+RUNTIME =
+HELP    = Match on destination IPv4 address
+
+! <ipv4_subnet>
+CMD_VAR = dip
+RUNTIME =
+HELP    = Match on destination IPv4 address/mask, e.g. 1.2.3.4/32 or 1.2.0.0/16
+
+! any
+CMD_VAR = has_dip_any
+RUNTIME =
+HELP    = Match on any destination IPv4 address
+
+! dscp
+CMD_VAR = has_dscp
+RUNTIME =
+HELP    = Match on DSCP
+
+! <vcap_vr>. This type must have RUNTIME values.
+CMD_VAR = dscp_vr
+RUNTIME = STREAM_ICLI_runtime_dscp
+HELP    = Matched DSCP value/range (e.g. 17-33 or 17)
+
+! <dscp>
+CMD_VAR = dscp_value
+RUNTIME =
+HELP    =
+
+! any
+CMD_VAR = has_dscp_any
+RUNTIME =
+HELP    = Match any DSCP
+
+! fragment
+CMD_VAR = has_fragment
+RUNTIME =
+HELP    = Setup matching on IPv4 fragments
+
+! yes
+CMD_VAR = has_fragment_yes
+RUNTIME =
+HELP    = Match IPv4 headers with MF bit set or a fragment offset > 0
+
+! no
+CMD_VAR = has_fragment_no
+RUNTIME =
+HELP    = Match IPv4 headers with MF bit cleared and fragment offset 0
+
+! any
+CMD_VAR =
+RUNTIME =
+HELP    = Match any values of IPv4 header's MF bit and fragment offset value
+
+! proto
+CMD_VAR = has_proto
+RUNTIME =
+HELP    = Match on IP protocol
+
+! <0-255>
+CMD_VAR = proto_value
+RUNTIME =
+HELP    = Match a custom IP protocol number
+
+! tcp
+CMD_VAR = has_proto_tcp
+RUNTIME =
+HELP    = Match TCP frames (protocol number 6)
+
+! udp
+CMD_VAR = has_proto_udp
+RUNTIME =
+HELP    = Match UDP frames (protocol number 17)
+
+! any
+CMD_VAR = has_proto_any
+RUNTIME =
+HELP    = Match any IP protocol
+
+! dport
+CMD_VAR = has_dport
+RUNTIME =
+HELP    = Setup matching on UDP/TCP destination port
+
+! <vcap_vr>. This type must have RUNTIME values.
+CMD_VAR = dport_vr
+RUNTIME = STREAM_ICLI_runtime_dport
+HELP    = Match UDP/TCP destination port value/range (e.g. 123-345 or 123)
+
+! any
+CMD_VAR = has_dport_any
+RUNTIME =
+HELP    = Match any UDP/TCP destination port
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t       conf;
+    vtss_appl_stream_proto_ipv4_t &ipv4 = conf.protocol.value.ipv4;
+    bool                          protocol_change;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+
+    // We allow the user to only change particular values without overwriting
+    // others if the current protocol also is IPv4.
+    protocol_change = conf.protocol.type != MESA_VCE_TYPE_IPV4;
+
+    conf.protocol.type = MESA_VCE_TYPE_IPV4;
+
+    STREAM_ICLI_ipv4_set(    ipv4.sip,        sip,                 has_sip,      has_sip_any,                                 protocol_change);
+    STREAM_ICLI_ipv4_set(    ipv4.dip,        dip,                 has_dip,      has_dip_any,                                 protocol_change);
+    STREAM_ICLI_dscp_set(    ipv4.dscp,       dscp_vr, dscp_value, has_dscp,     has_dscp_any,                                protocol_change);
+    STREAM_ICLI_fragment_set(ipv4.fragment,                        has_fragment, has_fragment_yes, has_fragment_no,           protocol_change);
+    STREAM_ICLI_ip_proto_set(ipv4.proto,      proto_value,         has_proto,    has_proto_any, has_proto_tcp, has_proto_udp, protocol_change);
+    STREAM_ICLI_dport_set(   ipv4.dport,      dport_vr,            has_dport,    has_dport_any,                               protocol_change);
+
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no ipv4
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no ipv4
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+MODE_VAR  = stream_id
+
+! no
+! This command is only available if the current protocol is ipv4. It used to be
+! available at all times, but I find this very misleading.
+CMD_VAR =
+RUNTIME = STREAM_ICLI_protocol_is_ipv4
+HELP    = ##ICLI_HELP_NO
+
+! snap
+CMD_VAR =
+RUNTIME =
+HELP    = Don't match IPv4 frames
+
+CODE_BEGIN
+    STREAM_PRINT_RC(STREAM_ICLI_reset_protocol(stream_id));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = ipv6 [sip {<ipv6_subnet> | any}] [dip {<ipv6_subnet> | any}] [dscp {<vcap_vr> | <dscp> | any}] [proto {<0-255> | tcp | udp | any}] [dport {<vcap_vr> | any}]
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_STREAM
+MODE_VAR = stream_id
+
+! ipv6
+CMD_VAR =
+RUNTIME =
+HELP    = Match IPv6 frames
+
+! sip
+CMD_VAR = has_sip
+RUNTIME =
+HELP    = Match on source IPv6 address
+
+! <ipv6_subnet>
+CMD_VAR = sip
+RUNTIME =
+HELP    = Match on source IPv6 address/mask, e.g. fe80::/10 or 2001:db8::1/128
+
+! any
+CMD_VAR = has_sip_any
+RUNTIME =
+HELP    = Match any source IPv6 address
+
+! dip
+CMD_VAR = has_dip
+RUNTIME =
+HELP    = Match on destination IPv6 address
+
+! <ipv6_subnet>
+CMD_VAR = dip
+RUNTIME =
+HELP    = Match on destination IPv6 address/mask, e.g. fe80::/10 or 2001:db8::1/128
+
+! any
+CMD_VAR = has_dip_any
+RUNTIME =
+HELP    = Match on any destination IPv6 address
+
+! dscp
+CMD_VAR = has_dscp
+RUNTIME =
+HELP    = Match on DSCP
+
+! <vcap_vr>. This type must have RUNTIME values.
+CMD_VAR = dscp_vr
+RUNTIME = STREAM_ICLI_runtime_dscp
+HELP    = Matched DSCP value/range (e.g. 17-33 or 17)
+
+! <dscp>
+CMD_VAR = dscp_value
+RUNTIME =
+HELP    =
+
+! any
+CMD_VAR = has_dscp_any
+RUNTIME =
+HELP    = Match any DSCP
+
+! proto
+CMD_VAR = has_proto
+RUNTIME =
+HELP    = Match on IP protocol
+
+! <0-255>
+CMD_VAR = proto_value
+RUNTIME =
+HELP    = Match a custom IP protocol number
+
+! tcp
+CMD_VAR = has_proto_tcp
+RUNTIME =
+HELP    = Match TCP frames (protocol number 6)
+
+! udp
+CMD_VAR = has_proto_udp
+RUNTIME =
+HELP    = Match UDP frames (protocol number 17)
+
+! any
+CMD_VAR = has_proto_any
+RUNTIME =
+HELP    = Match any IP protocol
+
+! dport
+CMD_VAR = has_dport
+RUNTIME =
+HELP    = Setup matching on UDP/TCP destination port
+
+! <vcap_vr>. This type must have RUNTIME values.
+CMD_VAR = dport_vr
+RUNTIME = STREAM_ICLI_runtime_dport
+HELP    = Match UDP/TCP destination port value/range (e.g. 123-345 or 123)
+
+! any
+CMD_VAR = has_dport_any
+RUNTIME =
+HELP    = Match any UDP/TCP destination port
+
+VARIABLE_BEGIN
+    vtss_appl_stream_conf_t       conf;
+    vtss_appl_stream_proto_ipv6_t &ipv6 = conf.protocol.value.ipv6;
+    bool                          protocol_change;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_conf_get(stream_id, &conf));
+
+    // We allow the user to only change particular values without overwriting
+    // others if the current protocol also is IPv6.
+    protocol_change = conf.protocol.type != MESA_VCE_TYPE_IPV6;
+
+    conf.protocol.type = MESA_VCE_TYPE_IPV6;
+
+    STREAM_ICLI_ipv6_set(    ipv6.sip,   sip,                 has_sip,      has_sip_any,                                 protocol_change);
+    STREAM_ICLI_ipv6_set(    ipv6.dip,   dip,                 has_dip,      has_dip_any,                                 protocol_change);
+    STREAM_ICLI_dscp_set(    ipv6.dscp,  dscp_vr, dscp_value, has_dscp,     has_dscp_any,                                protocol_change);
+    STREAM_ICLI_ip_proto_set(ipv6.proto, proto_value,         has_proto,    has_proto_any, has_proto_tcp, has_proto_udp, protocol_change);
+    STREAM_ICLI_dport_set(   ipv6.dport, dport_vr,            has_dport,    has_dport_any,                               protocol_change);
+
+    STREAM_PRINT_RC(vtss_appl_stream_conf_set(stream_id, &conf));
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no ipv6
+IF_FLAG =
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no ipv6
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_STREAM
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+MODE_VAR  = stream_id
+
+! no
+! This command is only available if the current protocol is ipv6. It used to be
+! available at all times, but I find this very misleading.
+CMD_VAR =
+RUNTIME = STREAM_ICLI_protocol_is_ipv6
+HELP    = ##ICLI_HELP_NO
+
+! snap
+CMD_VAR =
+RUNTIME =
+HELP    = Don't match IPv6 frames
+
+CODE_BEGIN
+    STREAM_PRINT_RC(STREAM_ICLI_reset_protocol(stream_id));
+CODE_END
+CMD_END
+
+#==============================================================================
+
+CMD_BEGIN
+COMMAND = stream-id <range_list>
+IF_FLAG =
+
+DOC_CMD_DESC    = Associate one or more streams with a port
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = stream-id 3-6,12
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR  = port_list
+
+! stream-id
+CMD_VAR =
+RUNTIME =
+HELP    = Associate stream with port
+
+! <range_list>
+CMD_VAR = stream_ids
+RUNTIME = STREAM_ICLI_instance_range
+HELP    = Stream id(s)
+
+VARIABLE_BEGIN
+    vtss_appl_stream_id_t   stream_id;
+    vtss_appl_stream_conf_t conf;
+    uint32_t                stream_id_cnt;
+    switch_iter_t           sit;
+    port_iter_t             pit;
+    bool                    first_port = true;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    stream_id_cnt = STREAM_ICLI_id_cnt(stream_ids);
+
+    (void)icli_switch_iter_init(&sit);
+    while (icli_switch_iter_getnext(&sit, port_list)) {
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, port_list)) {
+            stream_id = VTSS_APPL_STREAM_ID_NONE;
+            while (STREAM_ICLI_range_itr(stream_ids, stream_id) == VTSS_RC_OK) {
+                if ((rc = vtss_appl_stream_conf_get(stream_id, &conf)) != VTSS_RC_OK) {
+                    if (first_port) {
+                        // Only print errors if we are iterating over the first
+                        // port, since the user already knows it on subsequent
+                        // ports.
+                        if (stream_id_cnt == 1) {
+                            // Only one stream specified. No need to print which
+                            // one.
+                            STREAM_ICLI_PRINTF("%% %s\n", error_txt(rc));
+                        } else {
+                            // More than one stream is specified. Print which
+                            // ones don't exist.
+                            STREAM_ICLI_PRINTF("%% Stream ID %u: %s\n", stream_id, error_txt(rc));
+                        }
+                    }
+
+                    continue;
+                }
+
+                conf.port_list[pit.iport] = true;
+                if ((rc = vtss_appl_stream_conf_set(stream_id, &conf)) != VTSS_RC_OK) {
+                    if (first_port) {
+                        // Only print errors if we are iterating over the first
+                        // port, since the user already knows it on subsequent
+                        // ports.
+                        if (stream_id_cnt == 1) {
+                            // Only one stream specified. No need to print which
+                            // one.
+                            STREAM_ICLI_PRINTF("%% %s\n", error_txt(rc));
+                        } else {
+                            // More than one stream is specified. Print which
+                            // ones don't exist.
+                            STREAM_ICLI_PRINTF("%% Stream ID %u: %s\n", stream_id, error_txt(rc));
+                        }
+                    }
+                }
+            }
+
+            first_port = false;
+        }
+    }
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no stream-id {<range_list> | all}
+IF_FLAG =
+
+DOC_CMD_DESC    = Dissociate one, more or all streams from a port
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no stream-id 3-6,12
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR  = port_list
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! stream-id
+CMD_VAR =
+RUNTIME =
+HELP    = Dissociate one, more or all streams from port
+
+! <range_list>
+CMD_VAR = stream_ids
+RUNTIME = STREAM_ICLI_instance_range
+HELP    = Stream ID
+
+! all
+! This is the same as stream_ids == nullptr, and therefore doesn't need a
+! CMD_VAR
+CMD_VAR =
+RUNTIME =
+HELP    = Dissociate all streams from a port
+
+VARIABLE_BEGIN
+    vtss_appl_stream_id_t           stream_id;
+    vtss_appl_stream_conf_t         conf;
+    vtss_appl_stream_capabilities_t cap;
+    uint32_t                        stream_id_cnt, port_cnt = 0;
+    switch_iter_t                   sit;
+    port_iter_t                     pit;
+    bool                            *successfully_deleted_bindings;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_capabilities_get(&cap));
+
+    if ((successfully_deleted_bindings = (bool *)VTSS_CALLOC(cap.inst_cnt_max, sizeof(bool))) == nullptr) {
+        STREAM_ICLI_PRINTF("%% Unable to allocate %u bytes\n", cap.inst_cnt_max * (uint32_t)sizeof(bool));
+        return ICLI_RC_ERROR;
+    }
+
+    stream_id_cnt = STREAM_ICLI_id_cnt(stream_ids);
+
+    (void)icli_switch_iter_init(&sit);
+    while (icli_switch_iter_getnext(&sit, port_list)) {
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, port_list)) {
+
+            stream_id = VTSS_APPL_STREAM_ID_NONE;
+            // has_all <=> stream_ids == nullptr
+            while (STREAM_ICLI_range_itr(stream_ids, stream_id) == VTSS_RC_OK) {
+                if (vtss_appl_stream_conf_get(stream_id, &conf) != VTSS_RC_OK) {
+                    continue;
+                }
+
+                conf.port_list[pit.iport] = false;
+
+                if (vtss_appl_stream_conf_set(stream_id, &conf) == VTSS_RC_OK) {
+                    successfully_deleted_bindings[stream_id] = true;
+                }
+            }
+
+            port_cnt++;
+        }
+    }
+
+    // Gotta check whether to print some errors in some cases.
+    if (stream_id_cnt == 0) {
+        // Never show errors when has_all is specified.
+        goto exit;
+    }
+
+    // The idea is to only print one error message per stream that wasn't
+    // successfully detached from a port.
+    stream_id = VTSS_APPL_STREAM_ID_NONE;
+    while (STREAM_ICLI_range_itr(stream_ids, stream_id) == VTSS_RC_OK) {
+        if (!successfully_deleted_bindings[stream_id]) {
+            // No ports had this specified stream ID associated.
+            if (stream_id_cnt == 1) {
+                // Only one stream specified. No need to print which one.
+                STREAM_ICLI_PRINTF("%% Stream ID not found on %s\n", port_cnt < 2 ? "interface" : "any of the specified interfaces");
+            } else {
+                // More than one stream is specified. Print which ones don't
+                // exist.
+                STREAM_ICLI_PRINTF("%% Stream ID %u not found on %s\n", stream_id, port_cnt < 2 ? "interface" : "any of the specified interfaces");
+            }
+        }
+    }
+
+exit:
+    VTSS_FREE(successfully_deleted_bindings);
+
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show stream [<range_list>] status [details]
+IF_FLAG =
+
+DOC_CMD_DESC    = Show status for stream
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show stream status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Show status of streams
+
+! <range_list>
+CMD_VAR = stream_ids
+RUNTIME = STREAM_ICLI_instance_range
+HELP    = ID of stream for which to show status
+
+! status
+CMD_VAR =
+RUNTIME =
+HELP    = Show status for stream
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed stream status
+
+CODE_BEGIN
+    STREAM_ICLI_show(stream_ids, has_details);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_STREAM_SHOW_CAPABILITIES = Show stream capabilities
+COMMAND         = debug show stream capabilities
+DOC_CMD_DESC    = ##HELP_STREAM_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_STREAM_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! stream
+HELP    = Stream capabilities
+CMD_VAR =
+RUNTIME =
+
+! capabilities
+HELP    = ##HELP_STREAM_SHOW_CAPABILITIES
+CMD_VAR =
+RUNTIME =
+
+CODE_BEGIN
+    ICLI_RC(STREAM_ICLI_show_capabilities());
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+HELP_STREAM_DEBUG_SHOW = Show stream statistics, VCEs, or IFLOWs
+COMMAND         = debug show stream [<range_list>] {statistics | vces | iflows}
+IF_FLAG =
+
+DOC_CMD_DESC    = ##HELP_STREAM_DEBUG_SHOW
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_STREAM_DEBUG_SHOW
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_STREAM_DEBUG_SHOW
+
+! <range_list>
+CMD_VAR = stream_list
+RUNTIME = STREAM_ICLI_instance_range
+HELP    = Select stream ID(s)
+
+! statistics
+CMD_VAR = has_statistics
+RUNTIME =
+HELP    = Show statistics
+
+! vces
+CMD_VAR = has_vces
+RUNTIME =
+HELP    = Show VCEs
+
+! iflows
+CMD_VAR =
+RUNTIME =
+HELP    = Show IFLOWs
+
+VARIABLE_BEGIN
+    vtss_appl_stream_id_t stream_id = VTSS_APPL_STREAM_ID_NONE, i;
+    bool                  show_this, first;
+VARIABLE_END
+
+CODE_BEGIN
+    first = true;
+    while (vtss_appl_stream_itr(&stream_id, &stream_id) == VTSS_RC_OK) {
+        // Figure out whether the user has specified this particular instance.
+        if (stream_list != nullptr) {
+            show_this = false;
+            for (i = 0; i < stream_list->u.sr.cnt; i++) {
+                if (stream_id >= stream_list->u.sr.range[i].min && stream_id <= stream_list->u.sr.range[i].max) {
+                    show_this = true;
+                    break;
+                }
+            }
+        } else {
+            show_this = true;
+        }
+
+        if (!show_this) {
+            continue;
+        }
+
+        if (has_statistics) {
+            stream_debug_statistics_show(stream_id, icli_session_self_printf, first);
+        } else if (has_vces) {
+            stream_debug_vces_show(stream_id, icli_session_self_printf, first);
+        } else {
+            stream_debug_iflows_show(stream_id, icli_session_self_printf, first);
+        }
+
+        first = false;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+HELP_STREAM_DEBUG_CLEAR_STATI = Clear stream statistics. This WILL affect statistics shown by FRER and PSFP!
+COMMAND         = debug clear stream [<range_list>] statistics
+IF_FLAG =
+
+DOC_CMD_DESC    = ##HELP_STREAM_DEBUG_CLEAR_STATI
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_STREAM_DEBUG_CLEAR_STATI
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_CLEAR
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Clear stream statistics
+
+! <range_list>
+CMD_VAR = stream_list
+RUNTIME = STREAM_ICLI_instance_range
+HELP    = Select stream ID(s)
+
+! statistics
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_STREAM_DEBUG_CLEAR_STATI
+
+VARIABLE_BEGIN
+    vtss_appl_stream_id_t stream_id = VTSS_APPL_STREAM_ID_NONE, i;
+    bool                  show_this;
+    mesa_rc               rc;
+VARIABLE_END
+
+CODE_BEGIN
+    while (vtss_appl_stream_itr(&stream_id, &stream_id) == VTSS_RC_OK) {
+        // Figure out whether the user has specified this particular instance.
+        if (stream_list != nullptr) {
+            show_this = false;
+            for (i = 0; i < stream_list->u.sr.cnt; i++) {
+                if (stream_id >= stream_list->u.sr.range[i].min && stream_id <= stream_list->u.sr.range[i].max) {
+                    show_this = true;
+                    break;
+                }
+            }
+        } else {
+            show_this = true;
+        }
+
+        if (!show_this) {
+            continue;
+        }
+
+        if ((rc = stream_util_counters_clear(stream_id)) != VTSS_RC_OK) {
+            STREAM_ICLI_PRINTF("%u: %s\n", stream_id, error_txt(rc));
+        }
+    }
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = no stream-collection {<range_list> | all}
+IF_FLAG =
+DOC_CMD_DESC    = Delete one, more or all stream collections
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Deletes one, more or all stream collections
+DOC_CMD_EXAMPLE = no stream-collection 17-19,23
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! stream-collection
+CMD_VAR =
+RUNTIME =
+HELP    = Delete one, more or all stream collections
+
+! <range_list>
+CMD_VAR = stream_collection_ids
+RUNTIME = STREAM_COLLECTION_ICLI_instance_range
+HELP    = Delete one or more stream collections
+
+! all
+! This is the same as stream_collection_ids == nullptr, and therefore doesn't need a
+! CMD_VAR
+CMD_VAR =
+RUNTIME =
+HELP    = Delete all stream collections
+
+VARIABLE_BEGIN
+    vtss_appl_stream_collection_id_t stream_collection_id;
+    uint32_t                         stream_collection_id_cnt;
+    mesa_rc                          rc;
+VARIABLE_END
+
+CODE_BEGIN
+    stream_collection_id_cnt = STREAM_ICLI_id_cnt(stream_collection_ids);
+    stream_collection_id     = VTSS_APPL_STREAM_COLLECTION_ID_NONE;
+
+    // has_all <=> stream_collection_ids == nullptr
+    while (STREAM_COLLECTION_ICLI_range_itr(stream_collection_ids, stream_collection_id) == VTSS_RC_OK) {
+        if ((rc = vtss_appl_stream_collection_conf_del(stream_collection_id)) != VTSS_RC_OK) {
+            if (stream_collection_id_cnt == 0) {
+                // has_all. Don't print anything.
+            } else if (stream_collection_id_cnt == 1) {
+                // Only one stream collection specified. No need to print which one.
+                STREAM_ICLI_PRINTF("%% %s\n", error_txt(rc));
+            } else {
+                // More than one stream collection is specified. Print which ones don't
+                // exist.
+                STREAM_ICLI_PRINTF("%% Stream Collection ID %u: %s\n", stream_collection_id, error_txt(rc));
+            }
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+! The 100-200 is just a place holder. We override it dynamically in order to
+! get unsigned ranges.
+COMMAND = stream-id-list <100~200>
+
+DOC_CMD_DESC    = Select the streams to be part of this stream collection
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =  stream-id-list 12,17-19
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_STREAM_COLLECTION
+MODE_VAR = stream_collection_id
+
+! stream-id-list
+CMD_VAR =
+RUNTIME =
+HELP    = Select the streams to be part of this stream collection, e.g. 12,17-19
+
+! range-list
+CMD_VAR = stream_id_list
+RUNTIME = STREAM_ICLI_instance_range
+HELP    = List of stream IDs. This indirectly gives the ingress ports
+
+VARIABLE_BEGIN
+    vtss_appl_stream_collection_capabilities_t cap;
+    vtss_appl_stream_collection_conf_t         conf;
+    int                                        i, j, k, cnt;
+    bool                                       already_added;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_collection_conf_get(stream_collection_id, &conf));
+    STREAM_PRINT_RC(vtss_appl_stream_collection_capabilities_get(&cap));
+
+    // Clear current stream IDs
+    for (i = 0; i < ARRSZ(conf.stream_ids); i++) {
+        conf.stream_ids[i] = VTSS_APPL_STREAM_ID_NONE;
+    }
+
+    // Populate new
+    cnt = 0;
+    for (i = 0; i < stream_id_list->cnt; i++) {
+        for (j = stream_id_list->range[i].min; j <= stream_id_list->range[i].max; j++) {
+            // Loop through the already added to see if we should skip them.
+            // This allows user to write e.g. 1,3,4,3
+            already_added = false;
+            for (k = 0; k < cnt; k++) {
+                if (conf.stream_ids[k] == j) {
+                    already_added = true;
+                    break;
+                }
+            }
+
+            if (already_added) {
+                break;
+            }
+
+            if (cnt >= cap.streams_per_collection_max) {
+                ICLI_PRINTF("%% At most %u streams can be specified\n", cap.streams_per_collection_max);
+                return ICLI_RC_ERROR;
+            }
+
+            conf.stream_ids[cnt++] = j;
+        }
+    }
+
+    STREAM_PRINT_RC(vtss_appl_stream_collection_conf_set(stream_collection_id, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND = no stream-id-list
+
+HELP_STREAM_COLL_NO_STREAM_LIST = Clear the list of ingress stream IDs
+DOC_CMD_DESC    = ##HELP_STREAM_COLL_NO_STREAM_LIST
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_STREAM_COLL_NO_STREAM_LIST
+DOC_CMD_EXAMPLE = no stream-id-list
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_STREAM_COLLECTION
+MODE_VAR = stream_collection_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! stream-id-list
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_STREAM_COLL_NO_STREAM_LIST
+
+VARIABLE_BEGIN
+    vtss_appl_stream_collection_conf_t conf;
+    int                                i;
+VARIABLE_END
+
+CODE_BEGIN
+    STREAM_PRINT_RC(vtss_appl_stream_collection_conf_get(stream_collection_id, &conf));
+
+    // Clear current stream IDs
+    for (i = 0; i < ARRSZ(conf.stream_ids); i++) {
+        conf.stream_ids[i] = VTSS_APPL_STREAM_ID_NONE;
+    }
+
+    STREAM_PRINT_RC(vtss_appl_stream_collection_conf_set(stream_collection_id, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show stream-collection [<range_list>] status [details]
+IF_FLAG =
+
+DOC_CMD_DESC    = Show status for stream collections
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show stream-collection status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Show status of stream collections
+
+! <range_list>
+CMD_VAR = stream_collection_ids
+RUNTIME = STREAM_COLLECTION_ICLI_instance_range
+HELP    = ID of stream collection for which to show status
+
+! status
+CMD_VAR =
+RUNTIME =
+HELP    = Show status for stream collections
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed stream collection status
+
+CODE_BEGIN
+    STREAM_COLLECTION_ICLI_show(stream_collection_ids, has_details);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_STREAM_COLLECTION_SHOW_CAP = Show stream collection capabilities
+COMMAND         = debug show stream-collection capabilities
+DOC_CMD_DESC    = ##HELP_STREAM_COLLECTION_SHOW_CAP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_STREAM_COLLECTION_SHOW_CAP
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! stream
+HELP    = Stream collection capabilities
+CMD_VAR =
+RUNTIME =
+
+! capabilities
+HELP    = ##HELP_STREAM_COLLECTION_SHOW_CAP
+CMD_VAR =
+RUNTIME =
+
+CODE_BEGIN
+    ICLI_RC(STREAM_COLLECTION_ICLI_show_capabilities());
+CODE_END
+CMD_END
+

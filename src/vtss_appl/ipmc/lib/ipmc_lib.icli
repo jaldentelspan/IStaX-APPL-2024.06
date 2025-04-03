@@ -1,0 +1,1507 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "mgmt_api.h"
+#include "icfg_api.h"   /* For vtss_icfg_XXX()                   */
+#include "ipmc_lib.hxx" /* For ipmc_lib_icli_pr_t                */
+#include "ip_utils.hxx" /* For vtss_ipv4/6_XXX() and ipv6_calc_t */
+#include "misc_api.h"
+#include <vtss/appl/ipmc_lib.h>
+#include <vtss/basics/list.hxx>
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include IPMC_LIB's trace here, because ICLI defines its own that I
+// don't want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "ipmc_lib_trace.h"
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define IPMC_LIB_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+static const mesa_ipv4_t IPMC_LIB_ICLI_mc_ipv4_min = 0xe0000000; // 224.0.0.0
+static const mesa_ipv4_t IPMC_LIB_ICLI_mc_ipv4_max = 0xefffffff; // 239.255.255.255
+static const mesa_ipv6_t IPMC_LIB_ICLI_mc_ipv6_min = {0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // ff00::/8
+static const mesa_ipv6_t IPMC_LIB_ICLI_mc_ipv6_max = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}; // all-ones
+
+typedef struct {
+    vtss_appl_ipmc_lib_profile_range_key_t  key;
+    vtss_appl_ipmc_lib_profile_range_conf_t range;
+    vtss_appl_ipmc_lib_profile_rule_conf_t  rule;
+} ipmc_lib_icli_range_t;
+
+typedef vtss::List<ipmc_lib_icli_range_t> ipmc_lib_icli_list_t;
+typedef ipmc_lib_icli_list_t::iterator    ipmc_lib_icli_itr_t;
+
+#if defined(VTSS_SW_OPTION_ICFG) && defined(VTSS_SW_OPTION_SMB_IPMC)
+/******************************************************************************/
+// IPMC_LIB_ICFG_profile_range_conf()
+/******************************************************************************/
+static mesa_rc IPMC_LIB_ICFG_profile_range_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ipmc_lib_profile_range_key_t  key = {};
+    vtss_appl_ipmc_lib_profile_range_conf_t conf;
+    char                                    str1[40], str2[40];
+
+    // Commands in ICLI_CMD_MODE_GLOBAL_CONFIG
+    //   ipmc range <word1-16> {<ipv4_mcast> [<ipv4_mcast>] | <ipv6_mcast> [<ipv6_mcast>]}
+    while (vtss_appl_ipmc_lib_profile_range_itr(&key, &key) == VTSS_RC_OK) {
+        VTSS_RC(vtss_appl_ipmc_lib_profile_range_conf_get(&key, &conf));
+        if (conf.start.is_ipv4) {
+            VTSS_RC(vtss_icfg_printf(result, "ipmc range %s %s %s\n", key.name, misc_ipv4_txt( conf.start.ipv4, str1), misc_ipv4_txt( conf.end.ipv4, str2)));
+        } else {
+            VTSS_RC(vtss_icfg_printf(result, "ipmc range %s %s %s\n", key.name, misc_ipv6_txt(&conf.start.ipv6, str1), misc_ipv6_txt(&conf.end.ipv6, str2)));
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG && VTSS_SW_OPTION_SMB_IPMC
+
+#if defined(VTSS_SW_OPTION_ICFG) && defined(VTSS_SW_OPTION_SMB_IPMC)
+/******************************************************************************/
+// IPMC_LIB_ICFG_profile_conf()
+/******************************************************************************/
+static mesa_rc IPMC_LIB_ICFG_profile_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ipmc_lib_profile_key_t       profile_key;
+    vtss_appl_ipmc_lib_profile_range_key_t range_key;
+    vtss_appl_ipmc_lib_profile_conf_t      profile_conf;
+    vtss_appl_ipmc_lib_profile_rule_conf_t rule_conf;
+    char                                   log_str[20];
+
+    // Commands in ICLI_CMD_MODE_IPMC_PROFILE mode:
+    //  [no] description
+    //       range <word1-16> {permit | deny} [log] [next <word1-16>]
+
+    strncpy(profile_key.name, req->instance_id.string, sizeof(profile_key.name));
+    VTSS_RC(vtss_appl_ipmc_lib_profile_conf_get(&profile_key, &profile_conf));
+
+    if (strlen(profile_conf.dscr)) {
+        VTSS_RC(vtss_icfg_printf(result, " description %s\n", profile_conf.dscr));
+    } else if (req->all_defaults) {
+        VTSS_RC(vtss_icfg_printf(result, " no description\n"));
+    }
+
+    vtss_clear(range_key);
+    while (vtss_appl_ipmc_lib_profile_rule_itr(&profile_key, &profile_key, &range_key, &range_key, true /* only iterate over this profile */) == VTSS_RC_OK) {
+        VTSS_RC(vtss_appl_ipmc_lib_profile_rule_conf_get(&profile_key, &range_key, &rule_conf));
+        sprintf(log_str, "%s", rule_conf.log ? " log" : "");
+        VTSS_RC(vtss_icfg_printf(result, " range %s %s%s\n", range_key.name, rule_conf.deny ? "deny" : "permit", log_str));
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG && VTSS_SW_OPTION_SMB_IPMC
+
+#if defined(VTSS_SW_OPTION_ICFG) && defined(VTSS_SW_OPTION_SMB_IPMC)
+/******************************************************************************/
+// IPMC_LIB_ICFG_profile_global_conf()
+/******************************************************************************/
+static mesa_rc IPMC_LIB_ICFG_profile_global_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ipmc_lib_profile_global_conf_t global_conf, global_default_conf;
+
+    VTSS_RC(vtss_appl_ipmc_lib_profile_global_conf_default_get(&global_default_conf));
+    VTSS_RC(vtss_appl_ipmc_lib_profile_global_conf_get(&global_conf));
+
+    // Commands in ICLI_CMD_MODE_GLOBAL_CONFIG mode:
+    //  [no] ipmc profile
+    if (req->all_defaults || global_conf.enable != global_default_conf.enable) {
+        VTSS_RC(vtss_icfg_printf(result, "%sipmc profile\n", global_conf.enable ? "" : "no "));
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG && VTSS_SW_OPTION_SMB_IPMC
+
+#if defined(VTSS_SW_OPTION_ICFG) && defined(VTSS_SW_OPTION_SMB_IPMC)
+/******************************************************************************/
+// ipmc_lib_icfg_init()
+/******************************************************************************/
+mesa_rc ipmc_lib_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_PROFILE_RANGE,       "ipmc-profile", IPMC_LIB_ICFG_profile_range_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_PROFILE_CONF,        "ipmc-profile", IPMC_LIB_ICFG_profile_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPMC_PROFILE_GLOBAL_CONF, "ipmc-profile", IPMC_LIB_ICFG_profile_global_conf));
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG && VTSS_SW_OPTION_SMB_IPMC
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_has_ipv6()
+/******************************************************************************/
+static BOOL IPMC_LIB_ICLI_has_ipv6(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return false;
+    }
+
+#if defined(VTSS_SW_OPTION_IPV6)
+    runtime->present = true;
+#else
+    runtime->present = false;
+#endif
+
+    return true;
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_profile_global_conf_set()
+/******************************************************************************/
+static icli_rc_t IPMC_LIB_ICLI_profile_global_conf_set(uint32_t session_id, bool enable)
+{
+    vtss_appl_ipmc_lib_profile_global_conf_t global_conf;
+    mesa_rc                                  rc;
+
+    if ((rc = vtss_appl_ipmc_lib_profile_global_conf_get(&global_conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to get global IPMC profile configuration: %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    global_conf.enable = enable;
+    if ((rc = vtss_appl_ipmc_lib_profile_global_conf_set(&global_conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to globally %s IPMC profile: %s\n", enable ? "enable" : "disable", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    return ICLI_RC_OK;
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_yes_no()
+/******************************************************************************/
+static const char *IPMC_LIB_ICLI_yes_no(bool val)
+{
+    return val ? "Yes" : "No";
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ip_list_insert()
+/******************************************************************************/
+static void IPMC_LIB_ip_list_insert(uint32_t session_id, ipmc_lib_icli_list_t &ip_list, vtss_appl_ipmc_lib_profile_range_key_t &range_key, vtss_appl_ipmc_lib_profile_range_conf_t &range_conf, vtss_appl_ipmc_lib_profile_rule_conf_t &rule_conf)
+{
+    char                  buf1[IPV6_ADDR_IBUF_MAX_LEN], buf2[IPV6_ADDR_IBUF_MAX_LEN];
+    ipmc_lib_icli_range_t new_range;
+    ipmc_lib_icli_itr_t   prev_itr, itr, next_itr;
+    ipv6_calc_t           start, end, prev_end, itr_start, itr_end, new_start, new_end;
+
+#if !defined(VTSS_SW_OPTION_IPV6)
+    if (!range_conf.start.is_ipv4) {
+         return;
+    }
+#endif
+
+    vtss_clear(new_range);
+    new_range.key   = range_key;
+    new_range.range = range_conf;
+    new_range.rule  = rule_conf;
+
+    start = range_conf.start.is_ipv4 ? ipv6_calc_t(range_conf.start.ipv4) : ipv6_calc_t(range_conf.start.ipv6);
+    end   = range_conf.start.is_ipv4 ? ipv6_calc_t(range_conf.end.ipv4)   : ipv6_calc_t(range_conf.end.ipv6);
+
+    T_IG(IPMC_LIB_TRACE_GRP_ICLI, "key = %s, ip = %s-%s", range_key.name, range_conf.start, range_conf.end);
+
+    // This rule may have to be inserted multiple times if it spans other rules
+    // that have created holes in the entire M/C range.
+    prev_itr = ip_list.end();
+    itr      = ip_list.begin();
+    while (itr != ip_list.end()) {
+        next_itr = itr;
+        ++next_itr;
+
+        itr_start = range_conf.start.is_ipv4 ? ipv6_calc_t(itr->range.start.ipv4) : ipv6_calc_t(itr->range.start.ipv6);
+        itr_end   = range_conf.end.is_ipv4   ? ipv6_calc_t(itr->range.end.ipv4)   : ipv6_calc_t(itr->range.end.ipv6);
+
+        T_IG(IPMC_LIB_TRACE_GRP_ICLI, "Considering ip = %s-%s", itr_start.print(buf1, range_conf.start.is_ipv4), itr_end.print(buf2, range_conf.end.is_ipv4));
+
+        if (prev_itr == ip_list.end()) {
+            prev_end = range_conf.start.is_ipv4 ? ipv6_calc_t(IPMC_LIB_ICLI_mc_ipv4_min) : ipv6_calc_t(IPMC_LIB_ICLI_mc_ipv6_min);
+            prev_end--; // 223.255.255.255 or fe:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff
+        } else {
+            prev_end = range_conf.start.is_ipv4 ? ipv6_calc_t(prev_itr->range.end.ipv4) : ipv6_calc_t(prev_itr->range.end.ipv6);
+        }
+
+        // Squeeze in between prev_itr and itr if one of our addresses are in
+        // between the two and there's room.
+        if (prev_end < end && start < itr_start && itr_start - prev_end > (uint64_t)1) {
+            new_start = MAX(prev_end + 1, start);
+            new_end   = MIN(itr_start - 1, end);
+            T_IG(IPMC_LIB_TRACE_GRP_ICLI, "Inserting as ip = %s-%s", new_start.print(buf1, range_conf.start.is_ipv4), new_end.print(buf2, range_conf.start.is_ipv4));
+
+            if (range_conf.start.is_ipv4) {
+                new_range.range.start.ipv4 = new_start.to_mesa_ipv4();
+                new_range.range.end.ipv4   = new_end.to_mesa_ipv4();
+            } else {
+                new_range.range.start.ipv6 = new_start.to_mesa_ipv6();
+                new_range.range.end.ipv6   = new_end.to_mesa_ipv6();
+            }
+
+            ip_list.insert(itr, new_range);
+        }
+
+        // Append the remaining range if one of our addresses are past the last.
+        if (next_itr == ip_list.end() && end > itr_end) {
+            new_start = MAX(start, itr_end + 1);
+            new_end   = end;
+
+            T_IG(IPMC_LIB_TRACE_GRP_ICLI, "Appending as ip = %s-%s", new_start.print(buf1, range_conf.start.is_ipv4), new_end.print(buf2, range_conf.start.is_ipv4));
+
+            if (range_conf.start.is_ipv4) {
+                new_range.range.start.ipv4 = new_start.to_mesa_ipv4();
+                new_range.range.end.ipv4   = new_end.to_mesa_ipv4();
+            } else {
+                new_range.range.start.ipv6 = new_start.to_mesa_ipv6();
+                new_range.range.end.ipv6   = new_end.to_mesa_ipv6();
+            }
+
+            ip_list.insert(ip_list.end(), new_range);
+        }
+
+        prev_itr = itr;
+        itr      = next_itr;
+    }
+
+    if (ip_list.empty()) {
+        // Insert this rule in its entirety
+        T_IG(IPMC_LIB_TRACE_GRP_ICLI, "Inserting entire rule");
+        ip_list.insert(ip_list.end(), new_range);
+    }
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_ip_lists_build()
+/******************************************************************************/
+static icli_rc_t IPMC_LIB_ICLI_ip_lists_build(uint32_t session_id, vtss_appl_ipmc_lib_profile_key_t &profile_key, ipmc_lib_icli_list_t &ipv4_list, ipmc_lib_icli_list_t &ipv6_list)
+{
+    vtss_appl_ipmc_lib_profile_range_key_t  range_key, default_range_key;
+    vtss_appl_ipmc_lib_profile_range_conf_t range_conf, ipv4_full_range, ipv6_full_range;
+    vtss_appl_ipmc_lib_profile_rule_conf_t  rule_conf, default_rule_conf;
+
+    ipv4_list.clear();
+    ipv6_list.clear();
+
+    vtss_clear(range_key);
+    while (vtss_appl_ipmc_lib_profile_rule_itr(&profile_key, &profile_key, &range_key, &range_key, true /* stay in this profile */) == VTSS_RC_OK) {
+        IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_range_conf_get(&range_key, &range_conf));
+        IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_get(&profile_key, &range_key, &rule_conf));
+        IPMC_LIB_ip_list_insert(session_id, range_conf.start.is_ipv4 ? ipv4_list : ipv6_list, range_key, range_conf, rule_conf);
+    }
+
+    // Fill in all holes in the IP lists with <Default> rules.
+    strncpy(default_range_key.name, "<Default>", sizeof(default_range_key.name) - 1);
+
+    default_rule_conf.deny = true;
+    default_rule_conf.log  = false;
+
+    ipv4_full_range.start.is_ipv4 = true;
+    ipv4_full_range.end.is_ipv4   = true;
+    ipv4_full_range.start.ipv4    = IPMC_LIB_ICLI_mc_ipv4_min;
+    ipv4_full_range.end.ipv4      = IPMC_LIB_ICLI_mc_ipv4_max;
+
+    ipv6_full_range.start.is_ipv4 = false;
+    ipv6_full_range.end.is_ipv4   = false;
+    ipv6_full_range.start.ipv6    = IPMC_LIB_ICLI_mc_ipv6_min;
+    ipv6_full_range.end.ipv6      = IPMC_LIB_ICLI_mc_ipv6_max;
+
+    IPMC_LIB_ip_list_insert(session_id, ipv4_list, default_range_key, ipv4_full_range, default_rule_conf);
+    IPMC_LIB_ip_list_insert(session_id, ipv6_list, default_range_key, ipv6_full_range, default_rule_conf);
+
+    return ICLI_RC_OK;
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_print_profile_range()
+/******************************************************************************/
+static void IPMC_LIB_ICLI_print_profile_range(uint32_t session_id, vtss_appl_ipmc_lib_profile_key_t &profile_key, ipmc_lib_icli_range_t &range, bool &first, bool &first_line_in_this_profile)
+{
+    char buf1[IPV6_ADDR_IBUF_MAX_LEN], buf2[IPV6_ADDR_IBUF_MAX_LEN];
+
+    if (first) {
+        ICLI_PRINTF("Profile Name     Range Name       Start Address                           End Address                             Permit Log \n");
+        ICLI_PRINTF("---------------- ---------------- --------------------------------------- --------------------------------------- ------ ---\n");
+        first = false;
+    }
+
+    if (range.range.start.is_ipv4) {
+        (void)misc_ipv4_txt(range.range.start.ipv4, buf1);
+        (void)misc_ipv4_txt(range.range.end.ipv4,   buf2);
+    } else {
+        (void)misc_ipv6_txt(&range.range.start.ipv6, buf1),
+        (void)misc_ipv6_txt(&range.range.end.ipv6,   buf2);
+    }
+
+    ICLI_PRINTF("%-16s %-16s %-39s %-39s %-6s %s\n",
+                first_line_in_this_profile ? profile_key.name : "",
+                range.key.name,
+                buf1,
+                buf2,
+                IPMC_LIB_ICLI_yes_no(!range.rule.deny),
+                IPMC_LIB_ICLI_yes_no(range.rule.log));
+
+     first_line_in_this_profile = false;
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_profile_show_details()
+/******************************************************************************/
+static icli_rc_t IPMC_LIB_ICLI_profile_show_details(uint32_t session_id, vtss_appl_ipmc_lib_profile_key_t *profile_key_to_show)
+{
+    ipmc_lib_icli_list_t             ipv4_list, ipv6_list;
+    ipmc_lib_icli_itr_t              itr;
+    vtss_appl_ipmc_lib_profile_key_t profile_key;
+    int                              profile_cnt;
+    bool                             first, first_line_in_this_profile;
+
+    vtss_clear(profile_key);
+    profile_cnt = 0;
+    first       = true;
+    while (vtss_appl_ipmc_lib_profile_itr(&profile_key, &profile_key) == VTSS_RC_OK) {
+        if (profile_key_to_show && !(*profile_key_to_show == profile_key) /* no operator!= */) {
+            continue;
+        }
+
+        profile_cnt++;
+        IPMC_LIB_ICLI_ip_lists_build(session_id, profile_key, ipv4_list, ipv6_list);
+
+        first_line_in_this_profile = true;
+        for (itr = ipv4_list.begin(); itr != ipv4_list.end(); ++itr) {
+            IPMC_LIB_ICLI_print_profile_range(session_id, profile_key, *itr, first, first_line_in_this_profile);
+        }
+
+        for (itr = ipv6_list.begin(); itr != ipv6_list.end(); ++itr) {
+            IPMC_LIB_ICLI_print_profile_range(session_id, profile_key, *itr, first, first_line_in_this_profile);
+        }
+    }
+
+    if (profile_cnt == 0) {
+        if (profile_key_to_show) {
+            ICLI_PRINTF("%% Profile %s does not exist\n\n", profile_key_to_show->name);
+            return ICLI_RC_ERROR;
+        } else {
+            ICLI_PRINTF("%% No profiles defined\n\n");
+        }
+    } else {
+        ICLI_PRINTF("\n");
+    }
+
+    return ICLI_RC_OK;
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_profile_show_no_details()
+/******************************************************************************/
+static icli_rc_t IPMC_LIB_ICLI_profile_show_no_details(uint32_t session_id, vtss_appl_ipmc_lib_profile_key_t *profile_key_to_show)
+{
+    vtss_appl_ipmc_lib_profile_key_t profile_key;
+    ipmc_lib_icli_range_t            range;
+    int                              profile_cnt, range_cnt;
+    bool                             first, first_line_in_this_profile;
+
+    vtss_clear(profile_key);
+    profile_cnt = 0;
+    first       = true;
+    while (vtss_appl_ipmc_lib_profile_itr(&profile_key, &profile_key) == VTSS_RC_OK) {
+        if (profile_key_to_show && !(*profile_key_to_show == profile_key) /* no operator!= */) {
+            continue;
+        }
+
+        profile_cnt++;
+        vtss_clear(range);
+        first_line_in_this_profile = true;
+        range_cnt                  = 0;
+
+        while (vtss_appl_ipmc_lib_profile_rule_itr(&profile_key, &profile_key, &range.key, &range.key, true /* stay in this profile */) == VTSS_RC_OK) {
+            range_cnt++;
+            IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_range_conf_get(&range.key, &range.range));
+            IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_get(&profile_key, &range.key, &range.rule));
+            IPMC_LIB_ICLI_print_profile_range(session_id, profile_key, range, first, first_line_in_this_profile);
+        }
+
+        if (range_cnt == 0) {
+            ICLI_PRINTF("%-16s <None>\n", profile_key.name);
+        }
+    }
+
+    if (profile_cnt == 0) {
+        if (profile_key_to_show) {
+            ICLI_PRINTF("%% Profile %s does not exist\n\n", profile_key_to_show->name);
+            return ICLI_RC_ERROR;
+        } else {
+            ICLI_PRINTF("%% No profiles defined\n\n");
+        }
+    } else {
+        ICLI_PRINTF("\n");
+    }
+
+    return ICLI_RC_OK;
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_profile_show()
+/******************************************************************************/
+static icli_rc_t IPMC_LIB_ICLI_profile_show(uint32_t session_id, vtss_appl_ipmc_lib_profile_key_t *profile_key_to_show, bool has_details)
+{
+    if (has_details) {
+        return IPMC_LIB_ICLI_profile_show_details(session_id, profile_key_to_show);
+    }
+
+    return IPMC_LIB_ICLI_profile_show_no_details(session_id, profile_key_to_show);
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_print_range()
+/******************************************************************************/
+static void IPMC_LIB_ICLI_print_range(uint32_t session_id, vtss_appl_ipmc_lib_profile_range_key_t &range_key, vtss_appl_ipmc_lib_profile_range_conf_t &range, bool &first)
+{
+    char buf1[IPV6_ADDR_IBUF_MAX_LEN], buf2[IPV6_ADDR_IBUF_MAX_LEN];
+
+    if (first) {
+        ICLI_PRINTF("Range Name       Start Address                           End Address\n");
+        ICLI_PRINTF("---------------- --------------------------------------- ---------------------------------------\n");
+        first = false;
+    }
+
+    if (range.start.is_ipv4) {
+        (void)misc_ipv4_txt(range.start.ipv4, buf1);
+        (void)misc_ipv4_txt(range.end.ipv4,   buf2);
+    } else {
+        (void)misc_ipv6_txt(&range.start.ipv6, buf1),
+        (void)misc_ipv6_txt(&range.end.ipv6,   buf2);
+    }
+
+    ICLI_PRINTF("%-16s %-39s %-39s\n", range_key.name, buf1, buf2);
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_SMB_IPMC
+/******************************************************************************/
+// IPMC_LIB_ICLI_range_show()
+/******************************************************************************/
+static icli_rc_t IPMC_LIB_ICLI_range_show(uint32_t session_id, vtss_appl_ipmc_lib_profile_range_key_t *range_key_to_show)
+{
+    vtss_appl_ipmc_lib_profile_range_key_t  range_key;
+    vtss_appl_ipmc_lib_profile_range_conf_t range_conf;
+    int                                     range_cnt;
+    bool                                    first;
+
+    vtss_clear(range_key);
+    range_cnt = 0;
+    first     = true;
+    while (vtss_appl_ipmc_lib_profile_range_itr(&range_key, &range_key) == VTSS_RC_OK) {
+        if (range_key_to_show && !(*range_key_to_show == range_key) /* no operator!= */) {
+            continue;
+        }
+
+        range_cnt++;
+        IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_range_conf_get(&range_key, &range_conf));
+        IPMC_LIB_ICLI_print_range(session_id, range_key, range_conf, first);
+    }
+
+    if (range_cnt == 0) {
+        if (range_key_to_show) {
+            ICLI_PRINTF("%% Range %s does not exist\n\n", range_key_to_show->name);
+            return ICLI_RC_ERROR;
+        } else {
+            ICLI_PRINTF("%% No ranges defined\n\n");
+        }
+    } else {
+        ICLI_PRINTF("\n");
+    }
+
+    return ICLI_RC_OK;
+}
+#endif
+
+/******************************************************************************/
+// IPMC_LIB_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t IPMC_LIB_ICLI_show_capabilities(uint32_t session_id)
+{
+    vtss_appl_ipmc_capabilities_t     ipmc_cap, mvr_cap;
+    vtss_appl_ipmc_lib_capabilities_t lib_cap;
+    bool                              mvr_supported, ipmc_supported;
+    const int                         cap_width = 70;
+
+    ipmc_supported = vtss_appl_ipmc_capabilities_get(false, &ipmc_cap)  == VTSS_RC_OK;
+    mvr_supported  = vtss_appl_ipmc_capabilities_get(true,  &mvr_cap) == VTSS_RC_OK;
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_capabilities_get(&lib_cap));
+
+    ICLI_PRINTF("---------------\n");
+    ICLI_PRINTF("IMPORTANT NOTE:\n");
+    ICLI_PRINTF("---------------\n");
+    ICLI_PRINTF("The resources in hardware used to forward multicast data correctly are of\n");
+    ICLI_PRINTF("limited sizes. Moreover, these resources are shared among many different\n");
+    ICLI_PRINTF("features, where IPMC is only one of them. Therefore, there is no guarantee that\n");
+    ICLI_PRINTF("the maximum number of multicast groups printed below is available. Furthermore,\n");
+    ICLI_PRINTF("this number represents the best case for IPv4 groups. Typically, IPv6 groups\n");
+    ICLI_PRINTF("take twice the amount of resources, so the best case for IPv6 groups is half of\n");
+    ICLI_PRINTF("the displayed number.\n");
+    ICLI_PRINTF("The maximum number of source addresses is also only a guiding value and depends\n");
+    ICLI_PRINTF("both on other features utilizing the resources in hardware as well as whether\n");
+    ICLI_PRINTF("the source addresses are IPv4 or IPv6.\n\n");
+
+    ICLI_PRINTF("%-*s %s\n", cap_width, "IPMC supported by this implementation:", ipmc_supported ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "MVR supported by this implementation:",  mvr_supported  ? "Yes" : "No");
+
+    if (ipmc_supported) {
+        ICLI_PRINTF("%-*s %u\n", cap_width, "Max. number of IPMC VLAN interfaces:", ipmc_cap.vlan_cnt_max);
+    }
+
+    if (mvr_supported) {
+        ICLI_PRINTF("%-*s %u\n", cap_width, "Max. number of MVR VLANs:", mvr_cap.vlan_cnt_max);
+    }
+
+    ICLI_PRINTF("%-*s %s\n", cap_width, "IGMP supported by this implementation:",                                 lib_cap.igmp_support          ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "MLD supported by this implementation:",                                  lib_cap.mld_support           ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "H/W support for IPv4 Source Specific Multicast:",                        lib_cap.ssm_chip_support_ipv4 ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "H/W support for IPv6 Source Specific Multicast:",                        lib_cap.ssm_chip_support_ipv6 ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Best case max. number of IPv4 M/C groups (IPv6 is about half of this):", lib_cap.grp_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Best case max. number of IPv4 sources (IPv6 is about half of this):",    lib_cap.src_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. number of source addresses per M/C group:",                         lib_cap.src_per_grp_cnt_max);
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+HELP_RANGE_NAME     = Name of range (1-16 characters in ASCII range [33-126]. Cannot be 'all' (case-insensitively))
+HELP_DESCRIPTION    = Description of the profile (0-64 characters in ASCII range [32-126]).
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipmc range <word1-16> {<ipv4_mcast> [<ipv4_mcast>] | <ipv6_mcast> [<ipv6_mcast>]}
+
+DOC_CMD_DESC    = Create or update an IPMC profile range entry
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When the IPMC profile address range is required, use this command \
+                  to configure the profile address range.
+DOC_CMD_EXAMPLE = This example shows how to execute ipmc range command \
+                  in global configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Video permit log
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# exit
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video permit log
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 230.0.0.0 230.1.0.0
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.1.0.0
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video permit log
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_ICLI_range_set
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IPMC_LIB_ICLI_has_ipv6
+RUNTIME = IPMC_LIB_ICLI_has_ipv6
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = range_name
+CMD_VAR = ipv4_start
+CMD_VAR = ipv4_end
+CMD_VAR = ipv6_start
+CMD_VAR = ipv6_end
+
+HELP = ##ICLI_HELP_IPMC
+HELP = ##ICLI_HELP_IPMC_RANGE
+HELP = ##HELP_RANGE_NAME
+HELP = Valid IPv4 multicast address
+HELP = Valid IPv4 multicast address that is not less than start address
+HELP = Valid IPv6 multicast address
+HELP = Valid IPv6 multicast address that is not less than start address
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_range_key_t  key = {};
+    vtss_appl_ipmc_lib_profile_range_conf_t conf = {};
+VARIABLE_END
+
+CODE_BEGIN
+    strncpy(key.name, range_name, sizeof(key.name));
+    if (ipv4_start) {
+        conf.start.is_ipv4 = true;
+        conf.end.is_ipv4   = true;
+        conf.start.ipv4    = ipv4_start;
+        conf.end.ipv4      = vtss_ipv4_addr_is_zero(&ipv4_end) ? ipv4_start : ipv4_end;
+    } else {
+        conf.start.is_ipv4 = false;
+        conf.end.is_ipv4   = false;
+        conf.start.ipv6    = ipv6_start;
+        conf.end.ipv6      = vtss_ipv6_addr_is_zero(&ipv6_end) ? ipv6_start : ipv6_end;
+    }
+
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_range_conf_set(&key, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipmc range {all | <word1-16>}
+
+DOC_CMD_DESC    = Delete one or all IPMC profile ranges
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When the IPMC profile address range is no longer needed, use \
+                  this command to delete the profile address range.
+DOC_CMD_EXAMPLE = This example shows how to execute no ipmc range command \
+                  in global configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config)# no ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_ICLI_range_del
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_all
+CMD_VAR = range_name
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IPMC
+HELP = ##ICLI_HELP_IPMC_RANGE
+HELP = Delete all ranges in one go
+HELP = Delete a single range given by this name
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_range_key_t key = {};
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        while (vtss_appl_ipmc_lib_profile_range_itr(&key, &key) == VTSS_RC_OK) {
+            IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_range_conf_del(&key));
+        }
+    } else {
+        strncpy(key.name, range_name, sizeof(key.name));
+        IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_range_conf_del(&key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = description <line64>
+
+DOC_CMD_DESC    = Set a description for this IPMC profile
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When you are in IPMC profile configuration mode, use the \
+                  description command to set a description for a profile.
+DOC_CMD_EXAMPLE = This example shows when and how to execute description command in \
+                  ipmc profile configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# description This is a profile used for test
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  description This is a profile used for test
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_ICLI_profile_dscr_set
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_IPMC_PROFILE
+MODE_VAR = profile_name
+
+CMD_VAR =
+CMD_VAR = profile_dscr
+
+HELP = ##HELP_DESCRIPTION
+HELP = Textual description of this profile
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t  key;
+    vtss_appl_ipmc_lib_profile_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    strncpy(key.name, profile_name, sizeof(key.name));
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_conf_get(&key, &conf));
+    strncpy(conf.dscr, profile_dscr, sizeof(conf.dscr));
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_conf_set(&key, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no description
+
+DOC_CMD_DESC    = Clear the description for an IPMC profile
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When you are in IPMC profile configuration mode, use no description \
+                  command to clear the additional description for a profile.
+DOC_CMD_EXAMPLE = This example shows when and how to execute no description command in \
+                  ipmc profile configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# description This is a profile used for test
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  description This is a profile used for test
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# no description
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# exit
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_ICLI_profile_dscr_set_no
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_IPMC_PROFILE
+MODE_VAR = profile_name
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_DESCRIPTION
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t  key;
+    vtss_appl_ipmc_lib_profile_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    strncpy(key.name, profile_name, sizeof(key.name));
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_conf_get(&key, &conf));
+    conf.dscr[0] = '\0';
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_conf_set(&key, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = range <word1-16> {permit | deny} [log] [next <word1-16>]
+
+DOC_CMD_DESC    = Create or update a filtering rule in an IPMC profile
+DOC_CMD_DEFAULT = Logging disabled and deny matching addresses
+DOC_CMD_USAGE   = When you are in IPMC profile configuration mode, use range command \
+                  to include a specific condition for filtering.
+DOC_CMD_EXAMPLE = This example shows when and how to execute range command in ipmc \
+                  profile configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Video permit log
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video permit log
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Video permit
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# exit
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video permit
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_ICLI_profile_rule_set
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_IPMC_PROFILE
+MODE_VAR = profile_name
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR = range_name
+CMD_VAR = has_permit
+CMD_VAR =
+CMD_VAR = has_log
+CMD_VAR = has_next
+CMD_VAR = next_range_name
+
+HELP = ##ICLI_HELP_IPMC_RANGE
+HELP = Name of existing IPMC range to use in this profile
+HELP = Permit matching addresses
+HELP = Deny matching addresses
+HELP = Log when matching
+HELP = To insert this rule a specific place in this profile's list, write the name of the range to insert it just before. If left out, this new rule will be added last.
+HELP = ##HELP_RANGE_NAME
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t       profile_key;
+    vtss_appl_ipmc_lib_profile_range_key_t range_key, insert_before_range_key;
+    vtss_appl_ipmc_lib_profile_rule_conf_t rule_conf = {};
+VARIABLE_END
+
+CODE_BEGIN
+    strncpy(profile_key.name, profile_name, sizeof(profile_key.name));
+    strncpy(range_key.name,   range_name,   sizeof(range_key.name));
+
+    rule_conf.deny = !has_permit;
+    rule_conf.log  = has_log;
+
+    if (has_next) {
+        strncpy(insert_before_range_key.name, next_range_name, sizeof(insert_before_range_key.name));
+    }
+
+    // nullptr as last argument indicates that this rule is to be added last.
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_set(&profile_key, &range_key, &rule_conf, has_next ? &insert_before_range_key : nullptr));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = default range {all | <word1-16>}
+
+DOC_CMD_DESC    = Set the filtering rule in an IPMC profile as default condition, \
+                  that is, default it to not logging and deny the address range.
+DOC_CMD_DEFAULT = No log capability and deny matching addresses
+DOC_CMD_USAGE   = When you are in IPMC profile configuration mode, use default range \
+                  command to make a specific filtering rule working in default conditions.
+DOC_CMD_EXAMPLE = This example shows when and how to execute default range command \
+                  in ipmc profile configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Video permit log
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video permit log
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# default range Video
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# exit
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video deny
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_ICLI_profile_default_rule_set
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_IPMC_PROFILE
+MODE_VAR = profile_name
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_all
+CMD_VAR = range_name
+
+HELP = ##ICLI_HELP_DEFAULT
+HELP = ##ICLI_HELP_IPMC_RANGE
+HELP = Default all rules in this profile
+HELP = Default this particular rule
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t       profile_key;
+    vtss_appl_ipmc_lib_profile_range_key_t range_key, next_range_key;
+    vtss_appl_ipmc_lib_profile_rule_conf_t rule_conf = {};
+VARIABLE_END
+
+CODE_BEGIN
+    strncpy(profile_key.name, profile_name, sizeof(profile_key.name));
+
+    // If strlen(next_range_key.name) == 0, the rule stays where it is when
+    // invoking vtss_appl_ipmc_lib_profile_rule_conf_set()
+    vtss_clear(next_range_key);
+
+    IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_default_get(&rule_conf));
+
+    if (has_all) {
+        vtss_clear(range_key);
+        while (vtss_appl_ipmc_lib_profile_rule_itr(&profile_key, &profile_key, &range_key, &range_key, true /* only iterate over this profile */) == VTSS_RC_OK) {
+            IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_set(&profile_key, &range_key, &rule_conf, &next_range_key));
+        }
+    } else {
+        strncpy(range_key.name, range_name, sizeof(range_key.name));
+        IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_set(&profile_key, &range_key, &rule_conf, &next_range_key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+
+COMMAND = no range {all | <word1-16>}
+
+DOC_CMD_DESC    = Delete a specific or all filtering rule in an IPMC profile
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When you are in IPMC profile configuration mode, use the no range \
+                  command to remove a specific filtering rule.
+DOC_CMD_EXAMPLE = This example shows when and how to execute the no range command \
+                  in IPMC profile configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Video permit log
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video permit log
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# no range Video
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# exit
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_profile_no_range
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_IPMC_PROFILE
+MODE_VAR = profile_name
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_all
+CMD_VAR = range_name
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IPMC_RANGE
+HELP = Delete all ranges in this profile.
+HELP = Delete this particular range in this profile.
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t       profile_key;
+    vtss_appl_ipmc_lib_profile_range_key_t range_key;
+VARIABLE_END
+
+CODE_BEGIN
+    strncpy(profile_key.name, profile_name, sizeof(profile_key.name));
+
+    if (has_all) {
+        vtss_clear(range_key);
+        while (vtss_appl_ipmc_lib_profile_rule_itr(&profile_key, &profile_key, &range_key, &range_key, true /* only iterate over this profile */) == VTSS_RC_OK) {
+            IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_del(&profile_key, &range_key));
+        }
+    } else {
+        strncpy(range_key.name, range_name, sizeof(range_key.name));
+        IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_rule_conf_del(&profile_key, &range_key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = no ipmc profile {all | <word1-16>}
+
+DOC_CMD_DESC    = Delete a specific or all IPMC profiles
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = When the IPMC profile is no longer needed, use this command \
+                  to delete the profile.
+DOC_CMD_EXAMPLE = This example shows how to execute no ipmc profile command \
+                  in global configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Video permit log
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# exit
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE =  range Video permit log
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config)# no ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc range Video 230.0.0.0 230.0.0.255
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_no_profile
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_all
+CMD_VAR = profile_name
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IPMC
+HELP = ##ICLI_HELP_IPMC_PROFILE
+HELP = Delete all profiles
+HELP = Delete this particular profile
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t profile_key;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        vtss_clear(profile_key);
+        while (vtss_appl_ipmc_lib_profile_itr(&profile_key, &profile_key) == VTSS_RC_OK) {
+            IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_conf_del(&profile_key));
+        }
+    } else {
+        strncpy(profile_key.name, profile_name, sizeof(profile_key.name));
+        IPMC_LIB_PRINT_RC(vtss_appl_ipmc_lib_profile_conf_del(&profile_key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = ipmc profile
+
+DOC_CMD_DESC    = Enable IPMC profile filtering globally
+DOC_CMD_DEFAULT = IPMC profile filtering is disabled by default
+DOC_CMD_USAGE   = When the IPMC profile filtering is required, use this command \
+                  to enable the profile filtering.
+DOC_CMD_EXAMPLE = This example shows how to execute ipmc profile command \
+                  in global configuration mode:
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config all-defaults
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = no ipmc profile
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile
+DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+DOC_CMD_EXAMPLE = ...
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ipmc profile
+DOC_CMD_EXAMPLE = !
+DOC_CMD_EXAMPLE = ...
+
+NO_FORM_DOC_CMD_DESC    = Disable IPMC profile filtering globally
+NO_FORM_DOC_CMD_DEFAULT = IPMC profile filtering is disabled by default
+NO_FORM_DOC_CMD_USAGE   = When the IPMC profile filtering is no longer required, use \
+                          this command to disable the profile filtering.
+NO_FORM_DOC_CMD_EXAMPLE = This example shows how to execute no ipmc profile command \
+                          in global configuration mode:
+NO_FORM_DOC_CMD_EXAMPLE = Switch# configure terminal
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# do show running-config all-defaults
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = !
+NO_FORM_DOC_CMD_EXAMPLE = no ipmc profile
+NO_FORM_DOC_CMD_EXAMPLE = !
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# ipmc profile
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = !
+NO_FORM_DOC_CMD_EXAMPLE = ipmc profile
+NO_FORM_DOC_CMD_EXAMPLE = !
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# no ipmc profile
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# do show running-config
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# do show running-config all-defaults
+NO_FORM_DOC_CMD_EXAMPLE = ...
+NO_FORM_DOC_CMD_EXAMPLE = !
+NO_FORM_DOC_CMD_EXAMPLE = no ipmc profile
+NO_FORM_DOC_CMD_EXAMPLE = !
+NO_FORM_DOC_CMD_EXAMPLE = ...
+
+FUNC_NAME = IPMC_LIB_ICLI_profile_global_conf
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+HELP = ##ICLI_HELP_IPMC
+HELP = Enable or disable (with the no-form) IPMC profile filtering globally
+
+CODE_BEGIN
+    ICLI_RC(IPMC_LIB_ICLI_profile_global_conf_set(session_id, true));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(IPMC_LIB_ICLI_profile_global_conf_set(session_id, false));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = show ipmc profile [name <word1-16>] [details]
+
+DOC_CMD_DESC    = This privileged execution command displays the settings for \
+                  entire IPMC profile ranges or for a specific IPMC profile range
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Check the existing IPMC profile range settings
+DOC_CMD_EXAMPLE = These examples give the outputs from the show ipmc profile range \
+                  command, with or without specifying a range identification.
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Audio ff3e::1234 ff3e::2234
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 226.1.2.3 226.2.2.3
+DOC_CMD_EXAMPLE = Switch(config)# ipmc profile EXAMPLE
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# description A profile
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Video permit
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# range Audio deny log
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# do show ipmc profile name EXAMPLE
+DOC_CMD_EXAMPLE = Profile Name     Range Name       Permit Log Start Address                           End Address
+DOC_CMD_EXAMPLE = ---------------- ---------------- ------ --- --------------------------------------- ---------------------------------------
+DOC_CMD_EXAMPLE = EXAMPLE          Video            Yes    No  226.1.2.3                               226.2.2.3
+DOC_CMD_EXAMPLE =                  Audio            No     Yes ff3e::1234                              ff3e::2234
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE = Switch(config-ipmc-profile)# do show ipmc profile name EXAMPLE details
+DOC_CMD_EXAMPLE = Profile Name     Range Name       Permit Log Start Address                           End Address
+DOC_CMD_EXAMPLE = ---------------- ---------------- ------ --- --------------------------------------- ---------------------------------------
+DOC_CMD_EXAMPLE = EXAMPLE          <Default>        No     No  224.0.0.0                               226.1.2.2
+DOC_CMD_EXAMPLE =                  Video            Yes    No  226.1.2.3                               226.2.2.3
+DOC_CMD_EXAMPLE =                  <Default>        No     No  226.2.2.4                               239.255.255.255
+DOC_CMD_EXAMPLE =                  <Default>        No     No  ff00::                                  ff3e::1233
+DOC_CMD_EXAMPLE =                  Audio            No     Yes ff3e::1234                              ff3e::2234
+DOC_CMD_EXAMPLE =                  <Default>        No     No  ff3e::2235                              ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+
+FUNC_NAME = IPMC_LIB_ICLI_profile_table_show
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = name
+CMD_VAR = has_details
+
+HELP =
+HELP = ##ICLI_HELP_IPMC
+HELP = ##ICLI_HELP_IPMC_PROFILE
+HELP = Show a particular profile's configuration
+HELP = ##ICLI_HELP_PROFILE_NAME
+HELP = Show a sorted list of all ranges of the profile(s) with unspecified ranges shown as '<Default>'
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_key_t profile_key;
+VARIABLE_END
+
+CODE_BEGIN
+    if (name) {
+        strncpy(profile_key.name, name, sizeof(profile_key.name));
+    }
+
+    ICLI_RC(IPMC_LIB_ICLI_profile_show(session_id, name ? &profile_key : nullptr, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SMB_IPMC)
+COMMAND = show ipmc range [<word1-16>]
+
+DOC_CMD_DESC    = This privileged execution command displays the settings for \
+                  entire IPMC profile ranges or for a specific IPMC profile range
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Check the existing IPMC profile range settings
+DOC_CMD_EXAMPLE = These examples give the outputs from the show ipmc profile range \
+                  command, with or without specifying a range name.
+DOC_CMD_EXAMPLE = Switch# configure terminal
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Audio ff3e::1234 ff3e::2234
+DOC_CMD_EXAMPLE = Switch(config)# ipmc range Video 226.1.2.3 226.2.2.3
+DOC_CMD_EXAMPLE = Switch(config)# exit
+DOC_CMD_EXAMPLE = Switch# show ipmc range
+DOC_CMD_EXAMPLE = Range Name       Start Address                           End Address
+DOC_CMD_EXAMPLE = ---------------- --------------------------------------- ---------------------------------------
+DOC_CMD_EXAMPLE = Audio            ff3e::1234                              ff3e::2234
+DOC_CMD_EXAMPLE = Video            226.1.2.3                               226.2.2.3
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE = Switch# show ipmc range Data
+DOC_CMD_EXAMPLE = % Range Data does not exist
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE = Switch# show ipmc range Video
+DOC_CMD_EXAMPLE = # show ipmc range Video
+DOC_CMD_EXAMPLE = Range Name       Start Address                           End Address
+DOC_CMD_EXAMPLE = ---------------- --------------------------------------- ---------------------------------------
+DOC_CMD_EXAMPLE = Video            226.1.2.3                               226.2.2.3
+
+FUNC_NAME = IPMC_LIB_ICLI_range_table_show
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = range_name
+
+HELP =
+HELP = ##ICLI_HELP_IPMC
+HELP = ##ICLI_HELP_IPMC_RANGE
+HELP = ##HELP_RANGE_NAME
+
+VARIABLE_BEGIN
+    vtss_appl_ipmc_lib_profile_range_key_t range_key;
+VARIABLE_END
+
+CODE_BEGIN
+    if (range_name) {
+        strncpy(range_key.name, range_name, sizeof(range_key.name));
+    }
+
+    ICLI_RC(IPMC_LIB_ICLI_range_show(session_id, range_name ? &range_key : nullptr));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show ipmc capabilities
+IF_FLAG =
+
+DOC_CMD_DESC    = Show IPMC module's capabilities
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Show keyword
+HELP = Show IPMC module's capabilities
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+     ICLI_RC(IPMC_LIB_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug ipmc thread {resume | suspend}
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_resume
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##ICLI_HELP_IPMC
+HELP = IPMC snooping thread manipulation
+HELP = Resume IPMC snooping thread
+HELP = Suspend IPMC snooping thread
+
+CODE_BEGIN
+    void ipmc_lib_debug_thread_state_change(bool resume);
+    ipmc_lib_debug_thread_state_change(has_resume);
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug ipmc dump
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##ICLI_HELP_IPMC
+HELP = Multicast Groups
+HELP = Dump
+
+CODE_BEGIN
+    void ipmc_lib_debug_src_dump(ipmc_lib_icli_pr_t pr);
+    ipmc_lib_debug_src_dump(icli_session_self_printf);
+CODE_END
+CMD_END
+

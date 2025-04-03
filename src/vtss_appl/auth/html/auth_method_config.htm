@@ -1,0 +1,487 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ 
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+ 
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>IP Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_auth_method_config.htm";
+
+// Global variables
+var authen_client_names = [];
+var authen_method_name = [];
+var authen_method_num = [];
+var authen_method_col; // Number of authentication method columns to show
+
+var author_client_names = [];
+var author_method_name = [];
+var author_method_num = [];
+
+var acct_client_names = [];
+var acct_method_name = [];
+var acct_method_num = [];
+
+function updateAuthenMethods(client) {
+    var cl, method, elem, grayout = false;
+
+    if (client === undefined) { // If called without a parameter we loop through all clients
+        for (cl = 0; cl < authen_client_names.length; cl++) {
+            if (authen_client_names[cl]) {
+                updateAuthenMethods(cl);
+            }
+        }
+    } else {
+        for (method = 0; method < authen_method_col; method++) { // Loop through all methods for a client
+            elem = document.getElementById("authen_method_" + client + "_" + method);
+            if (elem) {
+                elem.disabled = grayout;
+                if (!grayout) {
+                    grayout = (elem.options[elem.selectedIndex].value <= 1); // Gray-out remaining if 'no' or 'local' found
+                }
+            }
+        }
+    }
+}
+
+function addAuthenClientRow(ix, client, frag)
+{
+    var i;
+    var tr          = CreateStyledElement("tr", ix % 2 ? "config_odd" : "config_even");
+    var values      = client.split("|");
+    var client_name = values[0];
+    var client_num  = parseInt(values[1], 10);
+    var methods     = values[2].split(",");
+    var td;
+    var helper = function(cl) {
+        return function() {
+            updateAuthenMethods(cl);
+        };
+    };
+
+    authen_client_names[client_num] = client_name;
+    addTextCell(tr, client_name, "cl");
+    for (i = 0; i < authen_method_col; i++) {
+        td = addSelectCell(tr,
+                           authen_method_name,
+                           authen_method_num,
+                           parseInt(methods[i], 10),
+                           "cl",
+                           "authen_method_" + client_num + "_" + i);
+        td.onchange = helper(client_num);
+    }
+    frag.appendChild(tr);
+}
+
+function addAuthorClientRow(ix, client, frag)
+{
+    var tr          = CreateStyledElement("tr", ix % 2 ? "config_odd" : "config_even");
+    var values      = client.split("|");
+    var client_name = values[0];
+    var client_num  = parseInt(values[1], 10);
+    var method      = parseInt(values[2], 10);
+    var cmd_lvl     = parseInt(values[3], 10);
+    var cfg_cmd     = parseInt(values[4], 10);
+
+    author_client_names[client_num] = client_name;
+    addTextCell(tr, client_name, "cl");
+    addSelectCell(tr,
+                  author_method_name,
+                  author_method_num,
+                  method,
+                  "cl",
+                  "author_method_" + client_num);
+    addInputCell(tr, (cmd_lvl != -1) ? cmd_lvl : "", "c", "author_cmd_lvl_" + client_num, 2, 2);
+    addCheckBoxCell(tr, cfg_cmd, "c", "author_cfg_cmd_" + client_num);
+    frag.appendChild(tr);
+}
+
+function addAcctClientRow(ix, client, frag)
+{
+    var tr          = CreateStyledElement("tr", ix % 2 ? "config_odd" : "config_even");
+    var values      = client.split("|");
+    var client_name = values[0];
+    var client_num  = parseInt(values[1], 10);
+    var method      = parseInt(values[2], 10);
+    var cmd_lvl     = parseInt(values[3], 10);
+    var exec        = parseInt(values[4], 10);
+
+    acct_client_names[client_num] = client_name;
+    addTextCell(tr, client_name, "cl");
+    addSelectCell(tr,
+                  acct_method_name,
+                  acct_method_num,
+                  method,
+                  "cl",
+                  "acct_method_" + client_num);
+    addInputCell(tr, (cmd_lvl != -1) ? cmd_lvl : "", "c", "acct_cmd_lvl_" + client_num, 2, 2);
+    addCheckBoxCell(tr, exec, "c", "acct_exec_" + client_num);
+    frag.appendChild(tr);
+}
+
+/*
+ * Configuration format:
+ *
+ * <authen_data>!<author_data>!<acct_data>
+ *
+ * authen_data          :== <authen_clients>#<authen_method_name>#<authen_method_num>
+ *   authen_clients     :== <client 0>/<client 1>/...<client n>
+ *     client x         :== <client_name>|<client_num>|<methods>
+ *       client_name    :== "console" or "telnet" or "ssh" or "http"
+ *       client_num     :== 0..3 # the corresponding value for client_name
+ *       methods        :== <method 0>,<method 1>,...<method n> # List of configured methods. E.g {3,1,0} ~ {tacacs, local, no}
+ *         method x     :== 0..3 # the method value
+ *
+ *   authen_method_name :== <name 0>/<name 1>/...<name n>
+ *     name x           :== "no" or "local" or "radius" or "tacacs"
+ *
+ *   authen_method_num  :== <num 0>/<num 1>/...<num n>
+ *     num x            :== 0..3 # the corresponding value for authen_method_name
+ *
+ * author_data          :== <author_clients>#<author_method_name>#<author_method_num>
+ *   author_clients     :== <client 0>/<client 1>/...<client n>
+ *     client x         :== <client_name>|<client_num>|<method>|<cmd_lvl>|<cfg_cmd>
+ *       client_name    :== "console" or "telnet" or "ssh"
+ *       client_num     :== 0..2   # the corresponding value for client_name
+ *       method         :== 0 or 3 # "no" or "tacacs"
+ *       cmd_lvl        :== 0..15  # minimum command privilege level
+ *       cfg_cmd        :== 0..1   # also authorize configuration commands
+ *
+ *   author_method_name :== <name 0>/<name 1>/...<name n>
+ *     name x           :== "no" or "tacacs"
+ *
+ *   author_method_num  :== <num 0>/<num 1>/...<num n>
+ *     num x            :== 0 or 3 # the corresponding value for author_method_name
+ *
+ * acct_data            :== <acct_clients>#<acct_method_name>#<acct_method_num>
+ *   acct_clients       :== <client 0>/<client 1>/...<client n>
+ *     client x         :== <client_name>|<client_num>|<method>|<cmd_lvl>|<exec>
+ *       client_name    :== "console" or "telnet" or "ssh"
+ *       client_num     :== 0..2  * the corresponding value for client_name
+ *       method         :== 0 or 3 # "no" or "tacacs"
+ *       cmd_lvl        :== 0..15 or -1 # minimum command privilege level. Use -1 to disable command accounting
+ *       exec           :== 0..1  * Enable exec accounting
+ *
+ *   acct_method_name   :== <name 0>/<name 1>/...<name n>
+ *     name x           :== "no" or "tacacs"
+ *
+ *   acct_method_num    :== <num 0>/<num 1>/...<num n>
+ *     num x            :== 0 or 3 # the corresponding value for acct_method_name
+ *
+ */
+function processUpdate(req, ref) {
+    var authen_data, author_data, acct_data, clients, frag, tr, elem, i;
+    var values = req.responseText.split("!");
+
+    // --- Create Authentication Configuration ---
+    if (values[0]) {
+        authen_data = values[0].split("#");
+        if (authen_data.length === 3) {
+            clients            = authen_data[0].split("/");
+            authen_method_name = authen_data[1].split("/");
+            authen_method_num  = authen_data[2].split("/");
+            authen_method_col  = authen_method_name.length - 1;
+
+            // Create Authentication Table Header
+            frag = document.createDocumentFragment();
+            tr = document.createElement("tr");
+            addTextHeaderCell(tr, "Client", "cl");
+            addTextHeaderCell(tr, (authen_method_col > 1) ?  "Methods" : "Method", "cl", authen_method_col);
+            frag.appendChild(tr);
+            elem = document.getElementById("authen_thead");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+
+            // Create Authentication Table Body
+            frag = document.createDocumentFragment();
+            for (i = 0; i < clients.length; i++) {
+                addAuthenClientRow(i, clients[i], frag);
+            }
+            elem = document.getElementById("authen_tbody");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+            updateAuthenMethods();
+        } else {
+            alert("Invalid Authentication Data Length = " + authen_data.length);
+        }
+    } else {
+        alert("No Authentication Data!");
+    }
+
+    // --- Create Authorization Configuration ---
+    if (values[1]) {
+        author_data = values[1].split("#");
+        if (author_data.length === 3) {
+            clients            = author_data[0].split("/");
+            author_method_name = author_data[1].split("/");
+            author_method_num  = author_data[2].split("/");
+
+            // Create Authorization Table Header
+            frag = document.createDocumentFragment();
+            tr = document.createElement("tr");
+            addTextHeaderCell(tr, "Client", "cl");
+            addTextHeaderCell(tr, "Method", "cl");
+            addTextHeaderCell(tr, "Cmd Lvl", "cl");
+            addTextHeaderCell(tr, "Cfg Cmd", "cl");
+            frag.appendChild(tr);
+            elem = document.getElementById("author_thead");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+
+            // Create Authorization Table Body
+            frag = document.createDocumentFragment();
+            for (i = 0; i < clients.length; i++) {
+                addAuthorClientRow(i, clients[i], frag);
+            }
+            elem = document.getElementById("author_tbody");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+            SetVisible("author_config", true);
+        } else {
+            alert("Invalid Authorization Data Length = " + author_data.length);
+        }
+    }
+
+    // --- Create Accounting Configuration ---
+    if (values[2]) {
+        acct_data = values[2].split("#");
+        if (acct_data.length === 3) {
+            clients          = acct_data[0].split("/");
+            acct_method_name = acct_data[1].split("/");
+            acct_method_num  = acct_data[2].split("/");
+
+            // Create Accounting Table Header
+            frag = document.createDocumentFragment();
+            tr = document.createElement("tr");
+            addTextHeaderCell(tr, "Client", "cl");
+            addTextHeaderCell(tr, "Method", "cl");
+            addTextHeaderCell(tr, "Cmd Lvl", "cl");
+            addTextHeaderCell(tr, "Exec", "cl");
+            frag.appendChild(tr);
+            elem = document.getElementById("acct_thead");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+
+            // Create Accounting Table Body
+            frag = document.createDocumentFragment();
+            for (i = 0; i < clients.length; i++) {
+                addAcctClientRow(i, clients[i], frag);
+            }
+            elem = document.getElementById("acct_tbody");
+            clearChildNodes(elem);
+            elem.appendChild(frag);
+            SetVisible("acct_config", true);
+        } else {
+            alert("Invalid Accounting Data Length = " + acct_data.length);
+        }
+    }
+}
+
+function requestUpdate() {
+    loadXMLDoc("/config/auth_method_config", processUpdate, "");
+}
+
+function checkForm()
+{
+    var client, methods, method, elem, local_found, acct_cmd_lvl, acct_exec;
+
+    // --- Check Authentication Configuration ---
+    for (client = 0; client < authen_client_names.length; client++) {
+        if (authen_client_names[client]) {
+            methods = [];
+            for (method = 0; method < authen_method_col; method++) { // Get all methods for a client
+                elem = document.getElementById("authen_method_" + client + "_" + method);
+                if (elem) {
+                    methods[method] = elem.options[elem.selectedIndex].value;
+                }
+            }
+            if (methods[0] < 1) { // First method is set to 'no'
+                if (!confirm("Warning: " +
+                             "When setting first method for '" +
+                             authen_client_names[client] +
+                             "' to 'no', login via '" +
+                             authen_client_names[client] +
+                             "' is not possible.\n" +
+                             "Do you want to continue?")) {
+                    return false;
+                }
+            } else if (methods[0] > 1) { // First method is set to 'radius' or 'tacacs'. ('> 1' means '> local')
+                local_found = false;
+                for (method = 1; method < authen_method_col; method++) {
+                    if (methods[method] == 1) { // ('== 1' means '== local')
+                        local_found = true;
+                    }
+                }
+                if (!local_found) { // No fallback to local authentication
+                    if (!confirm("Warning: " +
+                                 "When setting first method for '" +
+                                 authen_client_names[client] + "' to other than 'local',\n" +
+                                 "you may lose '" +
+                                 authen_client_names[client] +
+                                 "' connectivity unless you set a later method for '" +
+                                 authen_client_names[client] +
+                                 "' to 'local'.\n" +
+                                 "Do you want to continue?")) {
+                        return false;
+                    }
+                }
+            }
+
+        }
+    }
+
+    // --- Check Authorization Configuration ---
+    for (client = 0; client < author_client_names.length; client++) {
+        if (author_client_names[client]) {
+            elem = document.getElementById("author_method_" + client);
+            if (!elem) {
+                alert("author_method_" + client + " not found!");
+                return false;
+            }
+
+            method = elem.options[elem.selectedIndex].value;
+            if (method < 1) { // Skip check if method is 'no'
+                continue;
+            }
+
+            if (!isWithinRange("author_cmd_lvl_" + client, 0, 15, "Cmd Lvl")) {
+                return false;
+            }
+        }
+    }
+
+    // --- Check Accounting Configuration ---
+    for (client = 0; client < acct_client_names.length; client++) {
+        if (acct_client_names[client]) {
+            elem = document.getElementById("acct_method_" + client);
+            if (!elem) {
+                alert("acct_method_" + client + " not found!");
+                return false;
+            }
+
+            method = elem.options[elem.selectedIndex].value;
+            if (method < 1) { // Skip check if method is 'no'
+                continue;
+            }
+
+            elem = document.getElementById("acct_exec_" + client);
+            if (!elem) {
+                alert("acct_exec_" + client + " not found!");
+                return false;
+            }
+            acct_exec = elem.checked;
+
+            elem = document.getElementById("acct_cmd_lvl_" + client);
+            if (!elem) {
+                alert("acct_cmd_lvl_" + client + " not found!");
+                return false;
+            }
+            acct_cmd_lvl = trimInput(elem).value;
+
+            if (acct_cmd_lvl.length) {
+                if (!isWithinRange("acct_cmd_lvl_" + client, 0, 15, "Cmd Lvl")) {
+                    return false;
+                }
+            } else if (!acct_exec) {
+                return GiveAlert("Please enable either Cmd Lvl or Exec", elem);
+            }
+        }
+    }
+
+    return true;
+}
+
+function resetForm(form)
+{
+    form.reset();
+    updateAuthenMethods();
+}
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<form name="authMethodConfigForm" method="POST" action="/config/auth_method_config" onsubmit="return checkForm();">
+
+<h1>Authentication Method Configuration</h1>
+
+<table summary="Authentication Configuration" class="config">
+ <thead id="authen_thead">
+ </thead>
+ <tbody id="authen_tbody">
+ </tbody>
+</table>
+
+<div id="author_config" style="display:none;"></br>
+<h1>Command Authorization Method Configuration</h1>
+
+<table summary="Authorization Configuration" class="config">
+ <thead id="author_thead">
+ </thead>
+ <tbody id="author_tbody">
+ </tbody>
+</table>
+</div>
+
+<div id="acct_config" style="display:none;"></br>
+<h1>Accounting Method Configuration</h1>
+
+<table summary="Accounting Configuration" class="config">
+ <thead id="acct_thead">
+ </thead>
+ <tbody id="acct_tbody">
+ </tbody>
+</table>
+</div>
+
+<p>
+<input type="submit" value="Save">
+<input type="button" value="Reset" onclick="resetForm(this.form);">
+</p>
+
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

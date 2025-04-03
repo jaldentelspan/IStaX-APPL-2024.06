@@ -1,0 +1,628 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<!--
+ Microchip is aware that some terminology used in this technical document is
+ antiquated and inappropriate. As a result of the complex nature of software
+ where seemingly simple changes have unpredictable, and often far-reaching
+ negative results on the software's functionality (requiring extensive retesting
+ and revalidation) we are unable to make the desired changes in all legacy
+ systems without compromising our product or our clients' products.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>PTP Clock's Port Data Set Configuration Page</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_ptp_ports_per_clock_config.htm";
+var delay_mechanism_method = Array();
+var aed_port_role = Array();
+var mcast_addr = Array();
+var port_role = Array("Disabled", "Master", "Passive", "Slave");
+var two_step_options = Array();
+var bool_array = Array("False", "True");
+var ptp_clock_config;
+var ptp_table_data;
+var global_clock_inst = 0;
+var port_data_set = Array();
+var ptp_profile;
+
+// This piece of code makes sure that a specific port can be selected
+// directly, when navigating from a hyperlink on a different page.
+var arg_idx = document.URL.indexOf('?');
+if(arg_idx != -1) {
+    var args = document.URL.substring(arg_idx+1, document.URL.length);
+    var tup = args.split('=');
+    if(tup.length == 2) {
+        if(tup[0] == 'clock_inst') {
+            global_clock_inst = parseInt(tup[1]);
+        }
+    }
+}
+
+function addRow(index, frag, values, ptp_profile) {
+    var tr1 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr2 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr3 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr4 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr5 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr6 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var per_port_params = values.split("/");
+    console.log(per_port_params);
+    var fld;
+    var offset;
+    addTextCell(tr1, per_port_params[0], "c");
+    addTextCell(tr1, per_port_params[1], "c");
+    addTextCell(tr1, per_port_params[2], "c");
+    addTextCell(tr1, per_port_params[3], "c");
+    if (ptp_profile != "AED 802.1AS") {
+        fld = addInputCell(tr1, per_port_params[4], "c", "anv_" + global_clock_inst + "_" + per_port_params[0], 2);
+        fld.setAttribute("maxLength", 2);
+        fld = addInputCell(tr1, per_port_params[5], "c", "ato_" + global_clock_inst + "_" + per_port_params[0], 2);
+        fld.setAttribute("maxLength", 2);
+    }
+    fld = addInputCell(tr1, per_port_params[6], "c", "syv_" + global_clock_inst + "_" + per_port_params[0], 2);
+    fld.setAttribute("maxLength", 3);
+    addSelectCell(tr1, delay_mechanism_method, delay_mechanism_method, per_port_params[7], "c","dlm_" + global_clock_inst + "_" + per_port_params[0]);
+
+    fld = addInputCell(tr1, per_port_params[8], "c", "mpr_" + global_clock_inst + "_" + per_port_params[0], 2);
+    fld.setAttribute("maxLength", 3);
+
+    fld = addInputCell(tr1, per_port_params[9], "c", "delay_assymetry_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr1, per_port_params[10], "c", "ingress_latency_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr1, per_port_params[11], "c", "egress_latency_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    addTextCell(tr1, per_port_params[12], "c");
+
+    addSelectCell(tr1, mcast_addr, mcast_addr, per_port_params[13], "c", "mcast_addr_" + global_clock_inst + "_" + per_port_params[0]);
+    if (ptp_profile != "AED 802.1AS") {
+        addSelectCell(tr1, bool_array, bool_array, per_port_params[14], "c", "master_only_" + global_clock_inst + "_" + per_port_params[0]);
+        fld = addInputCell(tr1, per_port_params[15], "c", "local_prio_" + global_clock_inst + "_" + per_port_params[0]);
+        fld.setAttribute("maxLength", 3);
+        fld.setAttribute("size", 3);
+    }
+    addSelectCell(tr1, two_step_options, two_step_options, per_port_params[16], "c", "2_step_flag_" + global_clock_inst + "_" + per_port_params[0]);
+    ptp_profile != "AED 802.1AS" ? addSelectCell(tr1, bool_array, bool_array, per_port_params[17], "c", "not_mstr_" + global_clock_inst + "_" + per_port_params[0]) : 0;
+    addTextCell(tr2, per_port_params[0], "c");
+    addTextCell(tr2, per_port_params[19], "c");
+    addTextCell(tr2, per_port_params[20], "c");
+    addTextCell(tr2, per_port_params[21], "c");
+    addTextCell(tr2, per_port_params[22], "c");
+    addTextCell(tr2, per_port_params[23], "c");
+    addTextCell(tr2, per_port_params[24], "c");
+    addTextCell(tr2, per_port_params[25], "c");
+    addTextCell(tr2, per_port_params[26], "c");
+    addTextCell(tr2, per_port_params[27], "c");
+    addTextCell(tr2, per_port_params[28], "c");
+    addSelectCell(tr2, bool_array, bool_array, per_port_params[29], "c", "as_2020_" + global_clock_inst + "_" + per_port_params[0]);
+    fld = addInputCell(tr2, per_port_params[30], "c", "meanLinkDelayThresh_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr2, per_port_params[31], "c", "syncReceiptTimeout_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld = addInputCell(tr2, per_port_params[32], "c", "allowedLostResponses_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld = addInputCell(tr2, per_port_params[33], "c", "allowedFaults_" + global_clock_inst + "_" + per_port_params[0], 7);
+
+    addTextCell(tr3, per_port_params[0], "c");
+    addCheckBoxCell(tr3, parseInt(per_port_params[34]), "c", "useMgmtSyncIntrvl_" + global_clock_inst + "_" + per_port_params[0]);
+    fld = addInputCell(tr3, per_port_params[35], "c", "MgmtSyncIntrvl_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 2);
+    addCheckBoxCell(tr3, parseInt(per_port_params[36]), "c", "useMgmtAnnIntrvl_" + global_clock_inst + "_" + per_port_params[0]);
+    fld = addInputCell(tr3, per_port_params[37], "c", "MgmtAnnIntrvl_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 2);
+    addCheckBoxCell(tr3, parseInt(per_port_params[38]), "c", "useMgmtPdlyIntrvl_" + global_clock_inst + "_" + per_port_params[0]);
+    fld = addInputCell(tr3, per_port_params[39], "c", "MgmtPdlyIntrvl_" + global_clock_inst + "_" + per_port_params[0], 7);
+    addCheckBoxCell(tr3, parseInt(per_port_params[40]), "c", "uMSCNRR_" + global_clock_inst + "_" + per_port_params[0]);
+    addSelectCell(tr3, bool_array, bool_array, per_port_params[41], "c", "MSCNRR_" + global_clock_inst + "_" + per_port_params[0]);
+    addCheckBoxCell(tr3, parseInt(per_port_params[42]), "c", "uMSCMLD_" + global_clock_inst + "_" + per_port_params[0]);
+    addSelectCell(tr3, bool_array, bool_array, per_port_params[43], "c", "MSCMLD_" + global_clock_inst + "_" + per_port_params[0]);
+    fld.setAttribute("maxLength", 2);
+    addTextCell(tr4, per_port_params[0], "c");
+    addCheckBoxCell(tr4, parseInt(per_port_params[44]), "c", "useMgmtGptpCapIntrvl_" + global_clock_inst + "_" + per_port_params[0]);
+    fld = addInputCell(tr4, per_port_params[45], "c", "MgmtGptpCapIntrvl_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr4, per_port_params[46], "c", "GptpCapableReceiptTimeout_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr4, per_port_params[47], "c", "initialLogGptpCapableMessageInterval__" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+
+    offset = 48;
+    // Port MLDT    DA  iLPDRv  uMSLPDRv    MSLPDRv iCNRR   uMSCNRR MSCNRR  iCMLD   uMSCMLD MSCMLD  cmlds_ALR   cmlds_AFs
+    addTextCell(tr5, per_port_params[0], "c");
+    
+    fld = addInputCell(tr5, per_port_params[offset++], "c", "MLDT_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+
+    fld = addInputCell(tr5, per_port_params[offset++], "c", "DA_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    
+    addTextCell(tr5, per_port_params[offset++], "c");
+    addCheckBoxCell(tr5, parseInt(per_port_params[offset++]), "c", "uMSLPDRv_" + global_clock_inst + "_" + per_port_params[0]);
+    fld = addInputCell(tr5, per_port_params[offset++], "c", "MSLPDRv_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7); 
+
+    addTextCell(tr5, per_port_params[offset++], "c");
+    addCheckBoxCell(tr5, parseInt(per_port_params[offset++]), "c", "cm_uMSCNRR_" + global_clock_inst + "_" + per_port_params[0]);
+    addSelectCell(tr5, bool_array, bool_array, per_port_params[offset++], "c", "cm_MSCNRR_" + global_clock_inst + "_" + per_port_params[0]);
+
+    addTextCell(tr5, per_port_params[offset++], "c");
+    addCheckBoxCell(tr5, parseInt(per_port_params[offset++]), "c", "cm_uMSCMLD_" + global_clock_inst + "_" + per_port_params[0]);
+    addSelectCell(tr5, bool_array, bool_array, per_port_params[offset++], "c", "cm_MSCMLD_" + global_clock_inst + "_" + per_port_params[0]);
+
+    fld = addInputCell(tr5, per_port_params[offset++], "c", "cm_ALR_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+
+    fld = addInputCell(tr5, per_port_params[offset++], "c", "cm_AFs_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+
+    // 802.1as AED specific
+    // Port AED-port-role isMeasDelay As-Capable Neighbor-rate-ratio CSyv SyncTimeInterv CMPR Version-number NPDT SRT ALR AFs
+    addTextCell(tr6, per_port_params[0], "c");
+    addSelectCell(tr6, aed_port_role, aed_port_role, per_port_params[19], "c","aed_role_" + global_clock_inst + "_" + per_port_params[0]);
+    addTextCell(tr6, per_port_params[20], "c");
+    addTextCell(tr6, per_port_params[21], "c");
+    addTextCell(tr6, per_port_params[22], "c");
+    addTextCell(tr6, per_port_params[23], "c");
+    addTextCell(tr6, per_port_params[24], "c");
+    addTextCell(tr6, per_port_params[25], "c");
+    addTextCell(tr6, per_port_params[27], "c");
+    fld = addInputCell(tr6, per_port_params[28], "c", "meanLinkDelayThresh_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr6, per_port_params[29], "c", "syncReceiptTimeout_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld = addInputCell(tr6, per_port_params[30], "c", "allowedLostResponses_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld = addInputCell(tr6, per_port_params[31], "c", "allowedFaults_" + global_clock_inst + "_" + per_port_params[0], 7);
+    addTextCell(tr6, per_port_params[32], "c");
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr6, per_port_params[33], "c", "operLogPdelayReqInterval_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr6, per_port_params[34], "c", "initialLogSyncInterval_" + global_clock_inst + "_" + per_port_params[0], 7);
+    fld.setAttribute("maxLength", 7);
+    fld = addInputCell(tr6, per_port_params[35], "c", "operLogSyncInterval_" + global_clock_inst + "_" + per_port_params[0], 7);
+
+    frag[0].appendChild(tr1);       // Add row to fragment
+    frag[1].appendChild(tr2);       // Add row to fragment
+    frag[2].appendChild(tr3);       // Add row to fragment
+    frag[3].appendChild(tr4);       // Add row to fragment for GptpCap params
+    frag[4].appendChild(tr5);       // Add row to fragment for cmlds params
+    frag[5].appendChild(tr6);       // Add row to fragment for 802.1as-AED
+
+}
+
+function processUpdate(req, ref)
+{
+    if (redirectOnError(req))
+        return;
+    if (req.responseText) {
+        var form_var = document.getElementById("ptp_clock_ports_inst");
+        addHiddenParam(form_var, "clock_inst", global_clock_inst);
+
+        ptp_table_data = req.responseText.split("^");
+        console.log(ptp_table_data);
+        delay_mechanism_method = ptp_table_data[1].split("/");
+        mcast_addr = ptp_table_data[2].split("/");
+        two_step_options = ptp_table_data[3].split("/");
+        aed_port_role = ptp_table_data[4].split("/");
+        ptp_clock_config = ptp_table_data[5].split("#");
+        console.log(ptp_clock_config);
+        ptp_profile     = ptp_table_data[6];
+        {
+           // Port Data Set
+           var frag = [];
+           frag[0]= document.createDocumentFragment();
+           frag[1] = document.createDocumentFragment();
+           frag[2] = document.createDocumentFragment();
+           frag[3] = document.createDocumentFragment();
+           frag[4] = document.createDocumentFragment();
+           frag[5] = document.createDocumentFragment();
+           var fld;
+           var elem;
+           port_data_set = ptp_clock_config[1].split("$");
+           for(var index = 1; index < port_data_set.length; index++ ) {
+              addRow(index, frag, port_data_set[index], ptp_profile);
+           }
+           elem = document.getElementById("PortDataset_tbody");
+           clearChildNodes(elem);
+           elem.appendChild(frag[0]);
+           if (ptp_profile == "802.1AS") {
+               document.getElementById("PortDatasetDiv").style.visibility = "visible";
+               document.getElementById("PortDatasetDiv").style.height = "auto";
+               document.getElementById("PortDatasetDiv").style.overflow = "visible";
+               elem = document.getElementById("PortDataset_tbody_2");
+               clearChildNodes(elem);
+               elem.appendChild(frag[1]);
+               elem = document.getElementById("PortDataset_tbody_3");
+               clearChildNodes(elem);
+               elem.appendChild(frag[2]);
+               elem = document.getElementById("PortDataset_tbody_4");
+               clearChildNodes(elem);
+               elem.appendChild(frag[3]);
+               elem = document.getElementById("PortDataset_tbody_5");
+               clearChildNodes(elem);
+               elem.appendChild(frag[4]);
+           }
+           if (ptp_profile == "AED 802.1AS") {
+               // Disable non-aed elements from PortDataset_tbody
+               document.getElementById("anv").style.display = "none";
+               document.getElementById("ato").style.display = "none";
+               document.getElementById("not-slve").style.display = "none";
+               document.getElementById("local-prio").style.display = "none";
+               document.getElementById("not-mstr").style.display = "none";
+               document.getElementById("AEDPortDataset").style.visibility = "visible";
+               document.getElementById("AEDPortDataset").style.height = "auto";
+               document.getElementById("AEDPortDataset").style.overflow = "visible";
+               elem = document.getElementById("PortDataset_tbody_6");
+               clearChildNodes(elem);
+               elem.appendChild(frag[5]);
+           }
+        }
+    } else {
+        SpomHandleError();
+    }
+}
+
+function requestUpdate() {
+    if(SpomNavigationLoading())
+        return;                 // Bail out, navigation will trigger update
+    loadXMLDoc(SpomAddSidArg("/config/ptp_clock_ports_config?clock_inst=" + global_clock_inst), processUpdate, null);
+
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function checkForm(form)
+{
+var chk_error = false;
+    for(var index = 1; index < port_data_set.length; index++ ) {
+        var per_port_params = port_data_set[index].split("/");
+        if (!isP8021ASWithinRange("MgmtSyncIntrvl_" + global_clock_inst + "_" + per_port_params[0], -7, 4, "sync Interval")) {
+            return false;
+        }
+        if (!isP8021ASWithinRange("MgmtAnnIntrvl_" + global_clock_inst + "_" + per_port_params[0], -3, 4, "Announce Interval")) {
+            return false;
+        }
+        if (!isP8021ASWithinRange("MgmtPdlyIntrvl_" + global_clock_inst + "_" + per_port_params[0], -7, 5, "Peer delay request Interval")) {
+            return false;
+        }
+        if (!isP8021ASWithinRange("MgmtGptpCapIntrvl_" + global_clock_inst + "_" + per_port_params[0], -7, 4, "Gptp capable tlv signalling packet Interval")) {
+             return false;
+        }
+        if (ptp_profile != "AED 802.1AS") {
+            if (ptp_profile == "802.1AS") {
+                var anv = document.getElementById("anv_" + global_clock_inst + "_" + per_port_params[0]);
+                // For 802.1as special values 126 and 127 should be included (802.1as-2020 section 10.6.4.3.8)
+                if(!isInt(anv.value) || ((anv.value < -3 || anv.value > 4) && anv.value != 126 && anv.value != 127)) {
+                    GiveAlert("Announce Interval must be an integer value between -3 and 4 or one of the special values 126 or 127");
+                    return false;
+                }
+            } else {
+                if (!isWithinRange("anv_" + global_clock_inst + "_" + per_port_params[0], -3, 4, "Announce Interval")) {
+                    return false;
+                }
+            }
+            if (!isWithinRange("ato_" + global_clock_inst + "_" + per_port_params[0], 1, 10, "Announce Receive Timeout")) {
+                return false;
+            }
+            if (!isWithinRange("local_prio_" + global_clock_inst + "_" + per_port_params[0], 0, 255, "Local Prio")) {
+                return false;
+            }
+        }
+
+        if (ptp_profile == "802.1AS" || ptp_profile == "AED 802.1AS") {
+            var syv = document.getElementById("syv_" + global_clock_inst + "_" + per_port_params[0]);
+            // For 802.1as + AED special values 126 and 127 should be included (802.1as-2020 section 10.6.4.3.7)
+            if(!isInt(syv.value) || ((syv.value < -7 || syv.value > 4) && syv.value != 126 && syv.value != 127)) {
+                GiveAlert("Sync Interval must be an integer value between -7 and 4 or one of the special values 126 or 127");
+                return false;
+            }
+        } else {
+            if (!isWithinRange("syv_" + global_clock_inst + "_" + per_port_params[0], -7, 4, "Sync Interval")) {
+                return false;
+            }
+            if (!isWithinRange("syv_" + global_clock_inst + "_" + per_port_params[0], -7, 4, "Sync Interval")) {
+                return false;
+            }
+        }
+        if (ptp_profile == "802.1AS" || ptp_profile == "AED 802.1AS") {
+            var mpr = document.getElementById("mpr_" + global_clock_inst + "_" + per_port_params[0]);
+            // For 802.1as + AED special values 126 and 127 should be included (802.1as-2020 section 10.6.4.3.6)
+            if(!isInt(mpr.value) || ((mpr.value < -7 || mpr.value > 5) && mpr.value != 126 && mpr.value != 127)) {
+                GiveAlert("Pdelay Interval must be an integer value between -7 and 5 or one of the special values 126 or 127");
+                return false;
+            }
+        } else {
+            if (!isWithinRange("mpr_" + global_clock_inst + "_" + per_port_params[0], -7, 5, "Minimum Delay Required Interval")) {
+                return false;
+            }
+            if (!isWithinRange("mpr_" + global_clock_inst + "_" + per_port_params[0], -7, 5, "Minimum Delay Required Interval")) {
+                return false;
+            }
+        }
+        var delay_asy = document.getElementById("delay_assymetry_"+ global_clock_inst + "_" + per_port_params[0]);
+        if (delay_asy.value) { 
+            if (delay_asy.value != per_port_params[9]) {
+                // Check for Delay Assymetry
+                if(!isWithinRange("delay_assymetry_"+ global_clock_inst + "_" + per_port_params[0], -100000, 100000, "Delay Assymetry")) {
+                    return false;
+                }
+            }
+        }
+
+        var ing_laten = document.getElementById("ingress_latency_"+ global_clock_inst + "_" + per_port_params[0]);
+        if (ing_laten.value) {
+            if (ing_laten.value != per_port_params[10]) {
+                // Check for Ingress Latency
+                if(!isWithinRange("ingress_latency_"+ global_clock_inst + "_" + per_port_params[0], -100000, 100000, "Ingress Latency")) {
+                    return false;
+                }
+           }
+        }
+
+        var eg_laten = document.getElementById("egress_latency_"+ global_clock_inst + "_" + per_port_params[0]);
+        if (eg_laten.value) {
+            if (eg_laten.value != per_port_params[11]) {
+                // Check for Egress Latency
+                if(!isWithinRange("egress_latency_"+ global_clock_inst + "_" + per_port_params[0], -100000, 100000, "Egress Latency")) {
+                    return false;
+                }
+            }
+        }
+        if (ptp_profile == "802.1AS" || ptp_profile == "AED 802.1AS") {
+            if (!isWithinRange("allowedFaults_" + global_clock_inst + "_" + per_port_params[0], 1, 255, "AFs")) {
+                return false;
+            }
+            if (!isP8021ASWithinRange("GptpCapableReceiptTimeout_" + global_clock_inst + "_" + per_port_params[0], 1, 255, "GptpCapableReceiptTimeout")) {
+                return false;
+            }
+        }
+        if (ptp_profile == "AED 802.1AS") {
+            var deviceType = localStorage.getItem("deviceType");
+            var aedRole = document.getElementById("aed_role_" + global_clock_inst + "_" + per_port_params[0]);
+            if (deviceType == "AED-GM" && aedRole.value == "AED-Slave") {
+                alert("AED port role can only be master for a Grandmaster device");
+                return false;
+            }
+            if(!isWithinRange("operLogPdelayReqInterval_"+ global_clock_inst + "_" + per_port_params[0], 0, 3, "operLogPdelayReqInterval")) {
+                return false;
+            }
+            if(!isWithinRange("initialLogSyncInterval_"+ global_clock_inst + "_" + per_port_params[0], -5, -3, "initialLogSyncInterval")) {
+                return false;
+            }
+            if(!isWithinRange("operLogSyncInterval_"+ global_clock_inst + "_" + per_port_params[0], -3, 0, "operLogSyncInterval")) {
+                return false;
+            }
+        }
+        if (ptp_profile == "802.1AS") {
+            if (!isWithinRange("MLDT_" + global_clock_inst + "_" + per_port_params[0], 0, 4000000000, "MLDT")) {
+                return false;
+            }
+            // Check for Delay Assymetry
+            if(!isWithinRange("DA_"+ global_clock_inst + "_" + per_port_params[0], -100000, 100000, "DA")) {
+                return false;
+            }
+            if (!isWithinRange("MSLPDRv_" + global_clock_inst + "_" + per_port_params[0], -7, 5, "MSLPDRv")) {
+                return false;
+            }
+            if (!isWithinRange("cm_ALR_" + global_clock_inst + "_" + per_port_params[0], 0, 10, "cm_ALR")) {
+                return false;
+            }
+            if (!isWithinRange("cm_AFs_" + global_clock_inst + "_" + per_port_params[0], 1, 255, "cm_AFs")) {
+                return false;
+            }
+        }
+    }
+    return true;                // Feed the chickens and go home
+}
+
+function resetForm(form)
+{
+    form.reset();
+    updateImage();
+}
+
+
+</script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+<form  id= "ptp_clock_ports_inst"  method="POST" action="/config/ptp_clock_ports_config" onsubmit = "return checkForm(this);">
+
+<h1>PTP Clock's Port Data Set Configuration <span id="display_sid"></span></h1>
+<table summary="Port DataSet (part 1)" class="config">
+  <thead>
+  <tr>
+   <th>Port</th>
+   <th>Stat</th>
+   <th>MDR</th>
+   <th>PeerMeanPathDel</th>
+   <th id="anv">Anv</th>
+   <th id="ato">ATo</th>
+   <th>Syv</th>
+   <th>Dlm</th>
+   <th>MPR</th>
+   <th>Delay Asymmetry</th>
+   <th>Ingress Latency</th>
+   <th>Egress Latency</th>
+   <th>Version</th>
+   <th>Mcast Addr</th>
+   <th id="not-slve">Not Slave</th>
+   <th id="local-prio">Local Prio</th>
+   <th>2 Step Flag</th>
+   <th id="not-mstr">Not Master</th>
+  </tr>
+ </thead>
+ <tbody id="PortDataset_tbody">
+ </tbody>
+</table>
+
+<div id="PortDatasetDiv" style="visibility:hidden;height:0px;overflow:hidden;">
+<h1>802.1AS Port Data Set Configuration </h1>
+<table summary="Port DataSet (part 2)" class="config">
+ <thead class = "has_ptp_1as">
+  <tr>
+   <th>Port</th>
+   <th>Port Role</th>
+   <th>IsMeasDelay</th>
+   <th>As Capable</th>
+   <th>Neighbor rate ratio</th>
+   <th>CAnv</th>
+   <th>CSyv</th>
+   <th>SyncTimeIntrv</th>
+   <th>CMPR</th>
+   <th>AMTE</th>
+   <th>Version Number</th>
+   <th>802.1as 2020</th>
+   <th>NPDT</th>
+   <th>SRT</th>
+   <th>ALR</th>
+   <th>AFs</th>
+  </tr>
+ </thead>
+ <tbody id="PortDataset_tbody_2">
+ </tbody>
+</table>
+
+<br>
+
+<table summary="Port DataSet (part 3)" class="config">
+ <thead class = "has_ptp_1as">
+  <tr>
+   <th>Port</th>
+   <th>useMgmtSync</th>
+   <th>SyncIntrvl</th>
+   <th>useMgmtAnnounce</th>
+   <th>AnnounceIntrvl</th>
+   <th>useMgmtPdelay</th>
+   <th>PdelayIntrvl</th>
+   <th>uMSCNRR</th>
+   <th>MSCNRR</th>
+   <th>uMSCMLD</th>
+   <th>MSCMLD</th>
+  </tr>
+ </thead>
+ <tbody id="PortDataset_tbody_3">
+ </tbody>
+</table>
+
+<br>
+
+<table summary="Port DataSet (part 4)" class="config">
+ <thead class = "has_ptp_1as">
+  <tr>
+   <th>Port</th>
+   <th>useMgmtGptpCapIntrvl</th>
+   <th>MgmtGptpCapIntrvl</th>
+   <th>GptpCapableReceiptTimeout</th>
+   <th>initialLogGptpCapableMessageInterval</th>
+  </tr>
+ </thead>
+ <tbody id="PortDataset_tbody_4">
+ </tbody>
+</table>
+
+<h1>802.1AS Common Link Delay Services Specific Port Data Configuration </h1>
+<table summary="802_1as port cmlds" class="config">
+ <thead class = "has_ptp_1as">
+  <tr>
+  <th>Port</th>
+  <th>MLDT</th>
+  <th>DA</th>
+  <th>iLPDRv</th>
+  <th>uMSLPDRv</th>
+  <th>MSLPDRv</th>
+  <th>iCNRR</th>
+  <th>cm_uMSCNRR</th>
+  <th>cm_MSCNRR</th>
+  <th>iCMLD</th>
+  <th>cm_uMSCMLD</th>
+  <th>cm_MSCMLD</th>
+  <th>cm_ALR</th>
+  <th>cm_AFs</th>
+  </tr>
+ </thead>
+ <tbody id="PortDataset_tbody_5">
+ </tbody>
+</table>
+
+</div>
+
+<div id="AEDPortDataset" style="visibility:hidden;height:0px;overflow:hidden;">
+    <h1>802.1AS AED Port Data Set Configuration </h1>
+    <table summary="AED" class="config">
+     <thead class = "has_ptp_1as">
+      <tr>
+       <th>Port</th>
+       <th>AED port role</th>
+       <th>IsMeasDelay</th>
+       <th>As Capable</th>
+       <th>Neighbor rate ratio</th>
+       <th>CSyv</th>
+       <th>SyncTimeIntrv</th>
+       <th>CMPR</th>
+       <th>Version Number</th>
+       <th>NPDT</th>
+       <th>SRT</th>
+       <th>ALR</th>
+       <th>AFs</th>
+       <th>initPdelayReq</th>
+       <th>operPdelayReq</th>
+       <th>initSync</th>
+       <th>operSync</th>
+      </tr>
+     </thead>
+     <tbody id="PortDataset_tbody_6">
+     </tbody>
+    </table>
+</div>
+
+<p>
+  <input type="hidden" id="submit_sid" name="sid">
+  <input type="submit" value="Save">
+  <input type="reset"  value="Reset" onclick="resetForm(this.form);" >
+</p>
+</form>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

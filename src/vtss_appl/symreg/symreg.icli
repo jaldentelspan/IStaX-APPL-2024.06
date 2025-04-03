@@ -1,0 +1,280 @@
+#
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_ICLI)
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "symreg_api.h"
+#include "microchip/ethernet/switch/api.h"
+#include "vtss_api_if_api.h"
+#include "misc_api.h"
+#include "misc_icli_util.h"
+INCLUDE_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+!==============================================================================
+FUNCTION_BEGIN
+
+typedef enum {
+    READ,
+    WRITE,
+    QUERY
+} symreg_func_t;
+
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_SYMREG
+
+extern volatile uint32_t *base_mem;
+
+/******************************************************************************/
+// SYMREG_ICLI_regs_print()
+/******************************************************************************/
+static mesa_rc SYMREG_ICLI_regs_print(u32 session_id, symreg_func_t func, char *pattern, u32 value)
+{
+    mesa_rc        rc, rc2;
+    void           *handle;
+    u32            max_width, reg_cnt, addr, the_offset, chip_cnt;
+    BOOL           next = FALSE;
+    char           *name = NULL;
+    mesa_chip_no_t chip_selection, chip_no_min, chip_no_max;
+
+    if (func == QUERY) {
+        // Only print the registers once when not really accessing the chip
+        chip_cnt       = 1;
+        chip_selection = 0;
+    } else {
+        // Get the chip number that the user wants to read
+        if ((rc = misc_chip_no_get(&chip_selection)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to get current chip selection (error = %s)\n", error_txt(rc));
+            return rc;
+        }
+
+        // Get the number of chips making up this target.
+        chip_cnt = vtss_api_if_chip_count();
+    }
+
+    if (chip_selection == VTSS_CHIP_NO_ALL) {
+        chip_no_min = 0;
+        chip_no_max = chip_cnt - 1;
+    } else if (chip_selection >= chip_cnt) {
+        ICLI_PRINTF("%% Invalid chip number selected (%u). Only %u chips supported\n", chip_selection, chip_cnt);
+        return VTSS_RC_ERROR;
+    } else {
+        chip_no_min = chip_no_max = chip_selection;
+    }
+
+    if ((rc = symreg_query_init(&handle, pattern, &max_width, &reg_cnt)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return rc;
+    }
+
+    if ((name = (char *)VTSS_MALLOC(max_width + 1)) == NULL) {
+        ICLI_PRINTF("%% Out of memory while attempting to allocate %u bytes\n", max_width + 1);
+        rc = VTSS_RC_ERROR;
+        goto do_exit;
+    }
+
+    while ((rc = symreg_query_next(handle, name, &addr, &the_offset, next)) == VTSS_RC_OK) {
+        // Compute the address to provide to mesa_reg_read/write().
+        // These functions need the 32-bit address offset relative to the
+        // beginning of the switch core base address (VTSS_IO_ORIGIN1_OFFSET).
+        // This is what is presented in #the_offset.
+        // The functions are luckily able to access CPU-domain registers and
+        // are also dual-chip aware.
+        // Both #the_offset and #addr are byte addresses (always jumps in steps of 4),
+        // but the mesa_reg_read/write() functions expect 32-bit addresses, hence the
+        // division by 4 (right-shift by 2).
+        u32            base_mem_as_u32 = (u32)(u64)base_mem;
+        u32            offset = the_offset >> 2, v = 0;
+        int            j;
+        mesa_chip_no_t chip_no;
+
+        for (chip_no = chip_no_min; chip_no <= chip_no_max; chip_no++) {
+            if (func == READ) {
+                rc = mesa_reg_read(NULL, chip_no, offset, &v);
+            } else if (func == WRITE) {
+                rc = mesa_reg_write(NULL, chip_no, offset, value);
+                v  = value;
+            } else {
+                rc = VTSS_RC_OK;
+            }
+
+            if (rc != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Failed to access register %s at chip #%d's address 0x%08x (which is offset = 0x%08x)\n", name, chip_no, addr, offset);
+                goto do_exit;
+            }
+
+            if (!next) {
+                next = TRUE;
+
+                if (func == QUERY) {
+                    ICLI_PRINTF("UIO virtual base-address = 0x%08x\n", base_mem_as_u32);
+                    ICLI_PRINTF("%-*s %-10s %-10s %-10s %s\n", max_width, "", "Virt. addr", "AHB addr", "CSR addr", "CSR addr/4");
+                } else {
+                    ICLI_PRINTF("%s%-*s %-10s %-10s 31     24 23     16 15      8 7       0\n", chip_cnt > 1 ? "Chip " : "", max_width, "Register", "Value", "Decimal");
+                }
+            }
+
+            if (func == QUERY) {
+                ICLI_PRINTF("%-*s 0x%08x 0x%08x 0x%08x 0x%08x\n", max_width, name, base_mem_as_u32 + the_offset, addr, the_offset, offset);
+            } else {
+                if (chip_cnt > 1) {
+                   ICLI_PRINTF("%-4u ", chip_no);
+                }
+
+                ICLI_PRINTF("%-*s 0x%08x %10u ", max_width, name, v, v);
+                for (j = 31; j >= 0; j--) {
+                    ICLI_PRINTF("%d%s", v & (1 << j) ? 1 : 0, j == 0 ? "\n" : (j % 4) ? "" : ".");
+                }
+            }
+        }
+    }
+
+    if (rc != SYMREG_RC_NO_MORE_REGS) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        goto do_exit;
+    }
+
+    ICLI_PRINTF("%u match%s found\n", reg_cnt * chip_cnt, reg_cnt * chip_cnt != 1 ? "es" : "");
+    rc = VTSS_RC_OK;
+
+do_exit:
+    if (name) {
+        VTSS_FREE(name);
+    }
+
+    if ((rc2 = symreg_query_uninit(handle)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc2));
+    }
+
+    return rc;
+}
+
+FUNCTION_END
+
+HELP_REGISTER_PATTERN = Register pattern on the form 'target[t]:reggrp[g]:reg[r]', where\n\
+     'target' is the name of the target (e.g. dev).\n\
+     'reggrp' is the name of the register group.\n\
+     'reg'    is the name of the register.\n\
+     t        is a list of target replications if applicable.\n\
+     g        is a list of register group replications if applicable.\n\
+     r        is a list of register replications if applicable.\n\
+     If a given replication (t, g, r) is omitted, all applicable replications will be accessed.\n\
+     Both 'target', 'reggrp' and 'reg' may be omitted, which corresponds to wildcarding that part\n\
+     of the name. Matches are exact, but wildcards ('*', '?') are allowed.
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG         =
+COMMAND         = debug sym read <word128>
+DOC_CMD_DESC    = Read one/many switch register(s)
+DOC_CMD_DEFAULT = None
+DOC_CMD_EXAMPLE = Read CHIP_ID register
+DOC_CMD_EXAMPLE = # debug sym read devcpu_gcb:chip_regs:chip_id
+DOC_CMD_EXAMPLE = Read CHIP_ID register without caring about target/reggrp
+DOC_CMD_EXAMPLE = # debug sym read ::chip_id
+FUNC_NAME       = symreg_read_icli
+FUNC_REUSE      =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+! Allow input after the <word128>. Useful when first writing a register and then reading it with almost the same command (LOOSELY)
+! Also allow the "include" keyword afterwards to grep for something
+PROPERTY        = ICLI_CMD_PROP_LOOSELY | ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+MODE_VAR        =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = pattern
+HELP            =
+HELP            =
+HELP            = Read register(s)
+HELP            = ##HELP_REGISTER_PATTERN
+CODE_BEGIN
+    if (SYMREG_ICLI_regs_print(session_id, READ, pattern, 0) != VTSS_RC_OK) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug sym write <word128> <0-0xffffffff>
+DOC_CMD_DESC    = Write one/many switch register
+DOC_CMD_DEFAULT = None
+FUNC_NAME       = symreg_write_icli
+FUNC_REUSE      =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        =
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+MODE_VAR        =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = pattern
+CMD_VAR         = value
+HELP            =
+HELP            =
+HELP            = Write register(s)
+HELP            = ##HELP_REGISTER_PATTERN
+HELP            = Value to be written to register
+CODE_BEGIN
+    if (SYMREG_ICLI_regs_print(session_id, WRITE, pattern, value) != VTSS_RC_OK) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG         =
+COMMAND         = debug sym query <word128>
+DOC_CMD_DESC    = Display the matched registers
+DOC_CMD_DEFAULT = None
+DOC_CMD_USAGE   = Use this command to display matched registers
+FUNC_NAME       = symreg_query_icli
+FUNC_REUSE      =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        =
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+MODE_VAR        =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = pattern
+HELP            =
+HELP            =
+HELP            = Query register(s) (no chip read/write, only print of matching names and addresses)
+HELP            = ##HELP_REGISTER_PATTERN
+CODE_BEGIN
+    if (SYMREG_ICLI_regs_print(session_id, QUERY, pattern, 0) != VTSS_RC_OK) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+

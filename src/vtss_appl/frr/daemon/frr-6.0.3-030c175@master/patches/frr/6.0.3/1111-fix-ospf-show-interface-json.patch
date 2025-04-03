@@ -1,0 +1,62 @@
+diff --git a/ospfd/ospf_vty.c b/ospfd/ospf_vty.c
+index 47f294c..ea0915c 100644
+--- a/ospfd/ospf_vty.c
++++ b/ospfd/ospf_vty.c
+@@ -3673,14 +3673,14 @@ static int show_ip_ospf_interface_common(struct vty *vty, struct ospf *ospf,
+ 	struct interface *ifp;
+ 	struct vrf *vrf = vrf_lookup_by_id(ospf->vrf_id);
+ 	json_object *json_vrf = NULL;
+-	json_object *json_interface_sub = NULL, *json_interface = NULL;
++	json_object *json_interface_sub = NULL, *json_array = NULL, *json_interface = NULL;
+ 
+ 	if (use_json) {
+ 		if (use_vrf)
+ 			json_vrf = json_object_new_object();
+ 		else
+ 			json_vrf = json;
+-		json_interface = json_object_new_object();
++		json_array = json_object_new_array();
+ 	}
+ 
+ 	if (ospf->instance) {
+@@ -3706,15 +3706,17 @@ static int show_ip_ospf_interface_common(struct vty *vty, struct ospf *ospf,
+ 							   use_json);
+ 
+ 				if (use_json) {
++					json_interface = json_object_new_object();
+ 					json_object_object_add(
+ 						json_interface, ifp->name,
+ 						json_interface_sub);
++					json_object_array_add(json_array, json_interface);
+ 				}
+ 			}
+ 		}
+ 		if (use_json)
+ 			json_object_object_add(json_vrf, "interfaces",
+-					       json_interface);
++					       json_array);
+ 	} else {
+ 		/* Interface name is specified. */
+ 		ifp = if_lookup_by_name(intf_name, ospf->vrf_id);
+@@ -3727,18 +3729,19 @@ static int show_ip_ospf_interface_common(struct vty *vty, struct ospf *ospf,
+ 		} else {
+ 			if (use_json) {
+ 				json_interface_sub = json_object_new_object();
+-				json_interface = json_object_new_object();
+ 			}
+ 
+ 			show_ip_ospf_interface_sub(
+ 				vty, ospf, ifp, json_interface_sub, use_json);
+ 
+ 			if (use_json) {
++				json_interface = json_object_new_object();
+ 				json_object_object_add(json_interface,
+ 						       ifp->name,
+ 						       json_interface_sub);
++				json_object_array_add(json_array, json_interface);
+ 				json_object_object_add(json_vrf, "interfaces",
+-						       json_interface);
++						       json_array);
+ 			}
+ 		}
+ 	}

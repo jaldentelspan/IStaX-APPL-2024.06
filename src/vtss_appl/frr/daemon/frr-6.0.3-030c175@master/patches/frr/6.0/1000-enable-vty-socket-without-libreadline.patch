@@ -1,0 +1,81 @@
+commit f8a0cffc3e8fcf7d1f811a9a6076cc4901ea1363
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Mon Oct 12 09:18:03 2020 +0200
+
+    6.0-1000
+
+diff --git a/lib/vty.c b/lib/vty.c
+index 748c14f67..c71a11b43 100644
+--- a/lib/vty.c
++++ b/lib/vty.c
+@@ -55,11 +55,9 @@ enum event {
+ 	VTY_READ,
+ 	VTY_WRITE,
+ 	VTY_TIMEOUT_RESET,
+-#ifdef VTYSH
+ 	VTYSH_SERV,
+ 	VTYSH_READ,
+ 	VTYSH_WRITE
+-#endif /* VTYSH */
+ };
+ 
+ static void vty_event(enum event, int, struct vty *);
+@@ -2012,7 +2010,6 @@ static void vty_serv_sock_addrinfo(const char *hostname, unsigned short port)
+ 	freeaddrinfo(ainfo_save);
+ }
+ 
+-#ifdef VTYSH
+ /* For sockaddr_un. */
+ #include <sys/un.h>
+ 
+@@ -2255,8 +2252,6 @@ static int vtysh_write(struct thread *thread)
+ 	return 0;
+ }
+ 
+-#endif /* VTYSH */
+-
+ /* Determine address family to bind. */
+ void vty_serv_sock(const char *addr, unsigned short port, const char *path)
+ {
+@@ -2264,9 +2259,7 @@ void vty_serv_sock(const char *addr, unsigned short port, const char *path)
+ 	if (port)
+ 		vty_serv_sock_addrinfo(addr, port);
+ 
+-#ifdef VTYSH
+ 	vty_serv_un(path);
+-#endif /* VTYSH */
+ }
+ 
+ /* Close vty interface.  Warning: call this only from functions that
+@@ -2520,7 +2513,6 @@ bool vty_read_config(const char *config_file, char *config_default_dir)
+ 
+ 		host_config_set(config_default_dir);
+ 
+-#ifdef VTYSH
+ 		int ret;
+ 		struct stat conf_stat;
+ 
+@@ -2545,7 +2537,6 @@ bool vty_read_config(const char *config_file, char *config_default_dir)
+ 				goto tmp_free_and_out;
+ 			}
+ 		}
+-#endif /* VTYSH */
+ 		confp = fopen(config_default_dir, "r");
+ 		if (confp == NULL) {
+ 			zlog_warn("%s: failed to open configuration file %s: %s, checking backup",
+@@ -2672,7 +2663,6 @@ static void vty_event(enum event event, int sock, struct vty *vty)
+ 						  sock, NULL);
+ 		vector_set_index(Vvty_serv_thread, sock, vty_serv_thread);
+ 		break;
+-#ifdef VTYSH
+ 	case VTYSH_SERV:
+ 		vty_serv_thread = thread_add_read(vty_master, vtysh_accept, vty,
+ 						  sock, NULL);
+@@ -2688,7 +2678,6 @@ static void vty_event(enum event event, int sock, struct vty *vty)
+ 		thread_add_write(vty_master, vtysh_write, vty, sock,
+ 				 &vty->t_write);
+ 		break;
+-#endif /* VTYSH */
+ 	case VTY_READ:
+ 		vty->t_read = NULL;
+ 		thread_add_read(vty_master, vty_read, vty, sock, &vty->t_read);

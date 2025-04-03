@@ -1,0 +1,426 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>OSPF Routing Status</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/mootools-more.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/format.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_ospf_routing_status.htm";
+
+// Global variables
+var timerID; // For auto-refresh button
+
+var myDynamicTable/*, ospfInstanceIdInfo*/; // For dynamic table
+
+var oTOspfInstanceId = oTOspfInstanceId = Array("All"),
+    oVOspfInstanceId = genArrayInt(0, 1);
+
+var firstIndex = 0, lastIndex = 0, perPageEntryNum = 20, total_num = 0;
+
+function addHeader(table_rows)
+{
+    var row;
+
+    row = {fields: [
+            { type: "disp_hdr", params: ["Route Type"] },
+            { type: "disp_hdr", params: ["Destination"]},
+            { type: "disp_hdr", params: ["Area"] },
+            { type: "disp_hdr", params: ["NextHop"] },
+            { type: "disp_hdr", params: ["Cost"]},
+            { type: "disp_hdr", params: ["AS Cost"] },
+            { type: "disp_hdr", params: ["Border Router Type"], "id": "BRHeader" },
+            { type: "disp_hdr", params: ["Interface"] },
+            { type: "disp_hdr", params: ["IsConnected"] }
+        ]};
+    table_rows.push(row);
+}
+
+var routeType = {
+    "intraArea"     : [0, "Intra Area"],
+    "interArea"     : [1, "Inter Area"],
+    "borderRouter"  : [2, "Border Router"],
+    "externalType1" : [3, "External Type-1"],
+    "externalType2" : [4, "External Type-2"]
+};
+
+var brType = {
+    "abr"           : "i-ABR",
+    "asbrIntra"     : "i-ASBR",
+    "asbrInter"     : "I-ASBR",
+    "abrAsbr"       : "i-ABR/ASBR",
+    "none"          : "NONE"
+};
+
+function addRow(key, val, idx)
+{
+    row = {fields:[
+            {type:"text", params:[routeType[key[1]][1], "cl"]},
+            {type:"text", params:[
+                                    key[2].Network +
+                                    (key[1] == "borderRouter" ? "" : ("/" + key[2].IpSubnetMaskLength)),
+                                    "cr"]},
+            {type:"text", params:[key[3], "cr" ]},
+            {type:"text", params:[key[4].match(/0.0.0.0/) ? "-" : key[4], "cr"]},
+            {type:"text", params:[val.Cost, "cr" ]},
+            {type:"text", params:[(key[1] == "externalType2" ) ? val.AsCost : "-", "cr" ]},
+            {type:"text", params:[(val.BorderRouterType == "none" ) ? "-" : brType[val.BorderRouterType], "cr" ]},
+            {type:"text", params:[val.Ifindex, "cr" ]},
+            {type:"text", params:[val.IsConnected ? "Connected" : "-", "cr" ]}
+          ]};
+
+    return row;
+}
+
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 9;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function(record, idx) {
+        table_rows.push(addRow(record.key, record.val, idx));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected OSPF instance ID
+    // or equals the default configuration.
+    var myConf = new Array();
+    myConf = recv_json;
+
+    // myConf is saved when 'Refresh' occurs(i.e., '|<', '<<', '>>', and '>|' won't save myConf)
+    if (name) {
+        // Save the received JSON data (both of the original and filtered)
+        myDynamicTable.saveRecvJson(name, myConf);
+        myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+        // Get the table summary
+        total_num = myConf.length;
+        firstIndex = 0;
+        lastIndex = Math.min(total_num, document.getElementById("entriesNumPerPage").value);
+
+        // get the entries shown in the page.
+        var key = [ 1,
+                    document.getElementById("routeType").value,
+                    {"Network": document.getElementById("network").value,
+                        "IpSubnetMaskLength": parseInt(document.getElementById("prefixLen").value, 10)},
+                    document.getElementById("areaId").value,
+                    document.getElementById("nexthop").value
+                  ];
+        myConf = getEntryList(myConf, key,
+                              parseInt(document.getElementById("entriesNumPerPage").value, 10));
+    }
+
+    // Add table summery
+    document.getElementById("summaryDesc").innerHTML = (total_num ? (firstIndex + 1) : 0) + " - " + (lastIndex) + " of " + total_num + (total_num >1 ? " entries" : " entry");
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Update interface table header description
+    $("BRHeader").innerHTML = "Border Router<br> Type";
+
+    // Update the first entry in the table into start entry
+    if (total_num && myConf.length) {
+        document.getElementById("routeType").value = myConf[0].key[1];
+        document.getElementById("network").value   = myConf[0].key[2].Network;
+        document.getElementById("prefixLen").value = myConf[0].key[2].IpSubnetMaskLength;
+        document.getElementById("areaId").value    = myConf[0].key[3];
+        document.getElementById("nexthop").value   = myConf[0].key[4];
+    }
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+
+    UpdatePageController();
+}
+
+/* Update the received HTML request */
+function requestUpdate() {
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("ospf.status.route.ipv4.get", null, processUpdate, "status");
+}
+
+function entryCompare(key1, key2)
+{
+    if (routeType[key1[1]][0] > routeType[key2[1]][0]) {
+        return 1;
+    } else if (routeType[key1[1]][0] < routeType[key2[1]][0]) {
+        return -1;
+    }
+
+    if(Ipv4Str2Val(key1[2].Network) > Ipv4Str2Val(key2[2].Network)) {
+        return 1;
+    } else if (Ipv4Str2Val(key1[2].Network) < Ipv4Str2Val(key2[2].Network)) {
+        return -1;
+    }
+
+    if (key1[2].IpSubnetMaskLength > key2[2].IpSubnetMaskLength) {
+        return 1;
+    } else if (key1[2].IpSubnetMaskLength < key2[2].IpSubnetMaskLength) {
+        return -1;
+    }
+
+    if (Ipv4Str2Val(key1[3]) > Ipv4Str2Val(key2[3])) {
+        return 1;
+    } else if (Ipv4Str2Val(key1[3]) < Ipv4Str2Val(key2[3])) {
+        return -1;
+    }
+
+    if (Ipv4Str2Val(key1[4]) > Ipv4Str2Val(key2[4])) {
+        return 1;
+    } else if (Ipv4Str2Val(key1[4]) < Ipv4Str2Val(key2[4])) {
+        return -1;
+    }
+    return 0;
+}
+
+function getEntryList(json_arry, key, table_size)
+{
+
+    var entry_list = new Array();
+    var i;
+    // get the entry larger than or equal to the key
+    for (i = 0; i < json_arry.length; i++) {
+        var elm = json_arry[i];
+        var rc;
+        if ((rc = entryCompare(elm.key, key)) >= 0) {
+            break;
+        }
+    }
+
+    firstIndex = i;
+    lastIndex = Math.min(i + table_size, total_num);
+    entry_list = json_arry.slice(firstIndex, lastIndex);
+    return entry_list;
+}
+
+function GetFirstEntry()
+{
+    if (firstIndex) {
+        var orig_json = myDynamicTable.getRecvJson("status");
+        var entry_list = getEntryList(orig_json,
+                [
+                                      1,
+                                      "intraArea",
+                                      {"Network": "0.0.0.0",
+                                          "IpSubnetMaskLength": 0},
+                                      "0.0.0.0",
+                                      "0.0.0.0"
+                ],
+                                     parseInt(document.getElementById("entriesNumPerPage").value, 10));
+        processUpdate(entry_list);
+    }
+}
+
+// Disable '|<' and '<<' if the page is in the begining of the table.
+// Disable '>>' and '>|' in the page is in the end of the table.
+function UpdatePageController()
+{
+    if (!firstIndex) {
+        document.getElementById("first_page").disabled = true;
+        document.getElementById("prev_page").disabled = true;
+    } else {
+        document.getElementById("first_page").disabled = false;
+        document.getElementById("prev_page").disabled = false;
+    }
+
+    if(lastIndex == total_num) {
+        document.getElementById("next_page").disabled = true;
+        document.getElementById("last_page").disabled = true;
+    } else {
+        document.getElementById("next_page").disabled = false;
+        document.getElementById("last_page").disabled = false;
+    }
+}
+
+function GetPreviousEntry()
+{
+    if (firstIndex) {
+        var json_arry = new Array();
+        json_arry = myDynamicTable.getRecvJson("status");
+        lastIndex = firstIndex;
+        firstIndex = Math.max(lastIndex - parseInt(document.getElementById("entriesNumPerPage").value, 10), 0);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function GetNextEntry()
+{
+    if (lastIndex != total_num) {
+        var json_arry = new Array();
+        json_arry = myDynamicTable.getRecvJson("status");
+        firstIndex = lastIndex;
+        lastIndex = firstIndex + Math.min(document.getElementById("entriesNumPerPage").value, total_num - firstIndex);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function GetLastEntry()
+{
+    if (total_num && (lastIndex != total_num)) {
+        var json_arry = new Array();
+        var num_per_page = document.getElementById("entriesNumPerPage").value;
+        json_arry = myDynamicTable.getRecvJson("status");
+        // 'total_num' must minus 1 to prevernt from errr in the condition that 'total_num' is the multiple 'num_per_page'
+        firstIndex = Math.floor((total_num  - 1)/ num_per_page) * num_per_page;
+        lastIndex = firstIndex + Math.min(document.getElementById("entriesNumPerPage").value, total_num - firstIndex);
+        processUpdate(json_arry.slice(firstIndex, lastIndex));
+    }
+}
+
+function checkRefresh(fld) {
+    if (fld.checked) {
+        requestUpdate();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+/* Initialize resources when HTML document is ready */
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+
+    // To ensure the completed data, we request the configured data after the
+    // instance data is received and it is requested only one time.
+    requestUpdate();
+});
+
+function checkForm(checkStartEntry)
+{
+    // syslogStartId
+    if (checkStartEntry &&
+        (!isIpStr("network", false, "'Network'", 2, false) ||
+        !isWithinRange("prefixLen", 0, 32, "'Prefix Length'") ||
+        !isIpStr("nexthop", false, "'NextHop'", 2, false))) {
+        return false;
+    }
+
+    // syslogEntryNum
+    if (!isWithinRange("entriesNumPerPage", 1, 999, "'entries per page'")) {
+        return false;
+    }
+
+    return true;
+}
+
+function changeProtoType()
+{
+//    alert(document.getElementById("routeType").value);
+//    document.getElementById("routeType").value = 1;
+//    requestUpdate('refresh');
+}
+    </script>
+</head>
+
+<body class="content">
+    <h1>OSPF Routing Status</h1>
+    <p>
+    <span class="displaytext">Start from Route Type </span>
+    <select id="routeType" name="routeType" onchange="changeProtoType(); this.blur()">
+      <option value="intraArea" selected>Intra Area</option>
+      <option value="interArea">Inter Area</option>
+      <option value="borderRouter">Border Router</option>
+      <option value="externalType1">External Type-1</option>
+      <option value="externalType2">External Type-2</option>
+    </select>
+    <span class="displaytext">Destination </span>
+    <input type="text" id="network" name="network" maxlength="15" size = "15" value="0.0.0.0">
+    <span class="displaytext"> / </span>
+    <input type="text" id="prefixLen" name="prefixLen" maxlength="2" size = "2" value="0">
+    <span class="displaytext">Area </span>
+    <input type="text" id="areaId" name="areaId" maxlength="15" size = "15" value="0.0.0.0">
+    <span class="displaytext">NextHop </span>
+    <input type="text" id="nexthop" name="nexthop" maxlength="15" size = "15" value="0.0.0.0">
+    <span class="displaytext"> with </span>
+    <input type="text" id="entriesNumPerPage" name="entriesNumPerPage" maxlength="3" size = "3" value="20">
+    <span class="displaytext"> entries per page. </span>
+    </p>
+    <p>
+     <span class="displaytext">Codes: i - Intra-area Router Path, I - Inter-area Router Path</span>
+    </p>
+    <div class="refreshbar">
+        <span id="summaryDesc"></span>
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="if(!checkForm(true)) {return false;} checkRefresh(this);">
+        <input type="button" value="Refresh" onClick='if(!checkForm(true)) {return false;} requestUpdate(); this.blur();'>
+        <input type="button"   id="first_page" value=" |<< "   title="First page"     onclick="if(!checkForm(false)) {return false;} GetFirstEntry();this.blur();">
+        <input type="button"   id="prev_page" value=" << "    title="Previous page"  onclick="if(!checkForm(false)) {return false;} GetPreviousEntry(); this.blur();">
+        <input type="button"   id="next_page" value=" >> "    title="Next page"      onclick="if(!checkForm(false)) {return false;} GetNextEntry();     this.blur();">
+        <input type="button"   id="last_page" value=" >>| "   title="Last page"      onclick="if(!checkForm(false)) {return false;} GetLastEntry();     this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+
+    <div id="myTableContent"></div>
+    <p>&nbsp;</p>
+</body>
+
+</html>

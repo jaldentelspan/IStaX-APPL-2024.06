@@ -1,0 +1,553 @@
+//
+# Copyright (c) 2006-2019 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+//
+//
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG =
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include <stdlib.h>
+#include "icli_cmd_func.h"
+
+#include "vtss/appl/types.h"
+#include "mgmt_api.h"
+#include "vtss/appl/interface.h"
+
+#define __PORT_LIST_ARR_SIZE    128
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+static BOOL _mac_portlist_index_set(u32 i, u8 data[__PORT_LIST_ARR_SIZE])
+{
+    if (i >= 8 * __PORT_LIST_ARR_SIZE) {
+        return FALSE;
+    }
+
+    u8 val = 1;
+    u32 idx_bit = i & 7;
+    u32 idx = i >> 3;
+    val <<= idx_bit;
+    data[idx] |= val;
+    return TRUE;
+}
+
+/*
+    Actually, this API should be totally the same with
+    _port_list_stackable_set() in acl.c
+*/
+static BOOL _port_list_stackable_set(
+    u32     isid,
+    u32     iport,
+    u8      data[__PORT_LIST_ARR_SIZE]
+)
+{
+    u32     i;
+    u32     bit;
+
+    // isid = usid so do nothing on isid
+
+    // emulate uport
+    iport += 1;
+
+    i = (isid - 1) * 8 + iport / 8;
+    if (i > 127) {
+        return FALSE;
+    }
+
+    bit = iport % 8;
+
+    data[i] |= (1 << bit);
+
+    return TRUE;
+}
+FUNCTION_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug testing-script portlist-stackable { [<port_type_list>] [CPU] }*1
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = plist
+
+VARIABLE_BEGIN
+    u8      data[__PORT_LIST_ARR_SIZE];
+    u32     i;
+    u32     j;
+    u32     isid;
+    u32     uport;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(data, 0, __PORT_LIST_ARR_SIZE);
+    if ( plist ) {
+        for ( i = 0; i < plist->cnt; ++i ) {
+            for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+                isid = plist->switch_range[i].isid;
+                uport = plist->switch_range[i].begin_uport + j;
+                if ( _mac_portlist_index_set((isid-1) * 128 + uport, data) == FALSE ) {
+                    ICLI_PRINTF("%% Fail to set port list for (%u, %u)\n", isid, uport);
+                }
+            }
+        }
+    }
+    for ( i = 0; i < (__PORT_LIST_ARR_SIZE - 1); i++ ) {
+        ICLI_PRINTF("%u,", data[i]);
+    }
+    ICLI_PRINTF("%u\n", data[i]);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug testing-script uport <port_type_id>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = port
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("%u %u\n", port.usid, port.begin_uport);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug testing-script ifindex interface <port_type_id>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = port
+
+VARIABLE_BEGIN
+    vtss_ifindex_t  ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( vtss_ifindex_from_port(port.isid, port.begin_iport, &ifindex) == VTSS_RC_OK ) {
+        ICLI_PRINTF("%u\n", VTSS_IFINDEX_PRINTF_ARG(ifindex));
+    } else {
+        ICLI_PRINTF("Error\n");
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug testing-script ifindex vlan <vlan_id>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = vid
+
+VARIABLE_BEGIN
+    vtss_ifindex_t  ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_ifindex_from_vlan(vid, &ifindex) == VTSS_RC_OK) {
+        ICLI_PRINTF("%u\n", VTSS_IFINDEX_PRINTF_ARG(ifindex));
+    } else {
+        ICLI_PRINTF("Error\n");
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug testing-script ifindex usid <uint> uport <uint>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = usid
+CMD_VAR   =
+CMD_VAR   = uport
+
+VARIABLE_BEGIN
+    vtss_ifindex_t  ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_ifindex_from_usid_uport((vtss_usid_t)usid, (vtss_uport_no_t)uport, &ifindex) == VTSS_RC_OK) {
+        ICLI_PRINTF("%u\n", VTSS_IFINDEX_PRINTF_ARG(ifindex));
+    } else {
+        ICLI_PRINTF("Error\n");
+    }
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug testing-script vlanlist <vlan_list>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = vlanlist
+
+VARIABLE_BEGIN
+    u32             i, idx;
+    vtss_vlan_list_t  vids;
+    vtss_vlan_list_t                *vls = &vids;
+VARIABLE_END
+
+CODE_BEGIN
+
+        memset(vls, 0, sizeof(*vls));
+        for (i = 0; i < vlanlist->cnt; i++) {
+            for (idx = vlanlist->range[i].min; idx <= vlanlist->range[i].max; idx++) {
+                if (idx > VTSS_VID_RESERVED) {
+                    ICLI_PRINTF("%% Failed to build vlan mask\n");
+                    return VTSS_RC_ERROR;
+                }
+                mgmt_types_vlan_list_bit_value_set(vls, idx);
+            }
+        }
+
+        for (i = 0; i < sizeof(vids.data)/128; i++) {
+            ICLI_PRINTF("%dKTo%dK\n", i, i + 1);
+            for (idx = i * 128; idx < (i + 1) * 128 - 1; idx ++) {
+                ICLI_PRINTF("%u,", vids.data[idx]);
+            }
+            ICLI_PRINTF("%u\n", vids.data[idx]);
+        }
+
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug vtss-ifindex-getnext { port | llag | vlan } { first | <uint> }
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_port
+CMD_VAR   = b_llag
+CMD_VAR   =
+CMD_VAR   = b_first
+CMD_VAR   = previous_
+
+VARIABLE_BEGIN
+    vtss_ifindex_t  next;
+    u32             enumerate_types;
+    u32             type;
+    mesa_rc         rc;
+    vtss_ifindex_t  previous;
+VARIABLE_END
+
+CODE_BEGIN
+    previous = vtss_ifindex_cast_from_u32_0(previous_);
+    if ( b_port ) {
+        type = VTSS_IFINDEX_TYPE_PORT;
+        enumerate_types = 1 << VTSS_IFINDEX_TYPE_PORT;
+    } else if ( b_llag ) {
+        type = VTSS_IFINDEX_TYPE_LLAG;
+        enumerate_types = 1 << VTSS_IFINDEX_TYPE_LLAG;
+    } else {
+        type = VTSS_IFINDEX_TYPE_VLAN;
+        enumerate_types = 1 << VTSS_IFINDEX_TYPE_VLAN;
+    }
+
+    if ( b_first ) {
+        rc = vtss_ifindex_getnext_by_type( NULL, &next, enumerate_types );
+    } else {
+        rc = vtss_ifindex_getnext_by_type( &previous, &next, enumerate_types );
+    }
+
+    if ( rc == VTSS_RC_OK ) {
+        ICLI_PRINTF("next = %u\n", VTSS_IFINDEX_PRINTF_ARG(next));
+    } else {
+        ICLI_PRINTF("%% Fail to get next for type %u\n", type);
+    }
+CODE_END
+CMD_END
+
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug vtss-ifindex-iterate { all-type | port | llag | vlan } { first | <uint> } [ check-exist ] [iterate-cnt <int>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = b_all
+CMD_VAR   = b_port
+CMD_VAR   = b_llag
+CMD_VAR   = b_vlan
+CMD_VAR   = b_first
+CMD_VAR   = previous_
+CMD_VAR   = b_check
+CMD_VAR   = b_iterate_cnt
+CMD_VAR   = iterate_cnt
+
+VARIABLE_BEGIN
+    vtss_ifindex_t  next, previous;
+    u32             enumerate_types = 0;
+    int             cnt=1;
+    mesa_rc         rc;
+    char            buf[36];
+VARIABLE_END
+
+CODE_BEGIN
+    previous = vtss_ifindex_cast_from_u32_0(previous_);
+
+    if (b_all) {
+        enumerate_types = VTSS_IFINDEX_GETNEXT_ALL;
+    }
+
+    if (b_port) {
+        enumerate_types |= VTSS_IFINDEX_GETNEXT_PORTS;
+    }
+
+    if (b_llag) {
+        enumerate_types |= VTSS_IFINDEX_GETNEXT_LLAGS;
+    }
+
+    if (b_vlan) {
+        enumerate_types |= VTSS_IFINDEX_GETNEXT_VLANS;
+    }
+
+    if (b_iterate_cnt) {
+        cnt = iterate_cnt;
+    }
+
+    if (b_first) {
+        rc = vtss_ifindex_iterator( NULL, &next, enumerate_types, b_check );
+        if (rc == VTSS_RC_OK) {
+            (void)vtss_ifindex2str(buf, sizeof(buf), next);
+            ICLI_PRINTF("prev=NULL, next=%d [%s]\n", VTSS_IFINDEX_PRINTF_ARG(next), buf);
+        } else {
+            ICLI_PRINTF("prev=NULL, next=N/A(%d)\n", rc);
+            return ICLI_RC_OK;
+        }
+        cnt--;
+    } else {
+        rc = vtss_ifindex_iterator( &previous, &next, enumerate_types, b_check );
+        if (rc == VTSS_RC_OK) {
+            (void)vtss_ifindex2str(buf, sizeof(buf), next);
+            ICLI_PRINTF("prev=%d, next=%d [%s]\n", VTSS_IFINDEX_PRINTF_ARG(previous), VTSS_IFINDEX_PRINTF_ARG(next), buf);
+            if (vtss_ifindex_cast_to_u32(previous) >= vtss_ifindex_cast_to_u32(next)) {
+                ICLI_PRINTF("Error! prev >= next\n");
+            }
+        } else {
+            ICLI_PRINTF("prev=%d, next=N/A(%d)\n", VTSS_IFINDEX_PRINTF_ARG(previous), rc);
+            return ICLI_RC_OK;
+        }
+        cnt--;
+    }
+
+    for (; cnt > 0; cnt--) {
+        previous = next;
+
+        rc = vtss_ifindex_iterator( &previous, &next, enumerate_types, b_check );
+        if (rc == VTSS_RC_OK) {
+            (void)vtss_ifindex2str(buf, sizeof(buf), next);
+            ICLI_PRINTF("prev=%d, next=%d [%s]\n", VTSS_IFINDEX_PRINTF_ARG(previous), VTSS_IFINDEX_PRINTF_ARG(next), buf);
+            if (vtss_ifindex_cast_to_u32(previous) >= vtss_ifindex_cast_to_u32(next)) {
+                ICLI_PRINTF("Error! prev >= next\n");
+            }
+        } else {
+            ICLI_PRINTF("prev=%d, next=N/A(%d)\n", VTSS_IFINDEX_PRINTF_ARG(previous), rc);
+            return ICLI_RC_OK;
+        }
+    }/* for */
+
+
+CODE_END
+CMD_END
+
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug module support <word>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = module
+
+VARIABLE_BEGIN
+
+VARIABLE_END
+
+CODE_BEGIN
+    if (module == NULL) {
+        return ICLI_RC_OK;
+    }
+
+    if (strcmp(module, "sntp") == 0) {
+        ICLI_PRINTF("Not support\n");
+        return ICLI_RC_OK;
+    }
+
+    if (strcmp(module, "ntp") == 0) {
+#if defined(VTSS_SW_OPTION_NTP)
+        ICLI_PRINTF("Supported\n");
+#else
+        ICLI_PRINTF("Not support\n");
+#endif
+        return ICLI_RC_OK;
+    }
+
+    if (strcmp(module, "smon") == 0) {
+#if defined(VTSS_SW_OPTION_SMON)
+        ICLI_PRINTF("Supported\n");
+#else
+        ICLI_PRINTF("Not support\n");
+#endif
+        return ICLI_RC_OK;
+    }
+
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = debug testing-script portlist-index <port_type_list>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = plist
+
+VARIABLE_BEGIN
+    u8      data[__PORT_LIST_ARR_SIZE];
+    u32     i;
+    u32     j;
+    u32     isid;
+    u32     iport;
+VARIABLE_END
+
+CODE_BEGIN
+    // set array
+    memset(data, 0, __PORT_LIST_ARR_SIZE);
+    if (plist) {
+        for (i = 0; i < plist->cnt; ++i) {
+            for (j = 0; j < plist->switch_range[i].port_cnt; ++j) {
+                isid  = plist->switch_range[i].isid;
+                iport = plist->switch_range[i].begin_iport + j;
+                if (_port_list_stackable_set(isid, iport, data) == FALSE) {
+                    ICLI_PRINTF("%% Fail to set port list for (%u, %u)\n", isid, iport);
+                    return ICLI_RC_ERROR;
+                }
+            }
+        }
+    }
+
+    // output
+    for (i = 0; i < (__PORT_LIST_ARR_SIZE - 1); ++i ) {
+        ICLI_PRINTF("%u,", data[i]);
+    }
+    ICLI_PRINTF("%u\n", data[i]);
+CODE_END
+CMD_END

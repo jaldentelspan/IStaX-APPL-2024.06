@@ -1,0 +1,252 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>OSPF6 Global Status</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_ospf6_global_status.htm";
+
+// Global variables
+var defSelectedInstanceId = 0; /* Display all entries by default */
+var pageArgs = searchArgs(window.location.search);
+var selectedInstanceId = pageArgs.InstanceId ? parseInt(pageArgs.InstanceId, 10) : defSelectedInstanceId;
+
+var timerID; // For auto-refresh button
+
+var myDynamicTable, ospf6InstanceIdInfo; // For dynamic table
+
+var oTOspf6InstanceId = Array("All"),
+    oVOspf6InstanceId = genArrayInt(0, 1);
+
+/* Send the HTML request */
+function sendRequest() {
+    ospf6InstanceIdInfo = null;
+    requestJsonDoc("ospf6.status.router.get", null, requestUpdate, "ospf6InstanceIdInfo");
+}
+
+/* Clear OSPF6 process */
+function clearOspf6Process() {
+    if (confirm("OSPF6 process will be reset.\nDo you want to proceed anyway?")) {
+        requestJsonDoc("ospf6.control.globals.set", [{ "ReloadProcess": true }]);
+        milliSleep(500); // Made a little bit delay here to wait the OSPF6 re-processing
+        sendRequest();
+    }
+}
+
+/* Change Instance select menu */
+function onChangeSelectMenu(sel) {
+    selectedInstanceId = parseInt(sel.options[sel.selectedIndex].value, 10);
+    sendRequest();
+}
+
+/* Add column row in the dynamic table. */
+function addRow(key, val, idx) {
+    var row = [
+        {
+            fields: [
+                { type: "text", params: ["Status Information" /* + ": Instance ID " + parseInt(key, 10) */, "param_label", 2] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Router ID", "displaytext"] },
+                { type: "text", params: [val.RouterId, "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["SPF Delay", "displaytext"] },
+                { type: "text", params: [val.SpfDelay + " msecs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["SPF Hold Time", "displaytext"] },
+                { type: "text", params: [val.SpfHoldTime + " msecs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["SPF Max. Wait Time", "displaytext"] },
+                { type: "text", params: [val.SpfMaxWaitTime + " msecs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Last Executed SPF Time Stamp", "displaytext"] },
+                { type: "text", params: [val.LastExcutedSpfTs + " msecs", "cr"] }
+            ]
+        },
+        {
+            fields: [
+                { type: "text", params: ["Attached Area Count", "displaytext"] },
+                { type: "text", params: [val.AttachedAreaCount, "cr"] }
+            ]
+        }
+    ];
+
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 1;
+    var table_rows = new Array();
+
+    // Add single row
+    Object.each(recv_json, function (record, idx) {
+        table_rows = table_rows.concat(addRow(record.key, record.val, idx));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan, "OSPF6 is disabled"] }] });
+    }
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected OSPF6 instance ID
+    // or equals the default configuration.
+    var myConf = Array();
+    if (selectedInstanceId == defSelectedInstanceId) { /* Display all entries */
+        myConf = recv_json;
+    } else {
+        Object.each(recv_json, function (record) {
+            if (selectedInstanceId == record.key) {
+                myConf.push(record);
+            }
+        });
+    }
+
+    // Save the received JSON data (both of the original and filted)
+    myDynamicTable.saveRecvJson(name, myConf);
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    if (name == "ospf6InstanceIdInfo") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            ospf6InstanceIdInfo = myDynamicTable.cloneRecvJson(recv_json);
+
+            // Update the OPSF instance ID selected menu.
+            oTOspf6InstanceId.length = oVOspf6InstanceId.length = 1; // Restore to default
+            Object.each(recv_json, function (record) {
+                oTOspf6InstanceId.push(record.key);
+                oVOspf6InstanceId.push(record.key);
+            });
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(ospf6InstanceIdInfo) failed.");
+            return;
+        }
+    }
+
+    if (ospf6InstanceIdInfo) {
+        UpdateIdSelect("ospf6InstanceIdSelectMenu", oTOspf6InstanceId, oVOspf6InstanceId, selectedInstanceId);
+        requestJsonDoc("ospf6.status.router.get", null, processUpdate, "config");
+    }
+}
+
+function checkRefresh(fld) {
+    if (fld.checked) {
+        sendRequest();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+/* Initialize resources when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+
+    // This table requires two JSON data(status/ospf6InstanceIdInfo).
+    // To ensure the completed data, we request the configured data after the
+    // instance data is received and it is requested only one time.
+    sendRequest();
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>OSPF6 Global Status</h1>
+    <div class="refreshbar">
+        <!-- Instance ID&nbsp; -->
+        <!-- select id="ospf6InstanceIdSelectMenu" onchange="onChangeSelectMenu(this);">
+            <option value="0">All</option>
+        </select -->
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        <input type="button" value="Clear OSPF6 Process" onClick='clearOspf6Process(); this.blur();'> &nbsp;&nbsp;&nbsp;&nbsp;
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="checkRefresh(this);">
+        <input type="button" value="Refresh" onClick='sendRequest(); this.blur();'>
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+    <p>&nbsp;</p>
+</body>
+
+</html>

@@ -1,0 +1,606 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>RedBox Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="redbox_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_redbox_config.htm";
+
+// Global variables
+var configTable, globals, variables, post_cnt, err_msg_shown;
+
+/******************************************************************************/
+// on_mode_change()
+/******************************************************************************/
+function on_mode_change(inst)
+{
+    var mode = $("Mode_" + inst);
+    var hsr_prp_or_hsr_hsr;
+    var hsr_prp;
+    var not_hsr_hsr;
+
+    if (!mode) {
+        // Not visible yet
+        return;
+    }
+
+    mode = mode.value;
+    hsr_prp_or_hsr_hsr = mode == "hsrPrp" || mode == "hsrHsr";
+    hsr_prp            = mode == "hsrPrp";
+    not_hsr_hsr        = mode != "hsrHsr";
+
+    $("NetId_"          + inst).disabled = !hsr_prp_or_hsr_hsr;
+    $("LanId_"          + inst).disabled = !hsr_prp;
+    $("PntAgeTime_"     + inst).disabled = !not_hsr_hsr;
+    $("SvXlatPrpToHsr_" + inst).disabled = !hsr_prp;
+    $("SvXlatHsrToPrp_" + inst).disabled = !hsr_prp;
+}
+
+/******************************************************************************/
+// on_action_button_click()
+/******************************************************************************/
+function on_action_button_click(inst, toggle)
+{
+    var button = $("ActionButton_" + inst);
+    var deleting, tr, td, elem, i, j;
+
+    if (!button) {
+        // Not visible yet
+        return;
+    }
+
+    // Figure out if we are deleting or creating the instance.
+    deleting = button.value == "Delete";
+
+    if (!toggle) {
+        // Don't toggle its value
+        deleting = !deleting;
+    }
+
+    // The parent of the button (<input>) is a <td>, the parent of the <td> is
+    // a <tr>.
+    tr = button.parentNode.parentNode;
+
+    for (i = 0; i < tr.cells.length; i++) {
+        td = tr.cells[i];
+
+        // Loop over all children of the td and enable/disable them.
+        for (j = 0; j < td.children.length; j++) {
+            elem = td.children[j];
+
+            // Never disable the button itself.
+            if (elem.id != button.id) {
+                // If deleting, we disable all fields. Otherwise, we enable all
+                // fields.
+                elem.disabled = deleting;
+            }
+        }
+    }
+
+    button.value = deleting ? "Create" : "Delete";
+
+    // If creating, we have just enabled all fields, but the actually enabled
+    // fields depend on the selected mode.
+    if (!deleting) {
+        on_mode_change(inst);
+    }
+}
+
+/******************************************************************************/
+// action_button_click_all()
+/******************************************************************************/
+function action_button_click_all()
+{
+    var inst;
+
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        // This function may call on_mode_change()
+        on_action_button_click(inst, false /* don't toggle 'Create' to 'Delete' or vice versa */);
+    }
+}
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(responseText, inst)
+{
+    var fld, msg;
+
+    if (post_cnt <= 0) {
+        alert("That's odd. post_cnt = " + post_cnt + ", result = " + result + ", inst = " + inst);
+        requestUpdate();
+        return;
+    }
+
+    if (responseText && responseText.error) {
+        if (responseText.error.message) {
+            msg = responseText.error.message;
+        } else if (responseText.error.code) {
+            msg = responseText.error.code;
+        }
+    }
+
+    if (msg) {
+        // Set focus on the instance's Mode field.
+        fld = $("Mode_" + inst);
+        if (fld) {
+            fld.focus();
+        }
+
+        // Make sure not to refresh the page.
+        err_msg_shown = true;
+        alert("Instance " + inst + ": " + msg);
+    }
+
+    post_cnt--;
+
+    if (!err_msg_shown && post_cnt === 0) {
+        // Done with all of them. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// validate_fld()
+/******************************************************************************/
+function validate_fld(inst, name, min, max, msg)
+{
+    var fld_name, fld;
+
+    fld_name = name + "_" + inst;
+    fld = $(fld_name);
+
+    if (!fld) {
+        alert("Internal error: Unable to find field called " + fld_name);
+        return false;
+    }
+
+    if (fld.disabled) {
+        // Don't check disabled fields, the caller's caller has made sure to set
+        // fields not used in this mode to their defaults in order not to have
+        // the JSON parser throw up.
+        return true;
+    }
+
+    if (!isWithinRange(fld_name, min, max, msg)) {
+        return false;
+    }
+
+    return true;
+}
+
+/******************************************************************************/
+// validate()
+/******************************************************************************/
+function validate(inst)
+{
+    if (!validate_fld(inst, "NtAgeTime", globals.capabilities.NtAgeTimeMin, globals.capabilities.NtAgeTimeMax, "NodesTable Age Time")) {
+        return false;
+    }
+
+    if (!validate_fld(inst, "PntAgeTime", globals.capabilities.PntAgeTimeMin, globals.capabilities.PntAgeTimeMax, "ProxyNodeTable Age Time")) {
+        return false;
+    }
+
+    if (!validate_fld(inst, "DdAgeTime", globals.capabilities.DdAgeTimeMin, globals.capabilities.DdAgeTimeMax, "Duplicate Discard Age Time")) {
+        return false;
+    }
+
+    if (!validate_fld(inst, "SvVlan", 0, 4095, "Supervision frame VLAN ID")) {
+        return false;
+    }
+
+    if (!validate_fld(inst, "SvDmacLsb", 0, 255, "Supervision frame's LSbyte of DMAC")) {
+        return false;
+    }
+
+    if (!validate_fld(inst, "SvFrameInterval", globals.capabilities.SvFrameIntervalMin, globals.capabilities.SvFrameIntervalMax, "Supervision frame interval")) {
+        return false;
+    }
+
+    return true;
+}
+
+/******************************************************************************/
+// on_save_button_click()
+/******************************************************************************/
+function on_save_button_click()
+{
+    var inst, json_all, json_inst, json_inst_vars, keys, re, m, v, vp, fld, renamed_key, submit_json;
+
+    // Get the full form that we are about to submit, that is, it includes all
+    // instances.
+    json_all = html2Json(tablesForm);
+
+    keys = Object.keys(json_all);
+
+    // The JSON parser cannot handle hexadecimal numbers, so let's start by
+    // changing them to a decimal number. Notice, if the user could enter free
+    // text somewhere, we shouldn't convert that free text (e.g. a name) to a
+    // number, but that's not the case with the RedBox implementation (yet).
+    keys.forEach(function(key) {
+        v = json_all[key];
+
+        if (v.length >= 3 && v[0] == '0' && v[1].toLowerCase() == 'x') {
+            // Get chars after "0x"
+            vp = v.slice(2);
+            if (IsHex(vp, false)) {
+                json_all[key] = parseInt(vp, 16).toString();
+            }
+        }
+    });
+
+    json_inst = {};
+
+    // Convert and validate all enabled inputs before posting.
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        if (json_all["ActionButton_" + inst] == "Delete") {
+            // The user wants to create or update this instance, which is why
+            // the button says "Delete".
+            json_inst_vars = {};
+
+            // Copy all fields that match "_<inst>$" from json_all to
+            // json_inst_vars.
+            re = new RegExp("(.*)_" + inst + "$");
+
+            keys.forEach(function(key) {
+                m = key.match(re);
+                if (m && !key.match(/ActionButton/)) {
+                    renamed_key = m[1];
+                    json_inst_vars[renamed_key] = json_all[key];
+
+                    // Set all disabled fields to their defaults in order not to
+                    // have the JSON parser throw up and return an unusable
+                    // error message.
+                    fld = $(key);
+                    if (!fld) {
+                        alert("Internal error: Unable to find " + key);
+                        return;
+                    }
+
+                    if (fld.disabled) {
+                        json_inst_vars[renamed_key] = globals.default_conf[renamed_key];
+                    }
+                }
+            });
+
+            // Validate parameters. Unfortunately, we cannot use
+            // configTable.validate(), because it also validates rows that are
+            // disabled.
+            if (!validate(inst)) {
+                return;
+            }
+
+            json_inst[inst] = json_inst_vars;
+        } else {
+            // This is not active, so don't validate it. We will delete it after
+            // the validation process is done.
+        }
+    }
+
+    // If we are still here, everything seems to be OK. Since we can post a
+    // variable number of items, we need to count them first, so that the
+    // on_submit_done() function knows when to refresh the page.
+    post_cnt      = 0;
+    err_msg_shown = false;
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        if (json_inst[inst] || redbox_lib_inst_get(variables.conf, inst)) {
+            post_cnt++;
+        }
+    }
+
+    // If we are still here, everything seems to be OK. Time to post.
+    // Unfortunately, we cannot use redbox_lib_json_submit(), because it only
+    // supports the calling of one single function as it is now.
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        if (json_inst[inst]) {
+            submit_json = [inst, json_inst[inst]];
+
+            // Now we have two functions at our disposal: "redbox.config.set"
+            // and "redbox.config.add". The problem with the "set"-version is
+            // that it requires the RedBox instance to be created beforehand,
+            // because JSON starts by reading the current configuration and
+            // overwrites it with what it got from the Web page.
+            // The "add"-version creates a default entry and adds whatever it
+            // gets from the Web page.
+            // Whether we create a new one or update an existing, we can
+            // therefore always use the "add"-version, because we update all
+            // fields everytime.
+            requestJsonDoc("redbox.config.add", submit_json, on_submit_done, inst, true /* always call us back - unless redirecting */);
+        } else {
+            // We cannot call redbox.config.del on instances that are not
+            // currently created, so only do it if it's created.
+            if (redbox_lib_inst_get(variables.conf, inst)) {
+                submit_json = [inst];
+                requestJsonDoc("redbox.config.del", submit_json, on_submit_done, inst, true /* always call us back - unless redirecting */);
+            }
+        }
+    }
+}
+
+/******************************************************************************/
+// on_reset_button_click()
+/******************************************************************************/
+function on_reset_button_click()
+{
+    var inst;
+
+    configTable.resetEvent();
+
+    // The resetEvent() does not restore the Action button to what it was
+    // created with, because we may change it on the fly.
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        $("ActionButton_" + inst).value = redbox_lib_inst_get(variables.conf, inst) ? "Delete" : "Create";
+    }
+
+    // Also enable/disable without toggling Action button.
+    action_button_click_all();
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // 1st row (numbers are colspan, rowspan)
+    // Notice, we cannot use type "conf_hdr", because it doesn't support
+    // specification of row and column span.
+    row = {fields: [
+              {type: "disp_hdr", params: ["Action",             1, 2]},
+              {type: "disp_hdr", params: ["Instance",           1, 2]},
+              {type: "disp_hdr", params: ["Enable",             1, 2]},
+              {type: "disp_hdr", params: ["Mode",               1, 2]},
+              {type: "disp_hdr", params: ["Port A",             1, 2]},
+              {type: "disp_hdr", params: ["Port B",             1, 2]},
+              {type: "disp_hdr", params: ["Net ID",             1, 2]},
+              {type: "disp_hdr", params: ["LAN ID",             1, 2]},
+              {type: "disp_hdr", params: ["Age Times",          3, 1]},
+              {type: "disp_hdr", params: ["Supervision Frames", 6, 1]},
+              {type: "disp_hdr", params: ["Operational State",  1, 2]}]
+          };
+
+    table_rows.push(row);
+
+    row = {fields: [
+              // Age Times
+              {type: "disp_hdr", params: ["NodesTable",        1, 1]},
+              {type: "disp_hdr", params: ["ProxyNodeTable",    1, 1]},
+              {type: "disp_hdr", params: ["Duplicate Discard", 1, 1]},
+
+              // Supervision
+              {type: "disp_hdr", params: ["VLAN ID",           1, 1]},
+              {type: "disp_hdr", params: ["PCP",               1, 1]},
+              {type: "disp_hdr", params: ["DMAC LSByte",       1, 1]},
+              {type: "disp_hdr", params: ["Interval",          1, 1]},
+              {type: "disp_hdr", params: ["PRP-to-HSR",        1, 1]},
+              {type: "disp_hdr", params: ["HSR-to-PRP",        1, 1]}]
+          };
+
+    table_rows.push(row);
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(inst, conf, statu)
+{
+    var exists = statu != undefined, row;
+
+    // Have to put pixel-sizes on the select and input fields, because otherwise
+    // these fields will have different sizes for different RedBoxes when
+    // displayed, which looks silly.
+    row = {
+        fields: [
+            {type: "button", params: [exists ? "Delete" : "Create", "c", "ActionButton_" + inst, function() {on_action_button_click(inst, true /* toggle 'Create' to 'Delete' and vice versa */);}]},
+            {type: "text",   params: [inst, "c"]},
+            {type: "chkbox", params: [conf.AdminActive, "c", "AdminActive_" + inst]},
+            {type: "select", params: [Object.values(redbox_lib_mode_map),                    Object.keys(redbox_lib_mode_map),                    conf.Mode,  "c", "Mode_"  + inst, 1, 1, false, function() {on_mode_change(inst);}]},
+            {type: "select", params: [Object.values(redbox_lib_port_map["PortA"][inst - 1]), Object.keys(redbox_lib_port_map["PortA"][inst - 1]), conf.PortA, "c", "PortA_" + inst, "77px"]},
+            {type: "select", params: [Object.values(redbox_lib_port_map["PortB"][inst - 1]), Object.keys(redbox_lib_port_map["PortB"][inst - 1]), conf.PortB, "c", "PortB_" + inst, "77px"]},
+            {type: "select", params: [Object.values(redbox_lib_net_id_map),                  Object.keys(redbox_lib_net_id_map),                  conf.NetId, "c", "NetId_" + inst, "50px"]},
+            {type: "select", params: [Object.values(redbox_lib_lan_id_map),                  Object.keys(redbox_lib_lan_id_map),                  conf.LanId, "c", "LanId_" + inst, "50px"]},
+            {type: "input",  params: [conf.NtAgeTime,  "cr", "NtAgeTime_"  + inst, 3, redbox_lib_max_value_to_digit_cnt(globals.capabilities.NtAgeTimeMax),  "90px"]},
+            {type: "input",  params: [conf.PntAgeTime, "cr", "PntAgeTime_" + inst, 3, redbox_lib_max_value_to_digit_cnt(globals.capabilities.PntAgeTimeMax), "120px"]},
+            {type: "input",  params: [conf.DdAgeTime,  "cr", "DdAgeTime_"  + inst, 3, redbox_lib_max_value_to_digit_cnt(globals.capabilities.DdAgeTimeMax),  "120px"]},
+            {type: "input",  params: [conf.SvVlan,     "cr", "SvVlan_"     + inst, 4, redbox_lib_max_value_to_digit_cnt(4095),                       "90px"]},
+            {type: "select", params: [Object.values(redbox_lib_pcp_map), Object.keys(redbox_lib_pcp_map), conf.SvPcp, "c", "SvPcp_" + inst, "43px"]},
+            {type: "input",  params: [redbox_lib_d2h(conf.SvDmacLsb, 2), "cr", "SvDmacLsb_" + inst, 4, 4, "100px"]},
+            {type: "input",  params: [conf.SvFrameInterval, "cr", "SvFrameInterval_" + inst, 3, redbox_lib_max_value_to_digit_cnt(globals.capabilities.SvFrameIntervalMax), "60px"]},
+            {type: "chkbox", params: [conf.SvXlatPrpToHsr, "c", "SvXlatPrpToHsr_" + inst]},
+            {type: "chkbox", params: [conf.SvXlatHsrToPrp, "c", "SvXlatHsrToPrp_" + inst]},
+            {type: "image",  params: ["c", redbox_lib_oper_state_to_image(statu), redbox_lib_oper_state_to_str(statu)]}]
+        };
+
+    redbox_lib_disable_button_add("ActionButton_" + inst);
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var inst, inst_conf, inst_statu;
+    var table_rows = new Array();
+
+    // Add table header
+    add_header(table_rows);
+
+    // Add all InstCntMax rows. If an instance is created, use conf. Otherwise
+    // use globals.default_conf.
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        inst_conf  = redbox_lib_inst_get(variables.conf,  inst);
+        inst_statu = redbox_lib_inst_get(variables.statu, inst);
+
+        if (inst_conf) {
+            // If someone deletes or creates an instance before we get both
+            // configuration and status, status may be undefined.
+            table_rows.push(add_row(inst, inst_conf.val, inst_statu ? inst_statu.val : undefined));
+        } else {
+            // Not found. Add default row.
+            table_rows.push(add_row(inst, globals.default_conf, undefined));
+        }
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// tooltip_min_max_add()
+/******************************************************************************/
+function tooltip_min_max_add(name, inst, units)
+{
+    var fld = $(name + "_" + inst);
+
+    if (!fld) {
+        return;
+    }
+
+    fld.setAttribute('title', globals.capabilities[name + "Min"] + " - " + globals.capabilities[name + "Max"] + " " + units);
+}
+
+/******************************************************************************/
+// tooltip_add()
+/******************************************************************************/
+function tooltip_add(name, inst, text)
+{
+    var fld = $(name + "_" + inst);
+
+    if (!fld) {
+        return;
+    }
+
+    fld.setAttribute('title', text);
+}
+
+/******************************************************************************/
+// tooltips_update()
+/******************************************************************************/
+function tooltips_update()
+{
+    var inst;
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        tooltip_min_max_add("NtAgeTime",       inst, "seconds");
+        tooltip_min_max_add("PntAgeTime",      inst, "seconds");
+        tooltip_min_max_add("DdAgeTime",       inst, "milliseconds");
+        tooltip_min_max_add("SvFrameInterval", inst, "seconds");
+
+        tooltip_add("SvVlan",         inst, "Use 0 to indicate use of the interlink port's native VLAN (the port VLAN ID)");
+        tooltip_add("SvXlatPrpToHsr", inst, "Enable to have sofware translate supervision frames from the PRP network to HSR supervision frames and forward to HSR ring");
+        tooltip_add("SvXlatHsrToPrp", inst, "Enable to have sofware translate supervision frames from the HSR ring to PRP supervision frames and forward to the PRP network");
+    }
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    var inst;
+
+    // Add table rows
+    var table_rows = add_rows();
+    configTable.addRows(table_rows);
+
+    // Update this dynamic table
+    configTable.update();
+
+    // Update tool tips (we can only do this *after* the table has been
+    // displayed, because otherwise the $(id) doesn't work.
+    tooltips_update();
+
+    // Update enabledness (this can also only be done after the table has been
+    // displayed.
+    action_button_click_all();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}};
+    redbox_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    redbox_lib_port_map_create(globals.interfaces);
+    requestUpdate();
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    configTable = new DynamicTable("configTableContent", "config");
+
+    redbox_lib_disable_button_add("refresh_button");
+    redbox_lib_disable_button_add("save_button");
+
+    globals = {capabilities: {}, default_conf: {}, interfaces: {}};
+    redbox_lib_json_request(globals, on_globals_received);
+});
+ </script>
+</head>
+
+<body class="content">
+  <h1>RedBox Configuration</h1>
+  <div class="refreshbar">
+    <input type="button" id="refresh_button" value="Refresh" onClick="requestUpdate(); this.blur();"/>
+    <img id="redbox_update" alt="" src="images/updating.gif"/>
+  </div>
+
+  <form id="tablesForm" action="">
+    <div id="configTableContent"></div>
+
+    <p>
+      <input type="button" id="save_button" value="Save"  onclick="on_save_button_click();"/>
+      <input type="button" value="Reset" onclick="on_reset_button_click();"/>
+    </p>
+  </form>
+</body>
+
+</html>
+

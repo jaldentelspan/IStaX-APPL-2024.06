@@ -1,0 +1,634 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Media Redundancy Protocol Detailed Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="cfm_lib.js"></script>
+ <script type="text/javascript" src="iec_mrp_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_iec_mrp_edit.htm";
+
+// Page Argument
+var pageArgs = searchArgs(window.location.search);
+var mrpId = 0;
+if (pageArgs["mrpid"]) {
+    mrpId = parseInt(pageArgs["mrpid"], 10);
+}
+
+// Global variables
+var configDynamicTable, configInDynamicTable, sfTriggerDynamicTable, sfTriggerInDynamicTable, myCapabilities, myPortInfo;
+var oTPort = Array(), oVPort = Array();
+
+function redirectPage(recv_json)
+{
+    document.location.href = "iec_mrp_ctrl.htm";
+}
+
+function isDuplicatedRowKey()
+{
+    var new_key_fld = $("mrpId");
+
+    if (!new_key_fld) { // Ignore the check if new key doesn't exist.
+        return false;
+    }
+
+    // Lookup original entries
+    var recv_json = configDynamicTable.getRecvJson("config");
+    for (var i = 0; i < recv_json.length; i++) {
+        if (new_key_fld.value == recv_json[i].key) {
+            // Found duplicated key
+            return !alert("The MRP instance ID " + new_key_fld.value + " already exists.");
+        }
+    }
+
+    return false;
+}
+
+function checkPrio(fld_id)
+{
+    // Default values
+    var minval = -1;
+    var maxval = -1;
+    var static1 = -1;
+    var static2 = -1;
+    var val;
+
+    //If role is 'mrm', valid values are 0x0000, 0x1000-0x7000, 0x8000. If role is 'mra', valid values are 0x9000-0xF000, 0xFFFF
+    var role = $("Role").value;
+
+    if (role === "mrm") {
+        minval = 0x1000;
+        maxval = 0x7000;
+        static1 = 0x0000;
+        static2 = 0x8000;
+    } else if (role === "mra") {
+        minval = 0x9000;
+        maxval = 0xF000;
+        static1 = 0xFFFF;
+    } else {
+        // default.
+        // don't care
+    }
+
+    var fld = document.getElementById(fld_id);
+    if(!fld) {
+        // Programming error
+        return GiveAlert("No such field: " + fld_id, fld);
+    }
+    val = fld.value;
+    // check for hex (0x<value>) notation
+    if (val.length >= 3 && val[0] === '0' && val[1].toLowerCase() === 'x') {
+        var valpart = val.slice(2);
+        if (!IsHex(valpart, 0)) {
+            return GiveAlert("Invalid hexadecimal number for " + fld_id, fld);
+        }
+        val = parseInt(valpart, 16);
+    } else {
+        if (!isInt(val.toString()))  {
+            return GiveAlert("Invalid decimal number format for" + fld_id, fld);
+        }
+        val = parseInt(val, 10);
+    }
+
+    if (val !== static1 &&  val !== static2 && ( val < minval || val > maxval)) {
+        if (role === "mrm") {
+            return GiveAlert(val +  " is not a valid value. In the mrm role valid values for priority are 0x0000, 0x1000-0x7000, 0x8000",  fld);
+        } else if (role === "mra") {
+            return GiveAlert(val +  " is not a valid value. In the mra role valid values for priority are 0x9000-0xF000, 0xFFFF",  fld);
+        } else {
+            // Client role, so don't care
+            return true;
+        }
+    } else {
+        return true;
+    }
+}
+
+function checkMep(trigger, field, maxlen, what)
+{
+    if (typeof (trigger) == "string") {
+        trigger = document.getElementById(trigger);
+    }
+    if (trigger.value == "link") {
+        // Dont care about MEP domain and service names.
+        return true;
+    } else {
+        // trigger.value == "mep"
+        // Check MEP domain and service names.
+        // isValidDomainOrServiceName imported from cfm by "cfm_lib.js"
+        return isValidDomainOrServiceName(field, maxlen, what);
+    }
+} 
+
+function checkMepId(trigger, field, min, max, what)
+{
+    if (typeof (trigger) == "string") {
+        trigger = document.getElementById(trigger);
+    }
+    if (trigger.value == "link") {
+        // Don't care about MEPId value
+        return true;
+    } else {
+        // trigger.value == "mep"
+        // Check MEPId value 1..8091
+        return isWithinRange(field, min, max, what);
+    }
+} 
+
+function geRowDefaultValue()
+{
+    var def_val =   {"AdminActive":false,"Role":"mra","DomainName":"","DomainId":"ffffffffffffffffffffffffffffffff","OUIType":"default","CustomOUI":"000000","RingPort1Interface":"NONE","RingPort1SfTrigger":"link",
+                    "RingPort1MEPDomain":"","RingPort1MEPService":"","RingPort1MEPId":0,"RingPort2Interface":"NONE","RingPort2SfTrigger":"link","RingPort2MEPDomain":"","RingPort2MEPService":"",
+                    "RingPort2MEPId":0,"Vid":0,"RecoveryProfile":"ms500","MrmPrio":40960,"MrmReactOnLinkChange":false,
+                    "InRole":"none","InMode":"linkCheck","InId":0,"InName":"","InPortInterface":"NONE","InPortSfTrigger":"link","InPortMEPDomain":"","InPortMEPService":"","InPortMEPId":0,"InVid":0,"InRecoveryProfile":"ms500"};
+    return def_val;
+}
+
+function addHeader(table_rows, name)
+{
+    var row;
+
+    if (name == "config") {
+        // 1st row
+        row = {fields:[
+                 {type:"disp_hdr", params:["Inst #", 1, 2]},
+                 {type:"disp_hdr", params:["Role", 1, 2]},
+                 {type:"disp_hdr", params:["Priority", 1, 2]},
+                 {type:"disp_hdr", params:["Manager react on link change", 1, 2]},
+                 {type:"disp_hdr", params:["Domain name", 1, 2]},
+                 {type:"disp_hdr", params:["Domain Id", 1, 2]},
+                 {type:"disp_hdr", params:["OUI Type", 1, 2]},
+                 {type:"disp_hdr", params:["OUI value", 1, 2]},
+                 {type:"disp_hdr", params:["VLAN", 1, 2]},
+                 {type:"disp_hdr", params:["Recovery profile", 1, 2]},
+                 {type:"disp_hdr", params:["Ring Port 1", 1, 2]},
+                 {type:"disp_hdr", params:["Ring Port 2", 1, 2]},
+                 {type:"disp_hdr", params:["Enable", 1, 2]}
+                ]
+              };
+        table_rows.push(row);
+
+    } else if (name == "configIn") {
+        // 1st row
+        row = {fields:[
+                 {type:"disp_hdr", params:["Role", 1, 2]},
+                 {type:"disp_hdr", params:["Mode", 1, 2]},
+                 {type:"disp_hdr", params:["Name", 1, 2]},
+                 {type:"disp_hdr", params:["Id", 1, 2]},
+                 {type:"disp_hdr", params:["VLAN", 1, 2]},
+                 {type:"disp_hdr", params:["Port", 1, 2]},
+                 {type:"disp_hdr", params:["Recovery profile", 1, 2]}
+                ]
+              };
+        table_rows.push(row);
+
+    } else if (name == "sfTrigger") {
+
+        row = {fields:[
+                 {type:"disp_hdr", params:["Signal fail trigger for ring Port1", 4]},
+                 {type:"disp_hdr", params:["Signal fail trigger for ring Port2", 4]}
+                ]
+              };
+        table_rows.push(row);
+
+        // 2nd row
+        row = {fields:[
+                 {type:"disp_hdr", params:["Type"]},
+                 {type:"disp_hdr", params:["Domain"]},
+                 {type:"disp_hdr", params:["Service"]},
+                 {type:"disp_hdr", params:["MEPID"]},
+                 {type:"disp_hdr", params:["Type"]},
+                 {type:"disp_hdr", params:["Domain"]},
+                 {type:"disp_hdr", params:["Service"]},
+                 {type:"disp_hdr", params:["MEPID"]}
+                ]
+              };
+        table_rows.push(row);
+
+    } else if (name == "sfTriggerIn") {
+
+        row = {fields:[
+                {type:"disp_hdr", params:["Signal fail trigger for interconnect Port", 4]}
+                ]
+            };
+        table_rows.push(row);
+
+        // 2nd row
+        row = {fields:[
+                {type:"disp_hdr", params:["Type"]},
+                {type:"disp_hdr", params:["Domain"]},
+                {type:"disp_hdr", params:["Service"]},
+                {type:"disp_hdr", params:["MEPID"]}
+                ]
+            };
+        table_rows.push(row);
+
+    }
+}
+
+function roleChange()
+{
+    var disablePrio  = true;
+
+    // we can be either manager (mrm), client (mrc) or automanager (mra)
+    if ($("Role").value === "mrm") {
+        disablePrio = false;
+    }
+    if ($("Role").value === "mra") {
+        disablePrio = false;
+    }
+
+    $("MrmPrio").disabled = disablePrio;
+}
+
+function ouiTypeChange()
+{
+    var disableField;
+
+    if ($("OUIType").value === "custom") {
+        disableField = false;
+    } else {
+        disableField = true;
+    }
+
+    $("CustomOUI").disabled = disableField;
+
+}
+
+function addConfigRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"digit",      params:[key]},
+            {type:"select",     params:[oTRole, oVRole, val.Role, "c", "Role", 1, 1, false, roleChange]},
+            {type:"input",      params:["0x" + val.MrmPrio.toString(16).toUpperCase(), "cr", "MrmPrio", 6, 6],
+                                    validate:{func:checkPrio, params:["MrmPrio"]}},
+            {type:"chkbox",     params:[val.MrmReactOnLinkChange, "cr", "MrmReactOnLinkChange"]},
+            {type:"input",      params:[val.DomainName, "cr", "DomainName", 10, 10]},
+            {type:"input",      params:[val.DomainId, "cr", "DomainId", 20, 32]},
+            {type:"select",     params:[oTOUIType, oVOUIType, val.OUIType, "c", "OUIType", 1, 1, false, ouiTypeChange]},
+            {type:"input",      params:[val.CustomOUI, "cr", "CustomOUI", 6, 6]},
+            {type:"input",      params:[val.Vid, "cr", "Vid", 4, 4],
+                                    validate:{func:isWithinRange, params:["Vid", 0, configVlanIdMax, "Vid"]}},
+            {type:"select",     params:[oTRecoveryProfile, oVRecoveryProfile, val.RecoveryProfile, "cr", "RecoveryProfile", 1, 1, false, roleChange]},
+            {type:"select",     params:[oTPort, oVPort, val.RingPort1Interface, "cr", "RingPort1Interface"]},
+            {type:"select",     params:[oTPort, oVPort, val.RingPort2Interface, "cr", "RingPort2Interface"]},
+            {type:"chkbox",     params:[val.AdminActive, "cr", "AdminActive"]}
+           ]
+    };
+
+     // Change field for new entry
+     if (parseInt(key, 10) === 0) {
+        // Use <input> for new key
+        row.fields[0] = {type:"input", params:[0, "cr", "mrpId", 2],
+                                       validate:{func:isWithinRange, params:["mrpId", 1, myCapabilities.InstCntMax, "Inst #"]}};
+    }
+
+    return row;
+}
+
+function addSfTriggerRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"select",     params:[oTSfTrigger, oVSfTrigger, val.RingPort1SfTrigger, "c", "RingPort1SfTrigger"]},
+            {type:"input",      params:[val.RingPort1MEPDomain, "cl", "RingPort1MEPDomain", 10, 15],
+                                    validate:{func:checkMep, params:["RingPort1SfTrigger","RingPort1MEPDomain", 15,"Port1 Domain" ]}},
+            {type:"input",      params:[val.RingPort1MEPService, "cl", "RingPort1MEPService", 10, 15],
+                                    validate:{func:checkMep, params:["RingPort1SfTrigger","RingPort1MEPService", 15,"Port1 Service" ]}},
+            {type:"input",      params:[val.RingPort1MEPId, "cr", "RingPort1MEPId", 4, 4],
+                                    validate:{func:checkMepId, params:["RingPort1SfTrigger", "RingPort1MEPId", 1, 8191, "Port1 MEPID"]}},
+            {type:"select",     params:[oTSfTrigger, oVSfTrigger, val.RingPort2SfTrigger, "c", "RingPort2SfTrigger"]},
+            {type:"input",      params:[val.RingPort2MEPDomain, "cl", "RingPort2MEPDomain", 10, 15],
+                                    validate:{func:checkMep, params:["RingPort2SfTrigger","RingPort2MEPDomain", 15,"Port2 Domain" ]}},
+            {type:"input",      params:[val.RingPort2MEPService, "cl", "RingPort2MEPService", 10, 15],
+                                    validate:{func:checkMep, params:["RingPort2SfTrigger","RingPort2MEPService", 15,"Port2 Service" ]}},
+            {type:"input",      params:[val.RingPort2MEPId, "cr","RingPort2MEPId", 4, 4],
+                                    validate:{func:checkMepId, params:["RingPort2SfTrigger", "RingPort2MEPId", 1, 8191, "Port2 MEPID"]}}
+            ]
+    };
+    return row;
+}
+
+function addSfTriggerInRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"select",     params:[oTSfTrigger, oVSfTrigger, val.InPortSfTrigger, "c", "InPortSfTrigger"]},
+            {type:"input",      params:[val.InPortMEPDomain, "cl", "InPortMEPDomain", 10, 15],
+                                    validate:{func:checkMep, params:["InPortSfTrigger","InPortMEPDomain", 15,"Interconnect Domain" ]}},
+            {type:"input",      params:[val.InPortMEPService, "cl", "InPortMEPService", 10, 15],
+                                    validate:{func:checkMep, params:["InPortSfTrigger","InPortMEPService", 15,"Interconnect Service" ]}},
+            {type:"input",      params:[val.InPortMEPId, "cr","InPortMEPId", 4, 4],
+                                    validate:{func:checkMepId, params:["InPortSfTrigger", "InPortMEPId", 1, 8191, "Interconnect MEPID"]}}
+            ]
+    };
+    return row;
+}
+
+function inRoleChange()
+{
+    var disableIn   = false;
+
+    // can be either mrc, mrm or none
+    if ($("InRole").value === "none") {
+        disableIn = true;
+    }
+
+    $("InName").disabled                            = disableIn;
+    $("InVid").disabled                             = disableIn;
+    $("InPortInterface").disabled                   = disableIn;
+    $("InRecoveryProfile").disabled                 = disableIn;
+    $("InId").disabled                              = disableIn;
+    $("InMode").disabled                            = disableIn;
+
+    //SfTrigger
+    $("InPortSfTrigger").disabled                   = disableIn;
+    $("InPortMEPDomain").disabled                   = disableIn;
+    $("InPortMEPService").disabled                  = disableIn;
+    $("InPortMEPId").disabled                       = disableIn;
+
+}
+
+function addConfigRowIn(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"select",     params:[oTInRole, oVInRole, val.InRole, "c", "InRole", 1, 1, false, inRoleChange]},
+            {type:"select",     params:[oTInMode, oVInMode, val.InMode, "c", "InMode", 1, 1, false, inRoleChange]},
+            {type:"input",      params:[val.InName, "cr", "InName", 10, 10]},
+            {type:"input",      params:[val.InId, "cr", "InId", 5, 5],
+                                    validate:{func:isWithinRange, params:["InId", 0, 65535 , "InId"]}},
+            {type:"input",      params:[val.InVid, "cr", "InVid", 4, 4],
+                                    validate:{func:isWithinRange, params:["InVid", 0, configVlanIdMax, "InVid"]}},
+            {type:"select",     params:[oTPort, oVPort, val.InPortInterface, "cr", "InPortInterface"]},
+            {type:"select",     params:[oTInRecoveryProfile, oVInRecoveryProfile, val.InRecoveryProfile, "cr", "InRecoveryProfile",  1, 1, false, inRoleChange]}
+           ]
+    };
+    return row;
+}
+
+function addRows(recv_json, name)
+{
+    var table_rows = new Array();
+    addHeader(table_rows, name);
+
+    if (name == "config") {
+        table_rows.push(addConfigRow(recv_json.key, recv_json.val));
+    } else if (name == "configIn") {
+        table_rows.push(addConfigRowIn(recv_json.key, recv_json.val));
+    } else if (name == "sfTrigger") {
+        table_rows.push(addSfTriggerRow(recv_json.key, recv_json.val));
+    } else if (name == "sfTriggerIn") {
+        table_rows.push(addSfTriggerInRow(recv_json.key, recv_json.val));
+    }
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    var record = null;
+    var i;
+
+    configDynamicTable.restore();
+    configInDynamicTable.restore();
+    sfTriggerDynamicTable.restore();
+
+    // Save the received JSON data
+    configDynamicTable.saveRecvJson("config", recv_json);
+
+    if (mrpId) {
+        // Redirect page if this ID doesn't exist.
+        for (i = 0; i < recv_json.length; i++) {
+            if (mrpId == recv_json[i].key) {
+                record = recv_json[i];
+                break;
+            }
+        }
+        if (!record) {
+            alert("Inst #" + mrpId + " does not exist.");
+            redirectPage();
+            return;
+        }
+    } else { // when mrpId = 0 it means new entry
+        record = {"key":0,"val":geRowDefaultValue()};
+    }
+
+    // Limit possible RecoveryProfile selections to values equal to or slower than
+    // myCapabilities.FastestRecoveryProfile. Do that by deleting values, until we meet an
+    // entry which is equal to the value of FastestRecoveryProfile
+    while (oVRecoveryProfile.length > 0) {
+        if (oVRecoveryProfile[0] === myCapabilities.FastestRecoveryProfile) {
+            // Found the fastest allowable Recovery profile.
+            break;
+        } else {
+            // delete the first element
+            oVRecoveryProfile.shift();
+            oTRecoveryProfile.shift();
+        }
+    }
+
+    while (oVInRecoveryProfile.length > 0) {
+        if (oVInRecoveryProfile[0] === myCapabilities.FastestRecoveryProfile) {
+            // Found the fastest allowable Recovery profile.
+            break;
+        } else {
+            // delete the first element
+            oVInRecoveryProfile.shift();
+            oTInRecoveryProfile.shift();
+        }
+    }
+
+    // One record inclues 5 tables
+    configDynamicTable.addRows(addRows(record, "config")); 
+    configDynamicTable.update();
+
+    configInDynamicTable.addRows(addRows(record, "configIn"));
+    configInDynamicTable.update();
+
+    sfTriggerDynamicTable.addRows(addRows(record, "sfTrigger"));
+    sfTriggerDynamicTable.update();
+
+    sfTriggerInDynamicTable.addRows(addRows(record, "sfTriggerIn"));
+    sfTriggerInDynamicTable.update();
+
+    roleChange();
+    inRoleChange();
+
+}
+
+function submitForms()
+{
+    var json_array;
+    // Validate row data
+    if (!configDynamicTable.validate() ||
+        !sfTriggerDynamicTable.validate() ||
+        !configInDynamicTable.validate() ||
+        !sfTriggerInDynamicTable.validate() ||
+        isDuplicatedRowKey()) {
+        return;
+    }
+
+    // Remove unnecessary fields
+    var trim_ids = Array();
+    trim_ids.push("mrpId");
+
+    // Convert HTML object to JSON
+    var json_obj = html2Json(myTablesForm, trim_ids);
+
+    // If value of MrmPrio is in hex format, convert it to decimal format
+    var val = $("MrmPrio").value;
+    if (val.length >= 3 && val[0] === '0' && val[1].toLowerCase() === 'x') {
+        var valpart = val.slice(2);
+        val = parseInt(valpart, 16);
+        json_obj.MrmPrio = val;
+    }
+
+    // Submit data with JSON format
+    var key = mrpId ? mrpId : $("mrpId").value;
+    var submit_json = [key, json_obj];
+
+    requestJsonDoc("iecMrp.config." + (mrpId ? "set" : "add"), submit_json, redirectPage);
+}
+
+function resetForms()
+{
+    configDynamicTable.resetEvent();
+    sfTriggerDynamicTable.resetEvent();
+    configInDynamicTable.resetEvent();
+    sfTriggerInDynamicTable.resetEvent();
+}
+
+function clickCancel()
+{
+    document.location.href="iec_mrp_ctrl.htm";
+}
+
+function clickBack()
+{
+    document.location.href = sourceLink;
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = configDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            oTPort.push("none");
+            oVPort.push("NONE");
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myCapabilities && myPortInfo) {
+        requestJsonDoc("iecMrp.config.get", null, processUpdate, "config");
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    configDynamicTable          = new DynamicTable("configTableContent", "config");
+    configInDynamicTable        = new DynamicTable("configInTableContent", "config");
+    sfTriggerDynamicTable       = new DynamicTable("sfTriggerTableContent", "config");
+    sfTriggerInDynamicTable     = new DynamicTable("sfTriggerInTableContent", "config");
+
+
+    // This table requires two JSON data(capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requrested only one time.
+    requestJsonDoc("iecMrp.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>Media Redundancy Protocol Configuration</h1>
+
+<div class="refreshbar">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<form id="myTablesForm" action="">
+
+<h2>Configuration Ring</h2>
+<div id="configTableContent"></div>
+<h2>Signal Fail Trigger</h2>
+<div id="sfTriggerTableContent"></div>
+<h2>Configuration Interconnection</h2>
+<div id="configInTableContent"></div>
+<h2>Signal Fail Trigger</h2>
+<div id="sfTriggerInTableContent"></div>
+
+<p>
+<input type="button" value="Save" onclick="submitForms();">
+<input type="button" value="Reset" onclick="resetForms();">
+<input type="button" value="Cancel" onclick="clickCancel();">
+</p>
+
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</form>
+
+</body>
+</html>

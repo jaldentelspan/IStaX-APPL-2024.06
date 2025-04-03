@@ -1,0 +1,240 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>PTP Clock Monitor Page</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_ptp_stat.htm";
+var timerID = null;
+var ptp_clocks = Array();
+var portcount = configNormalPortMax - configPortMin + 1;
+
+function CreateTableHeader (frag)
+{
+     var tr;
+     tr = CreateStyledElement("tr", "config_header");
+     addTextHeaderCell(tr, "", "hdrc", 3);
+     addTextHeaderCell(tr, "Port List", "hdrc", portcount);
+     frag.appendChild(tr);       // Add row to fragment
+     tr = CreateStyledElement("tr", "config_header");
+     addTextHeaderCell(tr,"Inst","hdrc");
+     addTextHeaderCell(tr,"ClkDom","hdrc");
+     addTextHeaderCell(tr,"Device Type","hdrc");
+     for (var i = configPortMin; i <= configNormalPortMax; i++ )
+         addTextHeaderCell(tr, configPortName(i, 0), "portno");
+     frag.appendChild(tr);       // Add row to fragment
+}
+
+function addClonedNode(tr, val, proto)
+{
+   if(parseInt(val)) {
+        var td = CreateTd("c");
+        addCell(tr, td, proto.cloneNode(1));
+    } else {
+        addTextCell(tr, "", "c");
+    }
+}
+
+
+
+function addRow(index, frag, values) {
+    var tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var td = CreateStyledElement("td", "c");
+    var bullet = document.getElementById("bullet");
+    var txt = document.createTextNode(values[0]);
+    var link = document.createElement("a");
+    link.href = "ptp_clock.htm?clock_inst=" + parseInt(values[0]);
+    link.appendChild(txt);  // Add Text
+    td.appendChild(link);   // Add link to cell
+    tr.appendChild(td);     // Add cell to row
+    // check<<<<<<< HEAD
+    addTextCell(tr, values[1], "c");
+    addTextCell(tr, values[2], "c");
+    for(var i = 3; i < values.length; i++) {
+        if (values[i] != "") {
+            addClonedNode(tr, parseInt(values[i]), bullet);
+        }
+    }
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+function processUpdate(req, ref)
+{
+    // Format:
+    // |<clock_instance>/<clock_type>/<en>/<en>/..../<en>/|....
+    // !1/ord_bound/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1/1|....
+    if(redirectOnError(req))
+        return;
+    if (req.responseText) {
+        
+        var data_options       = req.responseText.split("^");
+        var one_pps_mode_data  = data_options[1].split("|");
+        ptp_clocks             = data_options[2].split("|");
+
+
+        var frag = document.createDocumentFragment();
+        var tr = CreateStyledElement("tr","config_even");
+        addTextCell(tr, "One_PPS_Mode", "param_label");
+        var td = addTextCell(tr, one_pps_mode_data[0], "cl");
+        td.style.width = "16em";
+        frag.appendChild(tr); 
+
+        var tr = CreateStyledElement("tr","config_odd");
+        addTextCell(tr, "External Enable", "param_label");
+        var td = addTextCell(tr, one_pps_mode_data[1], "cl");
+        td.style.width = "16em";
+        frag.appendChild(tr);
+
+        var tr = CreateStyledElement("tr","config_even");
+        addTextCell(tr, "Adjust Method", "param_label");
+        var td = addTextCell(tr, one_pps_mode_data[3], "cl");
+        td.style.width = "16em";
+        frag.appendChild(tr);
+
+        var tr = CreateStyledElement("tr","config_odd");
+        addTextCell(tr, "Clock Frequency", "param_label");
+        var td = addTextCell(tr, one_pps_mode_data[2], "cl");
+        td.style.width = "16em";
+        frag.appendChild(tr);
+
+        var tr = CreateStyledElement("tr","config_even");
+        addTextCell(tr, "One PPS Domain", "param_label");
+        var td = addTextCell(tr, one_pps_mode_data[4], "cl");
+        td.style.width = "16em";
+        frag.appendChild(tr);
+
+        var tbody = document.getElementById("ptpExtClockConfigData");
+        clearChildNodes(tbody);
+        if (!tbody.appendChild(frag)) { // Add Frag to table body
+            alert("This browser doesn't support dynamic tables.");
+        }
+
+        // create holder for accumulated tbody elements and text nodes
+        var frag = document.createDocumentFragment();
+        CreateTableHeader(frag);
+
+        // Determine if there are any entries
+        if (ptp_clocks.length > 1) {
+            for(var i = 0; i < ptp_clocks.length; i++) {        
+                if(ptp_clocks[i]) {
+                    addRow(i, frag, ptp_clocks[i].split("/"));
+                }
+            }
+        } else {
+            // no entries found - Display that in the table
+            var tr = CreateStyledElement("tr","config_even");
+            addTextCell(tr, "", "c");
+            addTextCell(tr, "No Clock Instances Present", "c");
+            addTextCell(tr, "", "c");
+            for(var i = 0; i < portcount; i++) {
+                addTextCell(tr, "", "c");
+            }
+
+            frag.appendChild(tr);       // Add row to fragment
+        }
+        var tbody = document.getElementById("ptpData");
+        clearChildNodes(tbody);
+        if (!tbody.appendChild(frag)) { // Add Frag to table body
+            alert("This browser doesn't support dynamic tables.");
+        }
+    } else {
+        SpomHandleError();
+    }
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh.checked) {
+        if(timerID)
+           clearTimeout(timerID);
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+    document.getElementById("update").style.visibility = "hidden";
+}
+
+function requestUpdate() {
+    if(SpomNavigationLoading())
+        return;                 // Bail out, navigation will trigger update
+    document.getElementById("update").style.visibility = "visible";
+    loadXMLDoc(SpomAddSidArg("/stat/ptp"), processUpdate, null);
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+            timerID = null;
+        }
+    } else {
+        requestUpdate();
+    }
+}
+
+</script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+    <h1>PTP External Clock Mode <span id="display_sid"></span></h1>
+     <table id="PTPExtClockMode" summary="PTP External Clock Mode Configuration" cellspacing="0" class="config"> 
+         <tbody id="ptpExtClockConfigData"></tbody> 
+     </table> 
+    <h1>&nbsp;</h1>
+    <h1>PTP Clock Configuration</h1>
+    <div class="refreshbar">
+        <form action="#">
+            <label for="autorefresh">Auto-refresh</label>
+            <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+            <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+            <img id="update" alt="" src="images/updating.gif">
+        </form>
+    </div>
+    <table id="ptpConfig" summary="PTP Clock Configuration" cellspacing="0" class="config">
+        <tbody id="ptpData"></tbody>
+    </table>
+    <div style="visibility: hidden">
+        <img id="bullet" alt="yes" src="images/yes.gif" height="15">
+    </div>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

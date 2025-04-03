@@ -1,0 +1,1752 @@
+# Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_SNMP)
+
+INCLUDE_BEGIN
+#include "misc_api.h"          /* For uport2iport(), iport2uport()         */
+#include "port_iter.hxx"       /* For switch_iter_init(), port_iter_init() */
+#include "vtss_snmp_api.h"
+#include "vtss_auth_api.h"
+#ifdef VTSS_SW_OPTION_SMB_SNMP
+#include "rfc4133_entity.h"
+#endif //VTSS_SW_OPTION_SMB_SNMP
+#include "topo_api.h"
+#include "icli_porting_util.h" /* For icli_bool_txt()                      */
+#include "vtss_private_trap.hxx"
+#ifdef VTSS_SW_OPTION_LLDP
+#include "lldp_api.h"
+#include "lldp_icli_functions.h"
+#include <vector>       /* For variable trap_source_names */
+using namespace std;
+#endif
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+typedef enum {
+    CONF_SHUTDOWN_CMD,
+    CONF_HOST_CMD,
+    CONF_VERSION_CMD,
+    CONF_INFORM_CMD,
+    CONF_NO_INFORM_CMD,
+    CONF_TRAP_CMD,
+    CONF_NO_TRAP_CMD,
+    CONF_INTF_CMD,
+    CONF_CMD_END
+}TRAP_ICLI_conf_cmd_t;
+
+static BOOL snmp_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = snmp_module_enabled();
+        return TRUE;
+   }
+   return FALSE;
+}
+
+/* Parse raw text engine ID string */
+static BOOL cli_parse_engineid(u32 session_id, char *cmd, u32 *engineid_len, u8 *engineid)
+{
+    i32     slen = strlen(cmd);
+    i32     idx;
+    u32     pval;
+    char    buf[4];
+
+    /* The format of 'Engine ID' may not be all zeros or all 'ff'H
+       and is restricted to 5 - 32 octet string */
+
+    for (idx = 0; idx < slen; idx++) {
+        if (!((cmd[idx] >= '0' && cmd[idx] <= '9') || (cmd[idx] >= 'A' && cmd[idx] <= 'F') || (cmd[idx] >= 'a' && cmd[idx] <= 'f'))) {
+            ICLI_PRINTF("The format of 'Engine ID' may not be all zeros or all 'ff'H and is restricted to 5 - 32 octet string\n");
+            return FALSE;
+        }
+    }
+
+    if ((slen % 2) || (slen < SNMPV3_MIN_ENGINE_ID_LEN * 2) || (slen > SNMPV3_MAX_ENGINE_ID_LEN * 2)) {
+        ICLI_PRINTF("The format of 'Engine ID' may not be all zeros or all 'ff'H and is restricted to 5 - 32 octet string\n");
+        return FALSE;
+    }
+
+    for (idx = 0; idx < slen; idx = idx + 2) {
+        memcpy(buf, cmd + idx, 2);
+        buf[2] = '\0';
+        sscanf(buf, "%x", (unsigned int *)&pval);
+        engineid[idx / 2] = (u8)pval;
+    }
+    *engineid_len = slen / 2;
+
+    if (!snmpv3_is_valid_engineid(engineid, *engineid_len)) {
+        ICLI_PRINTF("The format of 'Engine ID' may not be all zeros or all 'ff'H and is restricted to 5 - 32 octet string\n");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static void TRAP_ICLI_conf_set(u32 session_id, TRAP_ICLI_conf_cmd_t cmd, char *conf_name, void* var)
+{
+    vtss_trap_entry_t   trap_conf;
+    vtss_trap_conf_t    *conf = &trap_conf.trap_conf;
+    //vtss_trap_event_t   *event = &trap_conf.trap_event;
+
+    strncpy(trap_conf.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_conf.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    (void)trap_mgmt_conf_get(&trap_conf);
+
+    switch (cmd) {
+        case CONF_SHUTDOWN_CMD:
+        {
+            BOOL  original_mode;
+            original_mode = conf->enable;
+            conf->enable = *(BOOL*)var;
+            if (conf->enable != original_mode ) {
+                (void)trap_mgmt_conf_set(&trap_conf);
+            }
+            break;
+        }
+        case CONF_INFORM_CMD:
+        {
+            vtss_trap_conf_t tmp, *ptr = (vtss_trap_conf_t*)var;
+            tmp = *conf;
+            conf->trap_inform_retries = ptr->trap_inform_retries;
+            conf->trap_inform_timeout = ptr->trap_inform_timeout;
+            if ( conf->trap_inform_retries != tmp.trap_inform_retries ||
+                    conf->trap_inform_timeout != tmp.trap_inform_timeout) {
+                (void) trap_mgmt_conf_set(&trap_conf);
+            }
+            break;
+        }
+        case CONF_NO_INFORM_CMD:
+        {
+            vtss_trap_entry_t tmp;
+            vtss_trap_conf_t *ptr = &tmp.trap_conf;
+            trap_mgmt_conf_default_get(&tmp);
+
+            if ( conf->trap_inform_retries != ptr->trap_inform_retries ||
+                    conf->trap_inform_timeout != ptr->trap_inform_timeout) {
+                conf->trap_inform_retries = ptr->trap_inform_retries;
+                conf->trap_inform_timeout = ptr->trap_inform_timeout;
+                (void) trap_mgmt_conf_set(&trap_conf);
+            }
+            break;
+        }
+        //case CONF_TRAP_CMD:
+        //{
+        //    vtss_trap_event_t tmp, *ptr = (vtss_trap_event_t*)var;
+        //    memcpy(&ptr->interface, &event->interface, sizeof(event->interface));
+        //    tmp = *(vtss_trap_event_t*)event;
+        //    *event = *ptr;
+        //    if (memcmp( &tmp, event, sizeof(*event))) {
+        //        (void) trap_mgmt_conf_set(&trap_conf);
+        //    }
+        //    break;
+        //}
+        default:
+            ICLI_PRINTF("undkown cmd %d\n", cmd);
+            break;
+    }
+
+}
+
+
+static void TRAP_ICLI_show_host(u32 session_id, char *conf_name)
+{
+    vtss_trap_entry_t   trap_entry;
+    vtss_trap_conf_t    *cfg = &trap_entry.trap_conf;
+    BOOL                exact = conf_name == NULL ? FALSE: TRUE;
+    char                buf[64];
+
+    if ( NULL != conf_name ) {
+        strncpy(trap_entry.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+        trap_entry.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    } else {
+        strcpy(trap_entry.trap_conf_name, "");
+    }
+
+    while ( (TRUE == exact &&  VTSS_RC_OK == trap_mgmt_conf_get( &trap_entry) ) ||
+            (FALSE == exact && VTSS_RC_OK == trap_mgmt_conf_get_next( &trap_entry))) {
+        ICLI_PRINTF("Trap %s (ID:%d) is %s\n",
+                trap_entry.trap_conf_name,
+                cfg->conf_id,
+                icli_bool_txt(cfg->enable));
+
+        ICLI_PRINTF("Community       : %s\n", cfg->trap_communitySecret);
+        if (cfg->dip.type == VTSS_INET_ADDRESS_TYPE_IPV4) {
+            ICLI_PRINTF("Destination Host: %s\n", misc_ipv4_txt(cfg->dip.address.ipv4, buf));
+        } else if (cfg->dip.type == VTSS_INET_ADDRESS_TYPE_IPV6) {
+            ICLI_PRINTF("Destination Host: %s\n", misc_ipv6_txt(&cfg->dip.address.ipv6, buf));
+        } else if (cfg->dip.type == VTSS_INET_ADDRESS_TYPE_DNS) {
+            ICLI_PRINTF("Destination Host: %s\n", cfg->dip.address.domain_name.name);
+        } else {
+            ICLI_PRINTF("Destination Host: INVALID!\n");
+        }
+        ICLI_PRINTF("UDP Port        : %u\n", cfg->trap_port);
+        switch ( cfg->trap_version ) {
+        case SNMP_MGMT_VERSION_1:
+            ICLI_PRINTF("Version         : V1\n");
+            break;
+        case SNMP_MGMT_VERSION_2C:
+            ICLI_PRINTF("Version         : V2C\n");
+            break;
+        case SNMP_MGMT_VERSION_3:
+            ICLI_PRINTF("Version         : V3\n");
+            break;
+        default:
+            ICLI_PRINTF("Version         : INVALID!\n");
+            break;
+        }
+
+        if (cfg->trap_version == SNMP_MGMT_VERSION_3 || cfg->trap_version == SNMP_MGMT_VERSION_2C) {
+            ICLI_PRINTF("Inform Mode     : %s\n", icli_bool_txt(cfg->trap_inform_mode));
+            ICLI_PRINTF("Inform Timeout  : %u\n", cfg->trap_inform_timeout);
+            ICLI_PRINTF("Inform Retry    : %u\n", cfg->trap_inform_retries);
+        }
+        if (cfg->trap_version == SNMP_MGMT_VERSION_3) {
+            char buf[SNMPV3_MAX_ENGINE_ID_LEN*2+1];
+            ICLI_PRINTF("Engine ID       : %s\n", misc_engineid2str(buf, cfg->trap_engineid, cfg->trap_engineid_len));
+            ICLI_PRINTF("Security Name   : %s\n", cfg->trap_security_name);
+        }
+
+        ICLI_PRINTF("\n");
+        if ( TRUE == exact ) {
+            break;
+        }
+    }
+
+}
+
+static void TRAP_ICLI_show_source(u32 session_id, char *source_name)
+{
+    vtss_trap_source_t  trap_source;
+    vtss_trap_filter_t  *cfg = &trap_source.trap_filter;
+    vtss_trap_filter_item_t *item;
+    int                 i = 0;
+    BOOL                exact = source_name == NULL ? FALSE: TRUE;
+
+    if ( NULL != source_name ) {
+        strncpy(trap_source.source_name, source_name, TRAP_MAX_TABLE_NAME_LEN);
+        trap_source.source_name[TRAP_MAX_TABLE_NAME_LEN] = 0;
+    } else {
+        strcpy(trap_source.source_name, "");
+    }
+
+    while ( (TRUE == exact &&  VTSS_RC_OK == trap_mgmt_source_get( &trap_source) ) ||
+            (FALSE == exact && VTSS_RC_OK == trap_mgmt_source_get_next( &trap_source))) {
+        ICLI_PRINTF("Trap %s (ID:%d) enabled with filters\n",
+                trap_source.source_name,
+                cfg->conf_id);
+        for (i = 0; i < VTSS_TRAP_FILTER_MAX; i++) {
+            item = cfg->item[i];
+            if (item) {
+                ICLI_PRINTF(" %s %s (ID:%d)\n",
+                    (item->index_filter_len <= 1) ? "all" : misc_oid2str(item->index_filter + 1, item->index_filter_len - 1, item->index_mask, item->index_mask_len),
+                    item->filter_type == SNMPV3_MGMT_VIEW_INCLUDED ? "included" : "excluded", i);
+            }
+        }
+
+        ICLI_PRINTF("\n");
+        if ( TRUE == exact ) {
+            break;
+        }
+    }
+
+}
+
+static BOOL trap_runtime_cword_source_name(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    u32 i = 0;
+    static BOOL init_flag = FALSE;
+    static vector<std::string> trap_source_names = {
+        TRAP_NAME_COLD_START,
+        TRAP_NAME_WARM_START,
+        TRAP_NAME_LINK_UP,
+        TRAP_NAME_LINK_DOWN,
+        TRAP_NAME_AUTH_FAIL};
+    std::vector<std::string>::iterator itr;
+
+    if (runtime == NULL) {
+        return FALSE;
+    }
+
+    switch (ask) {
+    case ICLI_ASK_CWORD:
+        if (init_flag == FALSE) { // Add dynamic trap souce names
+
+#if defined(VTSS_SW_OPTION_MSTP)
+            trap_source_names.push_back(TRAP_NAME_NEW_ROOT);
+            trap_source_names.push_back(TRAP_NAME_TOPO_CHNG);
+#endif /* VTSS_SW_OPTION_MSTP */
+
+#if defined(VTSS_SW_OPTION_LLDP)
+            trap_source_names.push_back(TRAP_NAME_LLDP_REM_TBL_CHNG);
+#endif /* VTSS_SW_OPTION_LLDP */
+
+#if defined(VTSS_SW_OPTION_RMON)
+            trap_source_names.push_back(TRAP_NAME_RMON_RISING);
+            trap_source_names.push_back(TRAP_NAME_RMON_FALLING);
+#endif /* VTSS_SW_OPTION_RMON */
+
+#if RFC4133_SUPPORTED_ENTITY
+#if RFC4133_SUPPORTED_TRAPS
+            trap_source_names.push_back(TRAP_NAME_ENTITY_CONF_CHNG);
+#endif /* RFC4133_SUPPORTED_ENTITY */
+#endif /* RFC4133_SUPPORTED_TRAPS */
+
+            std::string s("");
+            while (vtss::appl::snmp_trap::listen_get_next(s) == VTSS_RC_OK) {
+                std::string *new_name = new std::string(s);
+                trap_source_names.push_back(new_name->c_str());
+            }
+            init_flag = TRUE;
+        }
+
+        for (itr = trap_source_names.begin(); itr != trap_source_names.end(); itr++) {
+            runtime->cword[i++] = (char *) itr->c_str();
+        }
+
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no snmp-server host <word32>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+DESTROY_MODE = ICLI_CMD_MODE_SNMPS_HOST
+
+MODE_VAR =
+
+RUNTIME = snmp_present
+
+! 1: no
+! 2: snmp-server
+! 3: host
+! 4: <conf_name:word32>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = conf_name
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_SNMP
+HELP = ##ICLI_HELP_SNMP_HOST
+HELP = ##ICLI_HELP_SNMP_HOST_NAME
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <ConfName : word32>
+
+VARIABLE_BEGIN
+    vtss_trap_entry_t  trap_entry;
+    mesa_rc rc;
+VARIABLE_END
+
+CODE_BEGIN
+    /*lint -e(668) */
+    strncpy(trap_entry.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_entry.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    trap_entry.valid = FALSE;
+    if ((rc = trap_mgmt_conf_set(&trap_entry)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%s\n", error_txt(rc));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = shutdown
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: shutdown
+
+CMD_VAR =
+
+HELP = Disable the trap configuration
+
+BYWORD =
+
+VARIABLE_BEGIN
+    BOOL enable = FALSE;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    BOOL enable = TRUE;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    TRAP_ICLI_conf_set( session_id, CONF_SHUTDOWN_CMD, conf_name, &enable);
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    TRAP_ICLI_conf_set( session_id, CONF_SHUTDOWN_CMD, conf_name, &enable);
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+ICLI_HELP_SNMP_HOST_UDP_PORT    = UDP port of the trap messages
+ICLI_HELP_SNMP_HOST_TRAP        = Send Trap messages to this host
+ICLI_HELP_SNMP_HOST_INFORM      = Send Inform messages to this host
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = host { <ipv4_ucast> | <domain_name> } [ <1-65535> ] [ traps | informs ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: host
+! 2: <ipv4_ucast>
+! 4: <word45>
+! 5: <udp_port:1-65535>
+! 6: traps
+! 7: informs
+
+CMD_VAR =
+CMD_VAR = v_ipv4_ucast
+CMD_VAR = v_word
+CMD_VAR = udp_port
+CMD_VAR = has_traps
+CMD_VAR = has_informs
+
+HELP = host configuration
+HELP = IP address of SNMP trap host
+HELP = hostname of SNMP trap host
+HELP = ##ICLI_HELP_SNMP_HOST_UDP_PORT
+HELP = ##ICLI_HELP_SNMP_HOST_TRAP
+HELP = ##ICLI_HELP_SNMP_HOST_INFORM
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <UdpPort : 1-65535>
+BYWORD = <Traps : option>
+BYWORD = <Informs : option>
+
+VARIABLE_BEGIN
+    vtss_trap_entry_t   trap_conf;
+    vtss_trap_conf_t    *conf = &trap_conf.trap_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    /*lint -e(668) */
+    strncpy(trap_conf.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_conf.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    (void) trap_mgmt_conf_get(&trap_conf);
+    if (v_ipv4_ucast != 0 || v_word ) {
+        if (v_ipv4_ucast) {
+            conf->dip.type = VTSS_INET_ADDRESS_TYPE_IPV4;
+            conf->dip.address.ipv4 = v_ipv4_ucast;
+        } else {
+            conf->dip.type = VTSS_INET_ADDRESS_TYPE_DNS;
+            strncpy(conf->dip.address.domain_name.name, v_word, 254);
+            conf->dip.address.domain_name.name[254] = 0;
+        }
+    }
+
+    if (has_traps) {
+        conf->trap_inform_mode = FALSE;
+    } else if (has_informs) {
+        conf->trap_inform_mode = TRUE;
+    }
+
+    if (udp_port) {
+        conf->trap_port = udp_port;
+    }
+
+    (void) trap_mgmt_conf_set(&trap_conf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_IPV6)
+
+COMMAND = host <ipv6_ucast> [ <1-65535> ] [ traps | informs ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: host
+! 2: <ipv6_ucast>
+! 3: <udp_port:1-65535>
+! 4: traps
+! 5: informs
+
+CMD_VAR =
+CMD_VAR = v_ipv6_ucast
+CMD_VAR = udp_port
+CMD_VAR = has_traps
+CMD_VAR = has_informs
+
+HELP = host configuration
+HELP = IP address of SNMP trap host
+HELP = ##ICLI_HELP_SNMP_HOST_UDP_PORT
+HELP = ##ICLI_HELP_SNMP_HOST_TRAP
+HELP = ##ICLI_HELP_SNMP_HOST_INFORM
+
+BYWORD =
+BYWORD =
+BYWORD = <UdpPort : 1-65535>
+BYWORD = <Traps : option>
+BYWORD = <Informs : option>
+
+VARIABLE_BEGIN
+    vtss_trap_entry_t   trap_conf;
+    vtss_trap_conf_t    *conf = &trap_conf.trap_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    /*lint -e(668) */
+    strncpy(trap_conf.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_conf.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    (void) trap_mgmt_conf_get(&trap_conf);
+
+    conf->dip.type = VTSS_INET_ADDRESS_TYPE_IPV6;
+    conf->dip.address.ipv6 = v_ipv6_ucast;
+
+    if (has_traps) {
+        conf->trap_inform_mode = FALSE;
+    } else if (has_informs) {
+        conf->trap_inform_mode = TRUE;
+    }
+
+    if (udp_port) {
+        conf->trap_port = udp_port;
+    }
+
+    (void) trap_mgmt_conf_set(&trap_conf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no host
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: no
+! 2: host
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = SNMP host parameters
+
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_trap_entry_t   trap_entry;
+    vtss_trap_conf_t    *def = &trap_entry.trap_conf;
+    vtss_trap_entry_t   trap_conf;
+    vtss_trap_conf_t    *conf = &trap_conf.trap_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    trap_mgmt_conf_default_get(&trap_entry);
+    /*lint -e(668) */
+    strncpy(trap_conf.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_conf.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    (void) trap_mgmt_conf_get(&trap_conf);
+    memcpy(&conf->dip, &def->dip, sizeof(conf->dip));
+    conf->trap_inform_mode = def->trap_inform_mode;
+    conf->trap_port = def->trap_port;
+    (void) trap_mgmt_conf_set(&trap_conf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+ICLI_HELP_SNMP_TRAP_VERION = Set SNMP trap version
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = version { v1 [ { <word63> | encrypted <word96-224> } ] | v2 [ { <word63> | encrypted <word96-224> } ] | v3 engineID <word10-64> [ <word32> ] }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: version
+! 2: v1
+! 3: <v1_comm:word63>
+! 4: encrypted
+! 5: <v1_comm_sec:word96-224>
+! 6: v2
+! 7: <v2comm:word63>
+! 8: encrypted
+! 9: <v2_comm_sec:word96-224>
+!10: v3
+!11: engineID
+!12: <word10-64>
+!13: <securityname:word32>
+
+CMD_VAR =
+CMD_VAR = has_v1
+CMD_VAR = v1_comm
+CMD_VAR = has_v1_encrypted
+CMD_VAR = v1_comm_sec
+CMD_VAR = has_v2
+CMD_VAR = v2_comm
+CMD_VAR = has_v2_encrypted
+CMD_VAR = v2_comm_sec
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_word10_to_64
+CMD_VAR = securityname
+
+HELP = ##ICLI_HELP_SNMP_TRAP_VERION
+HELP = SNMP trap version 1
+HELP = SNMP trap community
+HELP = Use encrypted community secret
+HELP = Encrypted community secret
+HELP = SNMP trap version 2
+HELP = SNMP trap community
+HELP = Use encrypted community secret
+HELP = Encrypted community secret
+HELP = SNMP trap version 3
+HELP = Configure trap server's engine ID
+HELP = trap server's engine ID
+HELP = security name
+
+BYWORD =
+BYWORD = <V1 : option>
+BYWORD = <V1Comm : word63>
+BYWORD =
+BYWORD = <V1CommSec : word96-224>
+BYWORD = <V2 : option>
+BYWORD = <V2Comm : word63>
+BYWORD =
+BYWORD = <V1CommSec : word96-224>
+BYWORD = <V3 : option>
+BYWORD = <Engineid : option>
+BYWORD =
+BYWORD = <Securityname : word32>
+
+VARIABLE_BEGIN
+    vtss_trap_entry_t   trap_conf;
+    vtss_trap_conf_t    *conf = &trap_conf.trap_conf;
+    mesa_rc rc;
+VARIABLE_END
+
+CODE_BEGIN
+    /*lint -e(668) */
+    strncpy(trap_conf.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_conf.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    (void) trap_mgmt_conf_get(&trap_conf);
+
+    if ( has_v1) {
+        conf->trap_version = SNMP_MGMT_VERSION_1;
+        if (has_v1_encrypted) {
+            if ( v1_comm_sec) {
+                if (AUTH_validate_secret_key(TRUE, v1_comm_sec) != TRUE) {
+                    ICLI_PRINTF("%% Error in encrypted community.\n");
+                    return ICLI_RC_ERROR;
+                }
+                if ((rc = AUTH_secret_key_cryptography(FALSE, conf->trap_communitySecret, v1_comm_sec)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%s\n", error_txt(rc));
+                    return ICLI_RC_ERROR;
+                }
+                strncpy(conf->trap_encryptedSecret, v1_comm_sec, sizeof(conf->trap_encryptedSecret));
+            }
+        } else {
+            if ( v1_comm) {
+                strncpy(conf->trap_communitySecret, v1_comm, SNMP_MGMT_INPUT_COMMUNITY_LEN);
+                conf->trap_communitySecret[SNMP_MGMT_INPUT_COMMUNITY_LEN] = 0;
+                if ((rc = AUTH_secret_key_cryptography(TRUE, conf->trap_communitySecret, conf->trap_encryptedSecret)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%s\n", error_txt(rc));
+                    return ICLI_RC_ERROR;
+                }
+            }
+        }
+    } else if ( has_v2) {
+        conf->trap_version = SNMP_MGMT_VERSION_2C;
+        if (has_v2_encrypted) {
+            if ( v2_comm_sec) {
+                if (AUTH_validate_secret_key(TRUE, v2_comm_sec) != TRUE) {
+                    ICLI_PRINTF("%% Error in encrypted community.\n");
+                    return ICLI_RC_ERROR;
+                }
+                if ((rc = AUTH_secret_key_cryptography(FALSE, conf->trap_communitySecret, v2_comm_sec)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%s\n", error_txt(rc));
+                    return ICLI_RC_ERROR;
+                }
+                strncpy(conf->trap_encryptedSecret, v2_comm_sec, sizeof(conf->trap_encryptedSecret));
+            }
+        } else {
+            if ( v2_comm) {
+                strncpy(conf->trap_communitySecret, v2_comm, SNMP_MGMT_INPUT_COMMUNITY_LEN);
+                conf->trap_communitySecret[SNMP_MGMT_INPUT_COMMUNITY_LEN] = 0;
+                if ((rc = AUTH_secret_key_cryptography(TRUE, conf->trap_communitySecret, conf->trap_encryptedSecret)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%s\n", error_txt(rc));
+                    return ICLI_RC_ERROR;
+                }
+            }
+        }
+    } else {
+        conf->trap_version = SNMP_MGMT_VERSION_3;
+        if ( FALSE == cli_parse_engineid(session_id, v_word10_to_64, &conf->trap_engineid_len, conf->trap_engineid) ) {
+            return 1;
+        }
+    }
+
+    if (securityname) {
+        strncpy(conf->trap_security_name, securityname, SNMPV3_MAX_NAME_LEN);
+        conf->trap_security_name[SNMPV3_MAX_NAME_LEN] = 0;
+    }
+
+    (void) trap_mgmt_conf_set(&trap_conf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no version
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: no
+! 2: version
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = Set SNMP trap version
+
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_trap_entry_t   trap_entry;
+    vtss_trap_conf_t    *def = &trap_entry.trap_conf;
+    vtss_trap_entry_t   trap_conf;
+    vtss_trap_conf_t    *conf = &trap_conf.trap_conf;
+    mesa_rc rc;
+VARIABLE_END
+
+CODE_BEGIN
+    trap_mgmt_conf_default_get(&trap_entry);
+    /*lint -e(668) */
+    strncpy(trap_conf.trap_conf_name, conf_name, TRAP_MAX_NAME_LEN);
+    trap_conf.trap_conf_name[TRAP_MAX_NAME_LEN] = 0;
+    (void) trap_mgmt_conf_get(&trap_conf);
+    conf->trap_version = def->trap_version;
+    strncpy(conf->trap_communitySecret, def->trap_communitySecret, SNMP_MGMT_INPUT_COMMUNITY_LEN);
+    conf->trap_communitySecret[SNMP_MGMT_INPUT_COMMUNITY_LEN] = 0;
+    if ((rc = AUTH_secret_key_cryptography(TRUE, conf->trap_communitySecret, conf->trap_encryptedSecret)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+    memcpy(conf->trap_engineid, def->trap_engineid, SNMPV3_MAX_ENGINE_ID_LEN);
+    conf->trap_engineid_len = def->trap_engineid_len;
+    strncpy(conf->trap_security_name, def->trap_security_name, SNMPV3_MAX_NAME_LEN);
+    conf->trap_security_name[SNMPV3_MAX_NAME_LEN] = 0;
+    (void) trap_mgmt_conf_set(&trap_conf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = informs retries <0-255> timeout <0-2147>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: informs
+! 2: retries
+! 3: <retries:0-255>
+! 4: timeout
+! 5: <timeout:0-2147>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = retries
+CMD_VAR =
+CMD_VAR = timeout
+
+HELP = ##ICLI_HELP_SNMP_HOST_INFORM
+HELP = retires inform messages
+HELP = retires times
+HELP = timeout parameter
+HELP = timeout interval
+
+BYWORD =
+BYWORD =
+BYWORD = <Retries : 0-255>
+BYWORD =
+BYWORD = <Timeout : 0-2147>
+
+VARIABLE_BEGIN
+    vtss_trap_conf_t    conf;
+VARIABLE_END
+
+CODE_BEGIN
+    conf.trap_inform_retries = retries;
+    conf.trap_inform_timeout = timeout;
+    TRAP_ICLI_conf_set( session_id, CONF_INFORM_CMD, conf_name, &conf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no informs
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR = conf_name
+
+RUNTIME = snmp_present
+
+! 1: no
+! 2: informs
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_SNMP_HOST_INFORM
+
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    TRAP_ICLI_conf_set( session_id, CONF_NO_INFORM_CMD, conf_name, NULL);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = snmp-server trap <cword> [ id <0-127> ] [ <word255> { include | exclude } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME = trap_runtime_cword_source_name
+
+! 1: snmp-server
+! 2: trap
+! 3: <source_name:cword>
+! 4: id
+! 5: <filter_id:u8>
+! 6: <oid_subtree:word255>
+! 7: include
+! 8: exclude
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = source_name
+CMD_VAR = has_id
+CMD_VAR = filter_id
+CMD_VAR = oid_subtree
+CMD_VAR = has_include
+CMD_VAR =
+
+HELP = ##ICLI_HELP_SNMP
+HELP = Trap source configuration
+HELP = Trap source table/event name
+HELP = Use specific filter ID
+HELP = Trap source filter ID
+HELP = OID to use as index filter
+HELP = Include filter type
+HELP = Exclude filter type
+
+BYWORD =
+BYWORD =
+BYWORD = <SourceName : cword>
+BYWORD =
+BYWORD = <FilterId   : u8>
+BYWORD = <OidSubtree : word255>
+BYWORD = <HasInclude : option>
+BYWORD = <HasExclude : option>
+
+VARIABLE_BEGIN
+    vtss_trap_source_t  conf;
+    vtss_trap_filter_item_t  filter;
+    int                 id;
+    mesa_rc             rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( NULL == source_name) {
+        return 1;
+    }
+    strcpy(conf.source_name, source_name);
+
+    if(oid_subtree) {
+        if (FALSE == str2oid(oid_subtree, filter.index_filter, &filter.index_filter_len, filter.index_mask, &filter.index_mask_len)) {
+            return 1;
+        }
+        if ( TRUE == has_include) {
+            filter.filter_type = SNMPV3_MGMT_VIEW_INCLUDED;
+        } else {
+            filter.filter_type = SNMPV3_MGMT_VIEW_EXCLUDED;
+        }
+    } else {
+        filter.index_filter_len = 1;
+        filter.index_filter[0] = 0;
+        filter.index_mask_len = 0;
+        filter.filter_type = SNMPV3_MGMT_VIEW_INCLUDED;
+    }
+
+    if ( TRUE == has_id) {
+        id = filter_id;
+    } else {
+        id = -1;
+    }
+    conf.valid = TRUE;
+
+    if ( (rc = trap_mgmt_source_set(&conf, &filter, id)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%s\n", error_txt(rc));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no snmp-server trap <cword> { [ id <0-127> ] | [ <word255> { include | exclude } ] }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = trap_runtime_cword_source_name
+
+! 1: no
+! 2: snmp-server
+! 3: trap
+! 4: <source_name:cword>
+! 5: id
+! 6: <filter_id:u8>
+! 7: <oid_subtree:word255>
+! 8: include
+! 9: exclude
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = source_name
+CMD_VAR = has_id
+CMD_VAR = filter_id
+CMD_VAR = oid_subtree
+CMD_VAR = has_include
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_SNMP
+HELP = Trap source configuration
+HELP = Trap source table/event name
+HELP = Use specific filter ID
+HELP = Trap source filter ID
+HELP = OID to use as index filter
+HELP = Include filter type
+HELP = Exclude filter type
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <SourceName : cword>
+BYWORD =
+BYWORD = <FilterId   : u8>
+BYWORD = <OidSubtree : word255>
+BYWORD = <HasInclude : option>
+BYWORD = <HasExclude : option>
+
+VARIABLE_BEGIN
+    vtss_trap_source_t  conf;
+    vtss_trap_filter_item_t  filter;
+    int                 id;
+    mesa_rc             rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( NULL == source_name) {
+        return 1;
+    }
+    strcpy(conf.source_name, source_name);
+
+    if(oid_subtree) {
+        if (FALSE == str2oid(oid_subtree, filter.index_filter, &filter.index_filter_len, filter.index_mask, &filter.index_mask_len)) {
+            return 1;
+        }
+        if ( TRUE == has_include) {
+            filter.filter_type = SNMPV3_MGMT_VIEW_INCLUDED;
+        } else {
+            filter.filter_type = SNMPV3_MGMT_VIEW_EXCLUDED;
+        }
+    } else {
+        filter.index_filter_len = 1;
+        filter.index_filter[0] = 0;
+        filter.index_mask_len = 0;
+        filter.filter_type = SNMPV3_MGMT_VIEW_INCLUDED;
+    }
+
+    if ( TRUE == has_id) {
+        id = filter_id;
+    } else {
+        id = -1;
+    }
+    conf.valid = FALSE;
+
+    if ( (rc = trap_mgmt_source_set(&conf, &filter, id)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%s\n", error_txt(rc));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show snmp host [ <word32> ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME = snmp_present
+
+! 1: show
+! 2: snmp
+! 3: host
+! 4: <conf_name:word32>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = conf_name
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_SNMP
+HELP = ##ICLI_HELP_SNMP_HOST
+HELP = ##ICLI_HELP_SNMP_HOST_NAME
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <ConfName : word32>
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    TRAP_ICLI_show_host (session_id, conf_name);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show snmp trap [ <cword> ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = trap_runtime_cword_source_name
+
+! 1: show
+! 2: snmp
+! 3: trap
+! 4: <source_name:cword>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = source_name
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_SNMP
+HELP = ##ICLI_HELP_SNMP_HOST
+HELP = ##ICLI_HELP_SNMP_HOST_NAME
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    TRAP_ICLI_show_source (session_id, source_name);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = traps [ authentication snmp-auth-fail ] [ system [ coldstart ] [ warmstart ] ] [ switch [ stp ] [ rmon ] ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_INVISIBLE
+
+CMD_MODE = ICLI_CMD_MODE_SNMPS_HOST
+MODE_VAR =
+
+RUNTIME =
+
+! 1: traps
+! 2: authentication
+! 3: snmp-auth-fail
+! 4: system
+! 5: coldstart
+! 6: warmstart
+! 7: switch
+! 8: stp
+! 9: rmon
+
+CMD_VAR =
+CMD_VAR = has_authentication
+CMD_VAR =
+CMD_VAR = has_system
+CMD_VAR = has_coldstart
+CMD_VAR = has_warmstart
+CMD_VAR = has_switch
+CMD_VAR = has_stp
+CMD_VAR = has_rmon
+
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+
+BYWORD =
+BYWORD = <Aaa : option>
+BYWORD =
+BYWORD = <System : option>
+BYWORD = <Coldstart : option>
+BYWORD = <Warmstart : option>
+BYWORD = <Switch : option>
+BYWORD = <Stp : option>
+BYWORD = <Rmon : option>
+
+VARIABLE_BEGIN
+    vtss_trap_source_t  conf;
+    vtss_trap_filter_item_t  filter;
+VARIABLE_END
+
+CODE_BEGIN
+    conf.valid = TRUE;
+    filter.index_filter_len = 1;
+    filter.index_filter[0] = 0;
+    filter.index_mask_len = 0;
+    filter.filter_type = SNMPV3_MGMT_VIEW_INCLUDED;
+
+    if (has_authentication) {
+        strcpy(conf.source_name, TRAP_NAME_AUTH_FAIL);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+    }
+
+    if (has_system && !has_coldstart && !has_warmstart) {
+        strcpy(conf.source_name, TRAP_NAME_WARM_START);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+        strcpy(conf.source_name, TRAP_NAME_COLD_START);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+    } else if (has_system) {
+        if ( has_coldstart) {
+            strcpy(conf.source_name, TRAP_NAME_COLD_START);
+            (void)trap_mgmt_source_set(&conf, &filter, -1);
+        }
+        if ( has_warmstart) {
+            strcpy(conf.source_name, TRAP_NAME_WARM_START);
+            (void)trap_mgmt_source_set(&conf, &filter, -1);
+        }
+    }
+
+    if (has_switch && !has_stp && !has_rmon) {
+        strcpy(conf.source_name, TRAP_NAME_NEW_ROOT);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+        strcpy(conf.source_name, TRAP_NAME_TOPO_CHNG);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+        strcpy(conf.source_name, TRAP_NAME_RMON_RISING);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+        strcpy(conf.source_name, TRAP_NAME_RMON_FALLING);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+    } else if (has_switch) {
+        if ( has_stp) {
+            strcpy(conf.source_name, TRAP_NAME_NEW_ROOT);
+            (void)trap_mgmt_source_set(&conf, &filter, -1);
+            strcpy(conf.source_name, TRAP_NAME_TOPO_CHNG);
+            (void)trap_mgmt_source_set(&conf, &filter, -1);
+        }
+        if ( has_rmon) {
+            strcpy(conf.source_name, TRAP_NAME_RMON_RISING);
+            (void)trap_mgmt_source_set(&conf, &filter, -1);
+            strcpy(conf.source_name, TRAP_NAME_RMON_FALLING);
+            (void)trap_mgmt_source_set(&conf, &filter, -1);
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = snmp-server host <word32> traps [ linkup ] [ linkdown ] [ lldp ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_INVISIBLE
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: snmp-server
+! 2: host
+! 3: <conf_name:word32>
+! 4: <conf_name:word32>
+! 5: linkup
+! 6: linkdown
+! 7: lldp
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = conf_name
+CMD_VAR =
+CMD_VAR = has_linkup
+CMD_VAR = has_linkdown
+CMD_VAR = has_lldp
+
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+HELP = 
+
+BYWORD =
+BYWORD =
+BYWORD = <ConfName : word32>
+BYWORD =
+BYWORD = <Linkup : option>
+BYWORD = <Linkdown : option>
+BYWORD = <Lldp : option>
+
+VARIABLE_BEGIN
+    vtss_trap_source_t  conf;
+    vtss_trap_filter_item_t  filter;
+    u32                 range_idx, cnt_idx;
+    vtss_isid_t         isid, usid;
+    vtss_uport_no_t     iport, uport;
+    vtss_ifindex_t      ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+
+    if ( !conf_name) {
+        return 1;
+    }
+
+    conf.valid = TRUE;
+    filter.index_mask_len = 0;
+    filter.filter_type = SNMPV3_MGMT_VIEW_INCLUDED;
+    for (range_idx = 0; range_idx < plist->cnt; range_idx++) {
+        usid = plist->switch_range[range_idx].usid;
+        isid = topo_usid2isid(usid);
+
+        for (cnt_idx = 0; cnt_idx < plist->switch_range[range_idx].port_cnt; cnt_idx++) {
+            uport = plist->switch_range[range_idx].begin_uport + cnt_idx;
+            iport = uport2iport(uport);
+            if (vtss_ifindex_from_port(isid, iport, &ifindex) != VTSS_RC_OK) {
+                continue;
+            }
+            filter.index_filter_len = 2;
+            filter.index_filter[0] = 1;
+            filter.index_filter[1] = vtss_ifindex_cast_to_u32(ifindex);
+
+            if ( has_linkup ) {
+                strcpy(conf.source_name, TRAP_NAME_LINK_UP);
+                (void)trap_mgmt_source_set(&conf, &filter, -1);
+            }
+
+            if ( has_linkdown ) {
+                strcpy(conf.source_name, TRAP_NAME_LINK_DOWN);
+                (void)trap_mgmt_source_set(&conf, &filter, -1);
+            }
+        }
+
+    }
+
+    filter.index_filter_len = 1;
+    filter.index_filter[0] = 0;
+    filter.index_mask_len = 0;
+    if ( has_lldp ) {
+        strcpy(conf.source_name, TRAP_NAME_LLDP_REM_TBL_CHNG);
+        (void)trap_mgmt_source_set(&conf, &filter, -1);
+#ifdef VTSS_SW_OPTION_LLDP
+        lldp_icli_trap(session_id, plist, FALSE);
+#endif
+    }
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug snmp trap send
+
+DOC_CMD_DESC    = Send debug trap (warmstart)
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+
+FUNC_NAME = icli_snmp_translate
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME = snmp_present
+
+! 1: debug
+! 2: snmp
+! 3: trap
+! 4: send
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP    = ##ICLI_HELP_SHOW
+HELP    =
+HELP    =
+HELP    =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_debug_send_trap();
+    ICLI_PRINTF("Trap send initiated!\n");
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+################################################################################
+CMD_BEGIN
+COMMAND = debug snmp trap listen <word256>
+DOC_CMD_DESC =
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+#CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+# debug
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME =
+
+# snmp
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME = snmp_present
+
+# trap
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME =
+
+# listen
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME =
+
+# <word256>
+HELP    = Name of SNMP trap
+BYWORD  = <TrapName : word256>
+CMD_VAR = trap_name
+RUNTIME =
+
+CODE_BEGIN
+    std::string s(trap_name);
+    ICLI_RC_CHECK_PRINT_RC(vtss::appl::snmp_trap::listen_add(s));
+CODE_END
+CMD_END
+
+################################################################################
+CMD_BEGIN
+COMMAND = debug no snmp trap listen <word256>
+DOC_CMD_DESC =
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+#CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+# debug
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME =
+
+# no
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME = snmp_present
+
+# snmp
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME =
+
+# trap
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME =
+
+# listen
+HELP    =
+BYWORD  =
+CMD_VAR =
+RUNTIME =
+
+# <word256>
+HELP    = Name of SNMP trap
+BYWORD  = <TrapName : word256>
+CMD_VAR = trap_name
+RUNTIME =
+
+CODE_BEGIN
+    std::string s(trap_name);
+    ICLI_RC_CHECK_PRINT_RC(vtss::appl::snmp_trap::listen_del(s));
+CODE_END
+CMD_END

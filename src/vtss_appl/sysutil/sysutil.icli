@@ -1,0 +1,1314 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_SYSUTIL)
+
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+INCLUDE_BEGIN
+#include "sys/time.h"        /* For struct timeval */
+#include "icli_porting_util.h"
+#include "mgmt_api.h"
+#include "misc_api.h"
+#include "topo_api.h"
+#include "control_api.h"
+#include "sysutil_icli_func.h"
+#include "sysutil_api.h"
+#include <vtss/basics/notifications/process-cmd-pty.hxx>
+#include "cli_io_api.h" /* For cli_fd() */
+
+#if !defined(VTSS_SW_OPTION_USERS)
+#include "sysutil_api.h"
+#endif /* !defined(VTSS_SW_OPTION_USERS) */
+
+#include "vtss_netlink.hxx"
+
+#include "led_api.h"
+#include "msg_api.h"
+#ifdef VTSS_SW_OPTION_ETH_LINK_OAM
+#include "vtss_eth_link_oam_api.h"
+#endif
+INCLUDE_END
+
+// ############################################################################
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+#ifndef VTSS_SW_OPTION_USERS
+static BOOL USERS_ICLI_runtime_password(u32                session_id,
+                                        icli_runtime_ask_t ask,
+                                        icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        break;
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<Password : line%u>", VTSS_SYS_INPUT_PASSWD_LEN);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = 1;
+        runtime->range.u.sr.range[0].max = VTSS_SYS_INPUT_PASSWD_LEN;
+        return TRUE;
+    default :
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL USERS_ICLI_runtime_encrypted_password(u32                session_id,
+                                                  icli_runtime_ask_t ask,
+                                                  icli_runtime_t     *runtime)
+{
+    u32 max_password_length = (VTSS_SYS_PASSWD_ENCRYPTED_LEN - 1);
+
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        break;
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<Password : word%u>", max_password_length);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = max_password_length;
+        runtime->range.u.sr.range[0].max = max_password_length;
+        return TRUE;
+    default :
+        break;
+    }
+    return FALSE;
+}
+#endif /* VTSS_SW_OPTION_USERS */
+
+static BOOL SYSUTIL_ICLI_runtime_has_stackable(u32                session_id,
+                                               icli_runtime_ask_t ask,
+                                               icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = FALSE;
+        return TRUE;
+    default :
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL SYSUTIL_ICLI_runtime_has_ztp(u32                session_id,
+                                         icli_runtime_ask_t ask,
+                                         icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+#if defined(VTSS_SW_OPTION_ZTP)
+        runtime->present = TRUE;
+#else
+        runtime->present = FALSE;
+#endif /* VTSS_SW_OPTION_ZTP */
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL SYSUTIL_ICLI_runtime_has_stack_fw_chk(u32                session_id,
+                                                  icli_runtime_ask_t ask,
+                                                  icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+#if defined(VTSS_SW_OPTION_SPROUT) && defined(VTSS_SPROUT_FW_VER_CHK)
+        runtime->present = TRUE;
+#else
+        runtime->present = FALSE;
+#endif /*VTSS_SW_OPTION_SPROUT && VTSS_SPROUT_FW_VER_CHK */
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+FUNCTION_END
+
+HELP_SHOW       = Show running system information
+HELP_CLEAR      = Clear
+HELP_IP         = Internet Protocol
+HELP_INTERFACE  = Interface
+HELP_PORT_TYPE  = Interface port type
+HELP_PORT_LIST  = Interface port list
+HELP_NO         = Negate a command or set its defaults
+
+HELP_CLOCK      = Configure time-of-day clock
+
+
+// ############################################################################
+
+CMD_BEGIN
+COMMAND   = show clock
+
+FUNC_NAME = show_clock_sysutil
+PRIVILEGE = ICLI_PRIVILEGE_0
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+// (Optional)
+// C variable for the variable in the mode entry command
+// It is needed when CMD_MODE: ICLI_CMD_MODE_CONFIG_VLAN,
+//                             ICLI_CMD_MODE_INTERFACE_PORT_LIST,
+//                             ICLI_CMD_MODE_INTERFACE_VLAN
+// MODE_VAR  =
+
+// (Optional)
+// Name of reused execution function of another command
+// FUNC_REUSE =
+
+// (Optional)
+// Property of the command, ICLI_CMD_PROP_XXXX, defined in icli_types.h.
+// Acceptable use | to combine them.
+// PROPERTY  =
+
+// (Optional)
+// This is for #if conditional flag to enclose the command.
+IF_FLAG   =
+
+// (Optional)
+// The no form of this command
+// The C code need enclosed by [NO_FORM_CODE_BEGIN, NO_FORM_CODE_END]
+
+// (Optional)
+// Declare the variable name that one-to-one mapping to each word of command string (COMMAND)
+// To get the variable type, please refer to AN1047-ICLI_Command_Generation_Guide.doc Appendix A: Variable Types
+// or \vtss_appl\icli\doc\variable_type.txt
+// The variable type is declared in \vtss_appl\icli\base\icli_types.h
+//CMD_VAR   = show_var
+//CMD_VAR   = clock_var
+
+// (Optional)
+// Declare the static local sub-function that one-to-one mapping to each word of command string (COMMAND)
+// The function is used for runtime callback check on the corresponding word of command string
+// RUNTIME   =
+
+// (Optional)
+// If there isn't exact matched definition in CCLI variable types (ccli_variable.c/g_variable_name[])
+// Given an alternative word that one-to-one mapping to each word of command string (COMMAND)
+// BYWORD    =
+BYWORD    =
+BYWORD    =
+
+HELP = ##HELP_SHOW
+HELP = ##HELP_CLOCK
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+
+    ICLI_PRINTF("System Time     : %s\n\n", misc_time2str(time(NULL)));
+
+CODE_END
+
+// (Optional)
+// The no form of this command
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND   = show version [brief]
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = do_brief
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = System hardware and software status
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (do_brief) {
+        const char *code_rev = misc_software_code_revision_txt();
+        ICLI_PRINTF("Version      : %s\n", misc_software_version_txt());
+        ICLI_PRINTF("Build Date   : %s\n", misc_software_date_txt());
+        if (strlen(code_rev)) {
+            // version.c is always compiled, this file is not, so we must
+            // check for whether there's something in the code revision
+            // string or not. Only version.c knows about the CODE_REVISION
+            // environment variable.
+            ICLI_PRINTF("Code Revision: %s\n", code_rev);
+        }
+    } else {
+        sysutil_icli_func_conf( session_id );
+    }
+CODE_END
+CMD_END
+
+// ############################################################################
+
+CMD_BEGIN
+COMMAND   = show tech-support
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##HELP_SHOW
+HELP = Tech support information
+
+CODE_BEGIN
+    vtss::notifications::process_cmd_pty(cli_fd(), "dump-env.sh");
+    ICLI_PRINTF("\n");
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND = show licenses [details]
+SYSTEM_SHOW_LICENSE_HELP = Show license information
+DOC_CMD_DESC    = ##SYSTEM_SHOW_LICENSE_HELP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##SYSTEM_SHOW_LICENSE_HELP
+DOC_CMD_EXAMPLE = show licenses.
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_details
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##SYSTEM_SHOW_LICENSE_HELP
+HELP = Also display details, that is, the raw licenses
+
+VARIABLE_BEGIN
+    void    *handle;
+    char    line[300];
+    mesa_rc rc, rc2;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = system_license_open(&handle)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    while ((rc = system_license_gets(handle, line, sizeof(line), has_details)) == VTSS_RC_OK && line[0] != '\0') {
+        ICLI_PRINTF("%s", line);
+    }
+
+    if (rc != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s", error_txt(rc));
+        // Don't return, because we need to close the file.
+    }
+
+    if ((rc2 = system_license_close(handle)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s", error_txt(rc2));
+    }
+
+    if (rc != VTSS_RC_OK || rc2 != VTSS_RC_OK) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+
+IF_FLAG = !defined(VTSS_SW_OPTION_USERS)
+
+COMMAND   = password unencrypted <line31>
+
+DOC_CMD_DESC    = Use the password unencrypted <password> global configuration command \
+                  to configure administrator password with unencrypted password for the local switch access.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Configure administrator password for the local switch access.
+DOC_CMD_EXAMPLE = This example shows how to ato configure administrator password with unencrypted password of testuser:
+DOC_CMD_EXAMPLE = Switch(config)# password unencrypted testuser
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show running-config privileged EXEC command.
+
+FUNC_NAME = icli_password_unencrypted
+FUNC_REUSE =
+
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = USERS_ICLI_runtime_password
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = password
+
+HELP      = ##HELP_PASSWORD
+HELP      = ##HELP_UNENCRYPTED
+HELP      = ##HELP_UNENCRYPTED_PWD
+
+BYWORD    =
+BYWORD    =
+BYWORD    = <UnencryptedPassword : line31>
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (system_set_passwd(FALSE, password) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Set password failed\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+HELP_PASSWORD           = Specify the password for the administrator
+HELP_ENCRYPTED          = Specifies an ENCRYPTED password will follow
+HELP_ENCRYPTED_PWD      = The ENCRYPTED (hidden) user password. Notice the ENCRYPTED password will be decoded by system internally. You cannot directly use it as same as the Plain Text and it is not human-readable text normally.
+HELP_UNENCRYPTED        = Specifies an UNENCRYPTED password will follow
+HELP_UNENCRYPTED_PWD    = The UNENCRYPTED (Plain Text) user password. Any printable characters including space is accepted. Notice that you have no change to get the Plain Text password after this command. The system will always display the ENCRYPTED password.
+
+
+!==============================================================================
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+
+IF_FLAG = !defined(VTSS_SW_OPTION_USERS)
+
+COMMAND   = password encrypted <word128>
+
+DOC_CMD_DESC    = Use the password encrypted <password> global configuration command \
+                  to configure administrator password with encrypted password for the local switch access.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Configure administrator password for the local switch access.
+DOC_CMD_EXAMPLE = This example shows how to configure administrator password with encrypted password testuser:
+DOC_CMD_EXAMPLE = Switch(config)# password encrypted dGVzdHVzZXI=
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show running-config privileged EXEC command.
+
+FUNC_NAME = icli_password_encrypted
+FUNC_REUSE =
+
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = USERS_ICLI_runtime_encrypted_password
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = encry_password
+
+HELP      = ##HELP_PASSWORD
+HELP      = ##HELP_ENCRYPTED
+HELP      = ##HELP_ENCRYPTED_PWD
+
+BYWORD    =
+BYWORD    =
+BYWORD    = <EncryptedPassword : word128>
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (system_set_passwd(TRUE, encry_password) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Set password failed\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+
+IF_FLAG = !defined(VTSS_SW_OPTION_USERS)
+
+COMMAND   = password none
+
+DOC_CMD_DESC    = Use the password none global configuration command \
+                  to remove the administrator password.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Remove the administrator password.
+DOC_CMD_EXAMPLE = This example shows how to remove the administrator password:
+DOC_CMD_EXAMPLE = Switch(config)# password none
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show running-config privileged EXEC command.
+
+FUNC_NAME = icli_password_clear
+FUNC_REUSE =
+
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_VAR   =
+CMD_VAR   =
+
+HELP      = ##HELP_PASSWORD
+HELP      = NULL password
+
+BYWORD    =
+BYWORD    =
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (system_set_passwd(FALSE, "") != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Set password failed\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+
+!==============================================================================
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+
+IF_FLAG = !defined(VTSS_SW_OPTION_DAYLIGHT_SAVING)
+
+COMMAND   = clock timezone offset <-1439-1439>
+
+FUNC_NAME = icli_clock_timezone_offset
+FUNC_REUSE =
+
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+RUNTIME   =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = offset_var
+
+HELP      = Configure time-of-day clock
+HELP      = Configure time zone
+HELP      = Configure time zone offset
+HELP      = offset
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    =
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    mesa_rc       rc;
+    system_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+
+    if ( (rc = system_get_config(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    conf.tz_off = offset_var;
+
+    if ( (rc = system_set_config(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = show system led status [ switch <switch_list> ]
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = SYSUTIL_ICLI_runtime_has_stackable
+RUNTIME = SYSUTIL_ICLI_runtime_has_stackable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_switch
+CMD_VAR = switch_list
+
+HELP    = ##ICLI_HELP_SHOW
+HELP    = system
+HELP    = led
+HELP    = status
+HELP = ##ICLI_HELP_SWITCH
+HELP = ##ICLI_HELP_SWITCH_LIST
+
+VARIABLE_BEGIN
+    vtss_appl_sysutil_system_led_status_t status;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_switch) {
+        u32 i, j;
+        for (i = 0; i < switch_list->cnt; i++) {
+            for (j = switch_list->range[i].min; j <= switch_list->range[i].max; j++) {
+                if (vtss_appl_sysutil_system_led_status_get(j, &status) == VTSS_RC_OK) {
+                    ICLI_PRINTF("Switch %d %s\n", j, status.descr);
+                }
+            }
+        }
+    } else {
+        vtss_usid_t prev_usid = 0, next_usid = 0;
+        while (vtss_appl_sysutil_usid_itr(&prev_usid, &next_usid) == VTSS_RC_OK) {
+            prev_usid = next_usid;
+            if (vtss_appl_sysutil_system_led_status_get(next_usid, &status) == VTSS_RC_OK) {
+                ICLI_PRINTF("%s\n", status.descr);
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = clear system led status [ switch <switch_list> ] { fatal | software | ztp | stack-firmware | all }
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = SYSUTIL_ICLI_runtime_has_stackable
+RUNTIME = SYSUTIL_ICLI_runtime_has_stackable
+RUNTIME =
+RUNTIME =
+RUNTIME = SYSUTIL_ICLI_runtime_has_ztp
+RUNTIME = SYSUTIL_ICLI_runtime_has_stack_fw_chk
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_switch
+CMD_VAR = switch_list
+CMD_VAR = fatal
+CMD_VAR = software
+CMD_VAR = ztp
+CMD_VAR = stack_fw_chk
+CMD_VAR =
+
+HELP = ##ICLI_HELP_CLEAR
+HELP = system
+HELP = led
+HELP = status
+HELP = ##ICLI_HELP_SWITCH
+HELP = ##ICLI_HELP_SWITCH_LIST
+HELP = Clear fatal error status of the system LED
+HELP = Clear generic software error status of the system LED
+HELP = Clear ZTP (Zero Touch Provisioning) error status of the system LED
+HELP = Clear stack firmware version check error status of the system LED
+HELP = Clear all error status of the system LED and back to normal indication
+
+VARIABLE_BEGIN
+    vtss_appl_sysutil_control_system_led_t clear;
+VARIABLE_END
+
+CODE_BEGIN
+    if (fatal) {
+        clear.type = VTSS_APPL_SYSUTIL_SYSTEM_LED_CLEAR_TYPE_FATAL;
+    } else if (software) {
+        clear.type = VTSS_APPL_SYSUTIL_SYSTEM_LED_CLEAR_TYPE_SW;
+    } else if (ztp) {
+        clear.type = VTSS_APPL_SYSUTIL_SYSTEM_LED_CLEAR_TYPE_ZTP;
+    } else if (stack_fw_chk) {
+        clear.type = VTSS_APPL_SYSUTIL_SYSTEM_LED_CLEAR_TYPE_STACK_FW_CHK;
+    } else {
+        clear.type = VTSS_APPL_SYSUTIL_SYSTEM_LED_CLEAR_TYPE_ALL;
+    }
+
+    if (has_switch) {
+        u32 i, j;
+        for (i = 0; i < switch_list->cnt; i++) {
+            for (j = switch_list->range[i].min; j <= switch_list->range[i].max; j++) {
+                (void)vtss_appl_sysutil_control_system_led_set(j, &clear);
+            }
+        }
+    } else {
+        vtss_usid_t prev_usid = 0, next_usid = 0;
+        while (vtss_appl_sysutil_usid_itr(&prev_usid, &next_usid) == VTSS_RC_OK) {
+             prev_usid = next_usid;
+            (void)vtss_appl_sysutil_control_system_led_set(next_usid, &clear);
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG   =
+COMMAND   = debug system led status test [ fatal | software | post | ztp | stack-firmware ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = fatal
+CMD_VAR = software
+CMD_VAR = post
+CMD_VAR = ztp
+CMD_VAR = stack_fw_chk
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = system
+HELP = led
+HELP = status
+HELP = test
+HELP = Set fatal error status of the system LED
+HELP = Set generic software error status of the system LED
+HELP = Set POST (Power On Self Test) error status of the system LED
+HELP = Set ZTP (Zero Touch Provisioning) error status of the system LED
+HELP = Set stack firmware version check error status of the system LED
+
+VARIABLE_BEGIN
+    led_front_led_state_t state;
+VARIABLE_END
+
+CODE_BEGIN
+    if (fatal) {
+        state = LED_FRONT_LED_FATAL;
+    } else if (software) {
+        state = LED_FRONT_LED_ERROR;
+    } else if (post) {
+        state = LED_FRONT_LED_POST_ERROR;
+    } else if (ztp) {
+        state = LED_FRONT_LED_ZTP_ERROR;
+    } else if (stack_fw_chk) {
+        state = LED_FRONT_LED_STACK_FW_CHK_ERROR;
+    } else {
+        ICLI_PRINTF("Resetting to LED to normal state.\n");
+        state = LED_FRONT_LED_NORMAL;
+    }
+
+    led_front_led_state(state, TRUE);
+
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG   =
+COMMAND   = debug system led set {off | green | red | yellow}
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_off
+CMD_VAR = has_green
+CMD_VAR = has_red
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = system
+HELP = led
+HELP = Set front status LED to a particular color or turn it off.
+HELP = Turn it off
+HELP = Make it green
+HELP = Make it red
+HELP = Make it yellow
+
+VARIABLE_BEGIN
+    meba_led_color_t color;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_off) {
+        color = MEBA_LED_COLOR_OFF;
+    } else if (has_green) {
+        color = MEBA_LED_COLOR_GREEN;
+    } else if (has_red) {
+        color = MEBA_LED_COLOR_RED;
+    } else {
+        color = MEBA_LED_COLOR_YELLOW;
+    }
+
+    (void)meba_status_led_set(board_instance, MEBA_LED_TYPE_FRONT, color);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG   =
+COMMAND   = debug system led post
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = system
+HELP = led
+HELP = post
+
+CODE_BEGIN
+
+     LED_led_test();
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = show system cpu status
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP    = ##ICLI_HELP_SHOW
+HELP    = system
+HELP    = CPU
+HELP    = Average load
+
+VARIABLE_BEGIN
+    BOOL    b;
+    u32     average100msec;
+    u32     average1sec;
+    u32     average10sec;
+VARIABLE_END
+
+CODE_BEGIN
+    /* get CPU load */
+    b = control_sys_get_cpuload( &average100msec, &average1sec, &average10sec );
+    if ( b == FALSE ) {
+        ICLI_PRINTF("%% Fail to get CPU load\n");
+        return ICLI_RC_ERROR;
+    }
+    ICLI_PRINTF("    Average load in 100 ms  : %u%%\n", average100msec);
+    ICLI_PRINTF("    Average load in   1 sec : %u%%\n", average1sec);
+    ICLI_PRINTF("    Average load in  10 sec : %u%%\n", average10sec);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_PSU)
+COMMAND   = show env power
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP    = ##ICLI_HELP_SHOW
+HELP    = Environment
+HELP    = Power supply
+
+VARIABLE_BEGIN
+    vtss_usid_t                     prev_usid;
+    vtss_usid_t                     next_usid;
+    u32                             prev_psuid;
+    u32                             next_psuid;
+    vtss_appl_sysutil_psu_status_t  status;
+VARIABLE_END
+
+CODE_BEGIN
+    prev_usid  = 0;
+    prev_psuid = 0;
+    while (vtss_appl_sysutil_psu_status_itr(&prev_usid, &next_usid, &prev_psuid, &next_psuid) == VTSS_RC_OK) {
+        if (vtss_appl_sysutil_psu_status_get(next_usid, next_psuid, &status) == VTSS_RC_OK) {
+            ICLI_PRINTF("Switch %u %s(PSU %u) is %s\n",
+                next_usid, status.descr, next_psuid,
+                (status.state == VTSS_APPL_SYSUTIL_PSU_STATE_ACTIVE) ? "active"   :
+                (status.state == VTSS_APPL_SYSUTIL_PSU_STATE_STANDBY) ? "standby" : "not present");
+        }
+        prev_usid  = next_usid;
+        prev_psuid = next_psuid;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug time get
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP    = ##ICLI_HELP_DEBUG
+HELP    = System time
+HELP    = Display current system time
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("%s\n", misc_time2str(time(NULL)));
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug time set <date> <time>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP    = ##ICLI_HELP_DEBUG
+HELP    = System time
+HELP    = Set system time
+HELP    = Date yyyy/mm/dd, yyyy=1970-2037, mm=1-12, dd=1-31
+HELP    = Time HH:mm:ss, HH=0-23, mm=0-59, ss=0-59
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = d
+CMD_VAR = t
+
+VARIABLE_BEGIN
+    struct tm       tm;
+    struct timeval  tv;
+    time_t          secs;
+    char            time_str[64];
+    char            *res;
+VARIABLE_END
+
+CODE_BEGIN
+    memset( time_str, 0, sizeof(time_str) );
+    (void)icli_sprintf(time_str, "%u-%u-%uT%u:%u:%u", d.year, d.month, d.day, t.hour, t.min, t.sec);
+
+    // strptime() returns NULL if the input was erroneous, otherwise a pointer to the
+    // last character parsed, so we check that this last char points to the NULL-terminating byte,
+    // and if not, the user input more date than required for the format.
+    if ((res = strptime(time_str, "%Y-%m-%dT%H:%M:%S", &tm)) == NULL || *res != '\0') {
+        ICLI_PRINTF("%% Fail : get tm\n");
+        return ICLI_RC_ERROR;
+    }
+
+
+    tm.tm_isdst = 0;
+    secs = mktime( &tm );
+
+    // Adjust for timezone (system_get_tz_off() returns number of minutes).
+    secs -= (system_get_tz_off() * 60);
+    tv.tv_sec  = secs;
+    tv.tv_usec = 0;
+    (void)settimeofday(&tv, NULL);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug netlink generic name <word32>
+FUNC_NAME = debug_netlink_generic_name
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_DEBUG
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = n
+CODE_BEGIN
+{
+    int c = vtss::appl::netlink::genelink_channel_by_name(n, __FUNCTION__);
+    ICLI_PRINTF("%d\n", c);
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_APPL_SYSUTIL_TM_SUPPORTED)
+
+COMMAND   = show temperature monitor
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP    = ##ICLI_HELP_SHOW
+HELP    = Temperature
+HELP    = Monitor
+
+! 1: show
+! 2: temperature
+! 3: monitor
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+VARIABLE_BEGIN
+    vtss_appl_sysutil_tm_config_t config = {0};
+    vtss_appl_sysutil_tm_status_t status = {0};
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Type     Sensor     Low     High    Critical  Hysteresis/Temp\n");
+    ICLI_PRINTF("------   ------     ----    ----    --------  --------------\n");
+    vtss_appl_sysutil_temperature_monitor_config_get(VTSS_APPL_SYSUTIL_TM_SENSOR_BOARD, &config);
+    ICLI_PRINTF("Config   Board      %4d    %4d    %4d      %4d\n", config.low, config.high, config.critical, config.hysteresis);
+    vtss_appl_sysutil_temperature_monitor_config_get(VTSS_APPL_SYSUTIL_TM_SENSOR_JUNCTION, &config);
+    ICLI_PRINTF("Config   Junction   %4d    %4d    %4d      %4d\n", config.low, config.high, config.critical, config.hysteresis);
+    vtss_appl_sysutil_temperature_monitor_status_get(VTSS_APPL_SYSUTIL_TM_SENSOR_BOARD, &status);
+    ICLI_PRINTF("Status   Board      %4d    %4d    %4d      %4d\n", status.low, status.high, status.critical, status.temp);
+    vtss_appl_sysutil_temperature_monitor_status_get(VTSS_APPL_SYSUTIL_TM_SENSOR_JUNCTION, &status);
+    ICLI_PRINTF("Status   Junction   %4d    %4d    %4d      %4d\n", status.low, status.high, status.critical, status.temp);
+CODE_END
+CMD_END
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_APPL_SYSUTIL_TM_SUPPORTED)
+
+COMMAND   = temperature monitor {board|junction} {[low <-40-125>] [high <-40-125>] [critical <90-150>] [hysteresis <1-5>]}*1
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+HELP    = Temperature
+HELP    = Monitor
+HELP    = The temperature for board
+HELP    = The temperature for switch
+HELP    = Low threshold
+HELP    = Temperature value
+HELP    = High threshold
+HELP    = Temperature value
+HELP    = Critical threshold
+HELP    = Temperature value
+HELP    = Temperature hysteresis for low and high threshold
+HELP    = hysteresis value
+
+! 1: temperature
+! 2: monitor
+! 3: board
+! 4: junction
+! 5: low
+! 6: <-40-125>
+! 7: high
+! 8: <-40-125>
+! 9: critical
+! 10: <90-150>
+! 11: hysteresis
+! 12: <1-5>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_board
+CMD_VAR = has_junction
+CMD_VAR = has_low
+CMD_VAR = l_temp
+CMD_VAR = has_high
+CMD_VAR = h_temp
+CMD_VAR = has_critical
+CMD_VAR = c_temp
+CMD_VAR = has_hysteresis
+CMD_VAR = h_val
+
+VARIABLE_BEGIN
+    vtss_appl_sysutil_tm_sensor_type_t sensor;
+    vtss_appl_sysutil_tm_config_t config = {0};
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_board) {
+        sensor = VTSS_APPL_SYSUTIL_TM_SENSOR_BOARD;
+    }
+    if (has_junction) {
+        sensor = VTSS_APPL_SYSUTIL_TM_SENSOR_JUNCTION;
+    }
+    vtss_appl_sysutil_temperature_monitor_config_get(sensor, &config);
+    if (has_low) {
+        config.low = l_temp;
+    }
+    if (has_high) {
+        config.high = h_temp;
+    }
+    if (has_critical) {
+        config.critical = c_temp;
+    }
+    if (has_hysteresis) {
+        config.hysteresis = h_val;
+    }
+    vtss_appl_sysutil_temperature_monitor_config_set(sensor, &config);
+CODE_END
+CMD_END
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_APPL_SYSUTIL_TM_SUPPORTED)
+
+COMMAND   = no temperature monitor
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+HELP    = ##ICLI_HELP_NO
+HELP    = Temperature
+HELP    = Monitor
+
+! 1: no
+! 2: temperature
+! 3: monitor
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    system_set_temperature_config_default_all();
+CODE_END
+CMD_END
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_APPL_SYSUTIL_TM_SUPPORTED)
+
+COMMAND   = debug temperature monitor {set [board <-100-150>] [junction <-100-150>] | show}
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP    = ##ICLI_HELP_DEBUG
+HELP    = Temperature
+HELP    = Monitor
+HELP    = Set configuration
+HELP    = Board
+HELP    = Board temperature
+HELP    = Switch's junction
+HELP    = Junction temperature
+HELP    = ##ICLI_HELP_SHOW
+
+! 1: debug
+! 2: temperature
+! 3: monitor
+! 4: set
+! 5: board
+! 6: <-100-150>
+! 7: junction
+! 8: <-100-150>
+! 9: show
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_b
+CMD_VAR = b_temp
+CMD_VAR = has_j
+CMD_VAR = j_temp
+CMD_VAR =
+
+VARIABLE_BEGIN
+    int btemp, jtemp;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_b) {
+        system_set_temperature_debug(VTSS_APPL_SYSUTIL_TM_SENSOR_BOARD, b_temp);
+    }
+    if (has_j) {
+        system_set_temperature_debug(VTSS_APPL_SYSUTIL_TM_SENSOR_JUNCTION, j_temp);
+    }
+    if (!has_b && !has_j) {
+        system_get_temperature_debug(VTSS_APPL_SYSUTIL_TM_SENSOR_BOARD, &btemp);
+        system_get_temperature_debug(VTSS_APPL_SYSUTIL_TM_SENSOR_JUNCTION, &jtemp);
+        ICLI_PRINTF("Board  temp   = %d\n", btemp);
+        ICLI_PRINTF("Junction temp = %d\n", jtemp);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+
+COMMAND   = debug show uptime
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP    = ##ICLI_HELP_DEBUG
+HELP    = ##ICLI_HELP_SHOW
+HELP    = The number of seconds/milliseconds this device has been running since boot.
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+VARIABLE_BEGIN
+    uint32_t sec;
+    uint64_t msec;
+VARIABLE_END
+
+CODE_BEGIN
+    sec = vtss::uptime_seconds();
+    msec = vtss::uptime_milliseconds();
+    ICLI_PRINTF("Switch has been up for %u seconds (" VPRI64u " milliseconds)\n", sec, msec);
+CODE_END
+CMD_END
+

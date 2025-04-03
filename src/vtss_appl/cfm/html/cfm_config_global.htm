@@ -1,0 +1,193 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>CFM Global Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_cfm_config_global.htm";
+
+// Global variables
+var myDynamicTable;
+
+var oTStatusTlv     = Array("Disable", "Enable"); // defer is invalid at the global level
+var oVStatusTlv     = Array("disable", "enable");   // defer is invalid at the global level
+var oTSenderIdTlv   = Array("None", "Chassis", "Manage", "ChassisManage"); // defer is invalid at the global level
+var oVSenderIdTlv   = Array("none", "chassis", "manage", "chassismanage"); // defer is invalid at the global level
+
+
+function isValidOrgSpecificTlvOui()
+{
+
+    var fld = document.getElementById("OrgSpecificTlvOui");
+
+    if (fld && !fld.value.match(/[a-f\d]$/)) {
+        GiveAlert("The string of Organisation Specific TLV OUI only accepts characters 0-9, a-f.", fld);
+        return false;
+    }
+    if (fld && fld.value.length != 6) {
+        return GiveAlert("Organisation Specific TLV OUI must be 6 characters and contain only 0-9 and a-f", fld);
+    }
+    return true;
+}
+
+function isValidOrgSpecificTlvValue()
+{
+    var fld = document.getElementById("OrgSpecificTlvValue");
+    if (fld && (fld.value.length > 0) && !fld.value.match(/^[ -~]+$/)) {
+        return GiveAlert("The Organisation Specific TLV Value only accepts printable ASCII characters", fld);
+    }
+
+    if (fld && fld.value.length > 63 ) {
+        return GiveAlert("The Organisation Specific TLV Value must not be longer than 63 characters", fld);
+    }
+
+    $("OrgSpecificTlvValueLen").value = fld.value.length;
+
+    return true;
+}
+
+
+function addRows(recv_json)
+{
+    var table_rows = new Array();
+
+    table_rows = [
+        {fields:[
+            {type:"conf_hdr", params:["Sender Id TLV"]},
+            {type:"select",   params:[oTSenderIdTlv, oVSenderIdTlv, recv_json.SenderIdTlv, "cl", "SenderIdTlv", "100%"]}
+          ]
+        },
+        {fields:[
+            {type:"conf_hdr", params:["Port Status TLV"]},
+            {type:"select",   params:[oTStatusTlv, oVStatusTlv, recv_json.PortStatusTlv, "cl", "PortStatusTlv", "100%"]}
+          ]
+        },
+        {fields:[
+            {type:"conf_hdr", params:["Interface Status TLV"]},
+            {type:"select",   params:[oTStatusTlv, oVStatusTlv, recv_json.InterfaceStatusTlv, "cl", "InterfaceStatusTlv", "100%"]}
+          ]
+        },
+        {fields:[
+            {type:"conf_hdr", params:["Organisation Specific TLV"]},
+            {type:"select",   params:[oTStatusTlv, oVStatusTlv, recv_json.OrgSpecificTlv, "cl", "OrgSpecificTlv", "100%"]}
+          ]
+        },
+        {fields:[
+            {type:"conf_hdr", params:["Organisation Specific TLV OUI"]},
+            {type:"input",    params:[recv_json.OrgSpecificTlvOui, "cl", "OrgSpecificTlvOui", 15, 6],
+                              validate:{func:isValidOrgSpecificTlvOui}}
+          ]
+        },
+        {fields:[
+            {type:"conf_hdr", params:["Organisation Specific TLV Subtype"]},
+            {type:"input",    params:[recv_json.OrgSpecificTlvSubtype, "cl", "OrgSpecificTlvSubtype", 15, 3],
+                              validate:{func:isWithinRange, params:["OrgSpecificTlvSubtype", 0, 255, "Organisation Specific TLV Subtype"]}}
+          ]
+        },
+        {fields:[
+            {type:"conf_hdr", params:["Organisation Specific TLV Value"]},
+            {type:"input",    params:[recv_json.OrgSpecificTlvValue, "cl", "OrgSpecificTlvValue", 20, 63],
+                              validate:{func:isValidOrgSpecificTlvValue}},
+            {type:"hidden_input", params:[recv_json.OrgSpecificTlvValueLen, "OrgSpecificTlvValueLen"]}
+          ]
+        }
+    ];
+
+
+    console.log("addRows", table_rows);
+
+    myDynamicTable.addRows(table_rows);
+}
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // Add table rows
+    addRows(recv_json);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addSubmitButton(name, "cfm.config.global", requestUpdate);
+    myDynamicTable.addResetButton();
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("cfm.config.global.get", null, processUpdate, "config");
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "columnOrder");
+
+    requestUpdate();
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>CFM Global Configuration</h1>
+
+<div class="refreshbar">
+    <input type="button" value="Refresh" onClick='requestUpdate(); this.blur();'>
+    <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+</body>
+</html>

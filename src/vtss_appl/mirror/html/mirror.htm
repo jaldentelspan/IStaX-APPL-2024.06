@@ -1,0 +1,1784 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Mirror Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_mirror.htm";
+
+
+// Global variables
+var myDynamicTable, globalDynamicTable, vlanDynamicTable, portDynamicTable, myCapabilities;
+var currentSid = -1;
+var oTKey               = genArrayStr(1,5);
+var oVKey               = genArrayInt(1,5);
+var oTMode              = Array("Disabled", "Enabled");
+var oVMode              = Array(false, true);
+var oTType              = Array("Mirror", "RMirror source", "RMirror destination");
+var oVType              = Array("mirror", "rMirrorSource", "rMirrorDestination");
+var oTCurrentPort       = Array(); 
+var oVCurrentPort       = Array();
+var oDCurrentPort       = Array();
+var oTReflectorSwitch   = Array();
+var oVReflectorSwitch   = Array();
+var oTReflectorPort     = Array();
+var oVReflectorPort     = Array();
+var oDReflectorPort     = Array();
+var oTSource            = Array("Disabled", "Both", "Rx only", "Tx only");
+var oVSource            = Array("Disabled", "Both", "Rx_only", "Tx_only");
+var oDStackPorts        = Array();
+
+//var oTTableName     = Array(globalDynamicTable, vlanDynamicTable, portDynamicTable);
+//var oTTableString     = Array("globalDynamicTable", "vlanDynamicTable", "portDynamicTable");
+//var oTTableAddRow     = Array(addGlobalRow, addVlanRow, addPortRow);
+//var oTTableAddHead     = Array(addGlobalHead, addVlanHead, addPortHead);
+//var oVTableName     = Array(0, 1, 2);
+
+// Page Argument
+var pageArgs = searchArgs(window.location.search);
+var pageSessionId = 0;
+if (pageArgs["session_id"]) {
+    pageSessionId = parseInt(pageArgs["session_id"], 10);
+}
+
+
+var RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI = 1;
+var rmirrorPortMax = 53;                      //configNormalPortMax + configStackPortCount;
+var rmirrorPortMaxForArray = rmirrorPortMax + 1;
+var RMIRROR_DEFAULT_SWITCH_ID = 999;
+
+//------------------------------------------------------------------------------------------------
+
+var RMIRROR_ENABLED = 1;
+var RMIRROR_DISABLED = 0;
+
+var RMIRROR_DISABLED_PORT = 0;
+
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR       = 0;
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE        = 1;
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_INTERMEDIATE  = 2;
+var VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION   = 3;
+
+var last_mirror_port = -1;
+var modes = Array();
+//var isid = -1;
+var mgmtVid = 1;
+
+
+var oPorts = new Array(rmirrorPortMaxForArray);
+
+for(var k = 0; k < rmirrorPortMaxForArray; k++) {
+    oPorts[k] = new Array(rmirrorPortMaxForArray);
+}
+
+var reqObject;
+
+//------------------------------------------------------------------------------
+// remove_ws()
+// Returns (in x.str) a string where all white space is removed.
+// If two consecutive numbers are only having white space between them,
+// the function returns false. Otherwise true.
+//------------------------------------------------------------------------------
+function remove_ws(x)
+{
+    var result = "", whitespace_seen = false;
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c != ' ') {
+            if (whitespace_seen && result.length > 0 && result.charAt(result.length - 1) >= '0' && result.charAt(result.length - 1) <= '9') {
+                return false;
+            }
+            result += c;
+            whitespace_seen = false;
+        } else {
+            whitespace_seen = true;
+        }
+
+        x.idx++;
+    }
+
+    x.str = result;
+    x.idx = 0;
+    x.len = x.str.length;
+    return true;
+}
+
+//------------------------------------------------------------------------------
+// strtoul()
+//------------------------------------------------------------------------------
+function strtoul(x)
+{
+    var len = x.str.length;
+    var sub = "";
+
+    if (x.idx == x.len) {
+        // No more characters in string
+        return -1;
+    }
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c < '0' || c > '9') {
+            break;
+        }
+
+        x.idx++;
+        sub += c;
+    }
+
+    if (sub.length === 0) {
+        return -1;
+    }
+
+    return parseInt(sub, 10);
+}
+
+//------------------------------------------------------------------------------
+// is_vlan_list()
+//------------------------------------------------------------------------------
+function is_vlan_list(id, print_warning_if_empty)
+{
+    var fld = $(id);
+
+    if (!fld) {
+        alert("Ehh: " + id);
+    }
+
+    var x = {str:fld.value};
+    x.idx = 0;
+    x.len = x.str.length;
+
+    if (!remove_ws(x)) {
+        GiveAlert("VLANs must be separated by commas, not spaces", fld);
+        return false;
+    }
+
+    var range = false, comma = false;
+    var start;
+
+    while (x.idx < x.len) {
+        var n = strtoul(x);
+
+        if (n < 0) {
+            GiveAlert("Invalid character ('" + x.str.charAt(x.idx) + "') found in VLAN list", fld);
+            return false;
+        }
+
+        if (n < configVlanIdMin || n > configVlanIdMax) {
+            GiveAlert("VLAN IDs must be integers between " + configVlanIdMin + " and " + configVlanIdMax, fld);
+            return false;
+        }
+
+        if (range) {
+            // End of range has been reached
+            range = 0;
+            if (n < start) {
+                GiveAlert("Invalid range detected in VLAN list", fld);
+                return false;
+            }
+        } else if (x.str.charAt(x.idx) == '-') {
+            // Start of range
+            start = n;
+            range = true;
+            x.idx++;
+        }
+
+        comma = false;
+        if (!range && x.str.charAt(x.idx) == ',') {
+            comma = true;
+            x.idx++;
+        }
+    }
+
+    // Check for trailing comma/dash
+    if (comma || range) {
+        GiveAlert("VLAN list cannot end with a comma or a dash", fld);
+        return false;
+    }
+
+    return true;
+}
+
+// Function that can update the mode slect boxes to support all modes or only "disable" and "tx only"
+function UpdateRow(id ,all,value)
+{
+    var oT = [];
+    var oV = [];
+
+    if (all) {
+        oT = Array("Disabled","Both","Rx only","Tx only"); // Text
+        oV = Array("0","3","1","2"); // Disabled, enabled,rx only,tx only
+    } else {
+        oT = Array("Disabled","Rx only"); // Text
+        oV = Array("0","1"); // Disabled, enabled,rx only,tx only
+    }
+    UpdateIdSelect("mode_"+ id,oT,oV,value);
+}
+
+function updateSourcePortDropDown (id, all, value)
+{
+    var oT = [];
+    var oV = [];
+
+    if (all) {
+        oT = oTSource;
+        oV = oVSource;
+    } else {
+        oT = Array("Disabled", "Rx only");
+        oV = Array("Disabled", "Rx_only");
+    }
+    UpdateIdSelect(id,oT,oV,value);
+}
+
+function UpdatePortDropDownWithList (Ports, PortInTable)
+{
+    var port_sel = document.getElementById("portselect");
+    clearChildNodes(port_sel);
+    var sel = 0;
+    var id;
+    var opt;
+    for (var i = 0; i < Ports.length; i++) {
+        if (Ports[i] > 0) {
+            id = Ports[i];
+            opt = document.createElement("option");
+            opt.appendChild(document.createTextNode("Port " + id));
+            opt.setAttribute("value", id);
+            port_sel.appendChild(opt);
+            if (id == PortInTable) {
+                opt.setAttribute("selected", true);
+                opt.setAttribute("defaultSelected", true);
+                sel = i;
+            }
+        } else if (Ports[i] === 0 && i === 0) {
+            id = Ports[i];
+            opt = document.createElement("option");
+            opt.appendChild(document.createTextNode("None"));
+            opt.setAttribute("value", id);
+            port_sel.appendChild(opt);
+        }
+    }
+    port_sel.selectedIndex = sel;
+}
+
+function UpdateSwitchDropDown (Switches, SwitchInTable, MirrorDisabled)
+{
+    var switch_sel = document.getElementById("switchselect");
+    clearChildNodes(switch_sel);
+    var sel = 0;
+    for (var i = 0; i < Switches.length; i++) {
+        if(Switches[i].length) {
+            var sid = Switches[i];
+            var opt = document.createElement("option");
+            opt.appendChild(document.createTextNode("Switch " + sid));
+            opt.setAttribute("value", sid);
+            switch_sel.appendChild(opt);
+            if (sid == SwitchInTable) {
+                opt.setAttribute("selected", true);
+                opt.setAttribute("defaultSelected", true);
+                sel = i;
+            }
+        }
+    }
+    switch_sel.selectedIndex = sel;
+}
+
+function SetFocusOnVlans()
+{
+    type = document.getElementById("type").value;
+
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("mode_"+i).disabled = true;
+        }
+    }
+}
+
+function SetBlurOnVlans()
+{
+    type = document.getElementById("type").value;
+
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        if (document.getElementById("vlans").value === "") {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("mode_"+i).disabled = false;
+            }
+        }
+    }
+}
+
+function ChangeMode()
+{
+    var i;
+    var aa;
+    switch_id = document.getElementById("switchselect").value;
+    mirror_port = document.getElementById("portselect").value;
+    mode = document.getElementById("mode").value;
+    type = document.getElementById("type").value;
+    hidden_switch_id = document.getElementById("hidden_switch_id").value;
+    //var is_disabled = mode === 0;
+    var is_disabled;
+    //var is_dis = mirror_port === 0;
+
+    if ( mode == RMIRROR_DISABLED ) {
+        // when you set as disabled, all configurations will be set as disabled
+        // --------------------------------------------------------------------
+        //is_disabled = true;
+        // --------------------------------------------------------------------
+        is_disabled = false;
+    } else {
+        is_disabled = false;
+    }
+
+    // check mode
+    document.getElementById("vid").disabled = is_disabled;
+    document.getElementById("type").disabled = is_disabled;
+    document.getElementById("portselect").disabled = is_disabled;
+    document.getElementById("switchselect").disabled = is_disabled;
+    for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+        // to skip the stack ports:
+        if (isStackPort(i)) {
+            continue;
+        }
+        document.getElementById("mode_"+i).disabled = is_disabled;
+        document.getElementById("intermediate_"+i).disabled = is_disabled;
+        document.getElementById("destination_"+i).disabled = is_disabled;
+    }
+
+    // check type
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) { // none or mirror
+
+        document.getElementById("portselect").disabled = true;
+        document.getElementById("switchselect").disabled = true;
+
+        if ( mode == RMIRROR_ENABLED ) {
+            if ( RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI == 1 ) {
+                document.getElementById("vid").disabled = true;
+
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+                    document.getElementById("mode_"+i).disabled = false;
+                    document.getElementById("intermediate_"+i).disabled = true;
+                    document.getElementById("destination_"+i).disabled = false;
+                }
+            } else {
+
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+                    document.getElementById("mode_"+i).disabled = true;
+                    document.getElementById("intermediate_"+i).disabled = true;
+                    document.getElementById("destination_"+i).disabled = true;
+                }
+            }
+        }
+
+    } else if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) { // source
+
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("destination_"+i).disabled = true;
+        }
+
+    } else if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_INTERMEDIATE ) { // intermediate
+
+        document.getElementById("portselect").disabled = true;
+        document.getElementById("switchselect").disabled = true;
+
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("mode_"+i).disabled = true;
+            document.getElementById("destination_"+i).disabled = true;
+        }
+
+    } else if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION ) { // destination
+
+        document.getElementById("portselect").disabled = true;
+        document.getElementById("switchselect").disabled = true;
+
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+            document.getElementById("mode_"+i).disabled = true;
+        }
+    }
+
+    // update the reflector ports
+    var s;
+    for (s = 0; s < oPorts[switch_id].length; s++) {
+        if(oPorts[switch_id][s] > 0) {
+            continue;
+        }
+        break;
+    }
+    UpdatePortDropDownWithList(oPorts[switch_id], mirror_port);
+
+    // get isid
+    var internal_switch_id = document.getElementById("submit_sid").value || -1;
+
+    // check reflector port and switch id
+    //if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE && mirror_port == RMIRROR_DISABLED_PORT ) {
+    //    document.getElementById("switchselect").disabled = true;
+    //}
+    if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE && (internal_switch_id == -1 || internal_switch_id == switch_id)) {
+        document.getElementById("mode_"+mirror_port).value = 0;
+        document.getElementById("intermediate_"+mirror_port).checked = 0;
+        document.getElementById("mode_"+mirror_port).disabled = true;
+        document.getElementById("intermediate_"+mirror_port).disabled = true;
+    }
+
+    // update mode with intermediate port and type == source
+    var MODE_DISABLED = 4;
+    if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+
+            if (document.getElementById("intermediate_"+i).checked) {
+                //UpdateRow(i,false, MODE_DISABLED);
+                //UpdateRow(i, false, modes[i]);
+                aa = document.getElementById("mode_"+i).value;
+                UpdateRow(i, false, aa);
+            } else {
+                //UpdateRow(i,true, MODE_DISABLED);
+                //UpdateRow(i, true, modes[i]);
+                aa = document.getElementById("mode_"+i).value;
+                UpdateRow(i, true, aa);
+            }
+        }
+    }
+
+    // update mode with destination port and type == mirror
+    if ( RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI == 1 ) {
+        MODE_DISABLED = 4;
+        if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+
+                if (document.getElementById("destination_"+i).checked) {
+                    //UpdateRow(i,false, MODE_DISABLED);
+                    //UpdateRow(i, false, modes[i]);
+                    aa = document.getElementById("mode_"+i).value;
+                    UpdateRow(i, false, aa);
+                } else {
+                    //UpdateRow(i,true, MODE_DISABLED);
+                    //UpdateRow(i, true, modes[i]);
+                    aa = document.getElementById("mode_"+i).value;
+                    UpdateRow(i, true, aa);
+                }
+            }
+        }
+    }
+
+    // update destination port when the type is destination and intermediate port is selected
+    if ( mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION ) {
+        for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+            // to skip the stack ports:
+            if (isStackPort(i)) {
+                continue;
+            }
+
+            if (document.getElementById("intermediate_"+i).checked) {
+                document.getElementById("destination_"+i).checked = 0;
+                document.getElementById("destination_"+i).disabled = true;
+            }
+        }
+    }
+
+    // update destination port when the type is mirror and destination port is selected
+    var is_destination_selected = 0;
+    if ( RMIRROR_USE_RMIRROR_UI_INSTEAD_OF_MIRROR_UI == 1 &&
+    mode == RMIRROR_ENABLED && type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) {
+
+        if ( hidden_switch_id == RMIRROR_DEFAULT_SWITCH_ID ) {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+
+                if (document.getElementById("destination_"+i).checked) {
+                    is_destination_selected = i;
+                }
+            }
+            if ( is_destination_selected > 0 ) {
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+
+                    if ( i == is_destination_selected ) {
+                        continue;
+                    }
+                    document.getElementById("destination_"+i).checked = 0;
+                    document.getElementById("destination_"+i).disabled = true;
+                }
+
+                // update hidden_switch_id
+                UpdateIdValue("hidden_switch_id", SpomGetCurrentSid());
+            }
+        } else if ( hidden_switch_id == SpomGetCurrentSid() || !SpomIsStack() ) { // for standalone, spom.js return -1 as switch id
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+
+                if (document.getElementById("destination_"+i).checked) {
+                    is_destination_selected = i;
+                }
+            }
+            if ( is_destination_selected > 0 ) {
+                for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                    // to skip the stack ports:
+                    if (isStackPort(i)) {
+                        continue;
+                    }
+
+                    if ( i == is_destination_selected ) {
+                        continue;
+                    }
+                    document.getElementById("destination_"+i).checked = 0;
+                    document.getElementById("destination_"+i).disabled = true;
+                }
+            } else {
+                // update hidden_switch_id
+                UpdateIdValue("hidden_switch_id", RMIRROR_DEFAULT_SWITCH_ID);
+            }
+        } else {
+            // disable all nodes
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("destination_"+i).checked = 0;
+                document.getElementById("destination_"+i).disabled = true;
+            }
+        }
+    }
+    
+    // update source ports based on vlans
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        if (document.getElementById("vlans").value === "") {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("mode_"+i).disabled = false;
+            }
+        } else {
+            for (i = configPortMin; i <= SpomCurrentPorts(); i++) {
+                // to skip the stack ports:
+                if (isStackPort(i)) {
+                    continue;
+                }
+                document.getElementById("mode_"+i).disabled = true;
+            }
+        }
+    }
+
+    // update vlans
+    if ( type == VTSS_APPL_RMIRROR_SWITCH_TYPE_INTERMEDIATE || type == VTSS_APPL_RMIRROR_SWITCH_TYPE_DESTINATION ) {
+        document.getElementById("vlans").disabled = true;
+    } else {
+        document.getElementById("vlans").disabled = false;
+    }
+
+    // disable intermediate and destination setting on CPU port
+    if (configSupportCPUMirror) {
+        document.getElementById("intermediate_CPU").disabled = true;
+        document.getElementById("destination_CPU").disabled = true;
+    }
+}
+
+function changeKey()
+{
+    pageSessionId = this.value;
+    processUpdate(myDynamicTable.getRecvJson("config"));
+}
+
+
+function updatePortTable(name)
+{
+    if (name && name != "mirror" && name != "rMirrorSource" && name != "rMirrorDestination" ) {
+        alert("BUG !!! name = " + name);
+    }
+
+    Object.each(oDCurrentPort, function(port, idx) {
+        var portType    = port.split(" ");
+        var portId      = portType[1].split("/");
+        if (name == "mirror") {
+            $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = false;
+            if ($("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).value != "Disabled" &&
+               $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).value != "Rx_only") {
+                $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = true;
+            } else {
+                $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = false;
+            }
+
+            if ($("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).checked === true) {
+                updateSourcePortDropDown("source_" + portType[0] + "_" + portId[0] + "_" + portId[1], false, $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).value);
+            } else {
+                updateSourcePortDropDown("source_" + portType[0] + "_" + portId[0] + "_" + portId[1], true, $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).value);
+            }
+
+        } else if (name == "rMirrorSource" ) {
+            $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = false;
+            $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = true;
+            $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).checked = false;
+        } else if (name == "rMirrorDestination"){
+            $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = true;
+            $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).value = "Disabled";
+            $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = false;
+            $("internalSourceVlans").disabled = true;
+        } else  {
+            $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = true;
+            $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = true;
+            $("internalSourceVlans").disabled = true;
+        }
+
+        if((name == "rMirrorSource" || name == "mirror")) {
+            $("internalSourceVlans").disabled = false;
+            if ($("internalSourceVlans").value) {
+                var posTx, posRx;
+                var selectPort              = portType[0] + " " + portId[0] + "/" + portId[1];
+                var portListTx              = $("SourcePortListTx").value;
+                var portListRx              = $("SourcePortListRx").value;
+                var pattern                 = new RegExp(selectPort,"g");
+
+                $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = true;
+                $("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).value = "Disabled";
+                $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = false;
+
+                posTx = portListTx.search(selectPort);
+                posRx = portListRx.search(selectPort);
+
+                if (posTx >= 0) {
+                    $("SourcePortListTx").value = removePortFromPortList(portListTx, selectPort);
+                }
+
+                if (posRx >= 0) {
+                    $("SourcePortListRx").value = removePortFromPortList(portListRx, selectPort);
+                }
+            }
+        }
+    });
+
+    if (name == "rMirrorSource" ) {
+        $("DestinationPortList").value = null;
+    } else if (name == "rMirrorDestination") {
+        $("SourcePortListTx").value = null;
+        $("SourcePortListRx").value = null;
+        if (myCapabilities.CpuMirrorSupport === true) {
+            $("CpuTx").value = "false";
+            $("CpuRx").value = "false";
+        }
+    }
+
+    if (myCapabilities.CpuMirrorSupport === true) {
+        $("destination_CPU_1_1").disabled = true;
+    }
+}
+
+function updateType(name)
+{
+    if (name != "mirror" && name != "rMirrorSource" && name != "rMirrorDestination" ) {
+        alert("BUG !!! name = " + name);
+    }
+
+    if (!myCapabilities.InternalReflectorPortSupport) {
+        if ((name == "rMirrorSource" )) {
+            $("internalReflectorSwitch").disabled   = false;
+            $("internalReflectorPort").disabled     = false;
+        } else {
+            $("internalReflectorSwitch").disabled   = true;
+            $("internalReflectorPort").disabled     = true;
+        }
+    }
+
+    if (name == "mirror") {
+        $("RMirrorVlan").disabled               = true;
+    } else {
+        $("RMirrorVlan").disabled               = false;
+    }
+
+    updatePortTable(name);
+}
+
+
+function changeType() 
+{
+    updateType(this.value);
+
+}
+
+function changeSwitchId() {
+    var recv_port = myDynamicTable.getRecvJson("port_info");
+    var recv_json = myDynamicTable.getRecvJson("config");
+    var this_sid = this.value;
+    var json_config = null;
+    var portType    = $("ReflectorPort").value.split(" ");
+    var portId      = portType[1].split("/");
+
+    while (oTReflectorPort.length) {
+        oTReflectorPort.pop();
+    }
+
+    while (oVReflectorPort.length) {
+        oVReflectorPort.pop();
+    }
+
+    while (oDReflectorPort.length) {
+        oDReflectorPort.pop();
+    }
+
+    if(pageSessionId) {
+        for (i = 0; i < recv_json.length; i++) {
+            if (pageSessionId == recv_json[i].key) {
+                json_config = recv_json[i];
+                break;
+            }
+        }
+
+        if (!json_config) {
+            alert("Session #" + pageSessionId + " does not exist.");
+            redirectPage();
+            return;
+        }
+
+    } else {
+        alert("Redirect with Session ID 0.");
+    }
+
+    $("ReflectorPort").value = portType[0] + " " + this_sid + "/" + portId[1];
+
+    if (recv_port && recv_port.length) {
+        var current_swid_offset = 0;
+        Object.each(recv_port, function(record, idx) {
+            if (oDStackPorts.indexOf(record.key) >= 0) {
+                return true;
+            }
+
+            if(idx > 0 && (recv_port[idx - 1].key.split(" ")[1].split("/")[0] != recv_port[idx].key.split(" ")[1].split("/")[0])) {
+                current_swid_offset = idx;
+            }
+
+            if (record.key.split(" ")[1].split("/")[0] == this_sid) {
+                oTReflectorPort.push(configPortName(parseInt(idx - current_swid_offset, 10) + configPortMin, 1));
+                oVReflectorPort.push(parseInt(idx - current_swid_offset, 10) + configPortMin);
+                oDReflectorPort.push(record.key);
+            }
+            return true;
+        });
+    }
+    if (!myCapabilities.InternalReflectorPortSupport) {
+        UpdateIdSelect("internalReflectorPort", oTReflectorPort, oVReflectorPort, 1);
+    }
+
+}
+
+function changeSwitchPort()
+{
+    var offset = oVReflectorPort.indexOf(parseInt(this.value, 10));
+
+    $("ReflectorPort").value = oDReflectorPort[offset];
+}
+
+function isWithinRangeOptional(fld_id, MinVal, MaxVal, start_text, end_text, do_not_check)
+{
+    if (do_not_check) {
+        return true;
+    }
+    return isWithinRange(fld_id, MinVal, MaxVal, start_text, end_text);
+}
+
+function changeSourceVlans() {
+    var vlan_list = $("internalSourceVlans").value.split(",");
+    var json_vlan_list = "";
+    var tmp;
+
+    Object.each(vlan_list, function(record, idx) {
+        tmp = record.split("-");
+        if (tmp.length > 2) {
+            alert("input error");
+            return false;
+        }
+        if (tmp.length == 1) {
+            json_vlan_list = json_vlan_list.concat(record, idx == vlan_list.length - 1 ? "" : ",");
+        } else {
+            var i = 0, start = parseInt(tmp[0], 10), end = parseInt(tmp[1], 10);
+            for (i = start; i <= end; i++) {
+                json_vlan_list = json_vlan_list.concat(i, (i == end && idx == vlan_list.length - 1) ? "" : ",");
+            }
+        }
+        return true;
+    });
+
+    $("SourceVlans").value = json_vlan_list;
+
+    updatePortTable($("Type").value);
+}
+
+function addHeader(table_rows, name, recv_json)
+{
+    var row;
+    var port_info;
+
+
+    if (name == "globalDynamicTable") {
+        var rows = new Array();
+        recv_port = myDynamicTable.getRecvJson("port_info");
+        port_info = ifDesc2key(recv_json.val.ReflectorPort, recv_port);
+
+        if (recv_port && recv_port.length) {
+            while (oTReflectorPort.length) {
+                oTReflectorPort.pop();
+            }
+
+            while (oVReflectorPort.length) {
+                oVReflectorPort.pop();
+            }
+
+            while (oDReflectorPort.length) {
+                oDReflectorPort.pop();
+            }
+
+            var current_swid_offset = 0;
+            Object.each(recv_port, function(record, idx) {
+                if (oDStackPorts.indexOf(record.key) >= 0) {
+                    return true;
+                }
+
+                if(idx > 0 && (recv_port[idx - 1].key.split(" ")[1].split("/")[0] != recv_port[idx].key.split(" ")[1].split("/")[0])) {
+                    current_swid_offset = idx;
+                }
+
+                if (record.key.split(" ")[1].split("/")[0] == port_info.swid) {
+                    oTReflectorPort.push(configPortName(parseInt(idx - current_swid_offset, 10) + configPortMin, 1));
+                    oVReflectorPort.push(parseInt(idx - current_swid_offset, 10) + configPortMin);
+                    oDReflectorPort.push(record.key);
+                }
+                return true;
+            });
+        }
+
+        rows = [ 
+            {fields:[
+                {type:"conf_hdr", params:["Session ID"]},
+                {type:"select",   params:[oTKey, oVKey, recv_json.key, "cl", "key", "100%", null, null, changeKey]}
+              ]
+            },
+            {fields:[
+                {type:"conf_hdr", params:["Mode"]},
+                {type:"select",   params:[oTMode, oVMode, recv_json.val.Mode ? "true" : "false", "cl", "Mode", "100%"]}
+              ]
+            },
+            {fields:[
+                {type:"conf_hdr", params:["Type"]},
+                {type:"select",    params:[oTType, oVType, recv_json.val.Type, "cl", "Type", "100%", null, null, changeType]}
+              ]
+            },
+            {fields:[
+                {type:"conf_hdr", params:["VLAN ID"], "hidden":!myCapabilities.RMirrorSuport},
+                {type:"input",    params:[recv_json.val.RMirrorVlan, "cl", "RMirrorVlan", "100%"], validate:{func:isWithinRangeOptional, params:["RMirrorVlan", 1, 4095, "VLAN ID", "", !myCapabilities.RMirrorSuport]}, "hidden":!myCapabilities.RMirrorSuport}
+              ]
+            },
+            {fields:[
+                {type:"conf_hdr",       params:["Option for Innter Tag"], "hidden":!myCapabilities.InternalReflectorPortSupport},
+                {type:"select",         params:[oTMode, oVMode, recv_json.val.StripInnerTag ? "true" : "false", "cl", "StripInnerTag", "100%"], "hidden":!myCapabilities.InternalReflectorPortSupport}
+              ]
+            }
+        ];
+
+        if (!myCapabilities.InternalReflectorPortSupport) {
+            rows_reflector_port = [
+                {fields:[
+                    {type:"conf_hdr", params:["Reflector Switch ID"], "hidden":!configStackable},
+                    {type:"select",    params:[oTReflectorSwitch, oVReflectorSwitch, port_info.swid, "cl", "internalReflectorSwitch", "100%", null, null, changeSwitchId], "hidden":!configStackable}
+                  ]
+                },
+                {fields:[
+                    {type:"conf_hdr",       params:["ReflectorPort"]},
+                    {type:"select",         params:[oTReflectorPort, oVReflectorPort, port_info.port_no, "cl", "internalReflectorPort", "100%", null, null, changeSwitchPort]},
+                    {type:"hidden_input",   params:[recv_json.val.ReflectorPort, "ReflectorPort"]}
+                  ]
+                }
+            ];
+            table_rows = rows.concat(rows_reflector_port);
+        } else {
+            table_rows = rows;
+        }
+        globalDynamicTable.addRows(table_rows);
+    } else if (name == "vlanDynamicTable") {
+        var vlan_list = recv_json.val.SourceVlans.sort(function(a, b){return a-b;});
+        var vlan_str = "";
+        var vlan_id_start = Array(), vlan_id_end = Array();
+
+        Object.each(vlan_list, function(vlan_id, idx) {
+            var offset = parseInt(idx, 10);
+            if(offset === 0 || vlan_list[offset - 1] != vlan_list[offset] - 1) {
+                vlan_id_start.push(vlan_id);
+            }
+            if(offset == vlan_list.length - 1 || vlan_list[offset + 1] != vlan_list[offset] + 1) {
+                vlan_id_end.push(vlan_id);
+            }
+        });
+
+        if (vlan_id_start.length != vlan_id_end.length) {
+            alert("BUG!!! vlan_id_start.length = " + vlan_id_start.length + " vlan_id_end.length = " + vlan_id_end.length);
+        }
+
+        Object.each(vlan_id_start, function(vlan_id, idx) {
+            if(vlan_id_start[idx] == vlan_id_end[idx]) {
+                vlan_str = vlan_str.concat(vlan_id, idx == vlan_id_start.length - 1 ? "" : ",");
+            } else if (vlan_id_start[idx] < vlan_id_end[idx]) {
+                vlan_str = vlan_str.concat(vlan_id_start[idx],"-",vlan_id_end[idx], idx == vlan_id_start.length - 1 ? "" : ",");
+            } else {
+                alert("BUG!!! vlan_id_start[" + idx + "] = " + vlan_id_start[idx] + " vlan_id_end[" + idx + "] = " + vlan_id_end[idx]);
+            }
+        });
+
+        row = {fields:[
+                {type:"conf_hdr",       params:["VLAN ID"]},
+                {type:"input",          params:[vlan_str, "cl", "internalSourceVlans", 15, 45, null, null, null, changeSourceVlans]},
+                {type:"hidden_input",   params:[recv_json.val.SourceVlans, "SourceVlans"]}
+                ]
+              };
+        table_rows.push(row);
+    } else { //PortConfig
+        row = {fields:[
+                 {type:"disp_hdr",      params:["Port"]},
+                 {type:"disp_hdr",      params:["Source"]},
+                 {type:"disp_hdr",      params:["Destination"]},
+                 {type:"hidden_input",  params:[recv_json.val.SourcePortListTx,         "SourcePortListTx"]},
+                 {type:"hidden_input",  params:[recv_json.val.SourcePortListRx,         "SourcePortListRx"]},
+                 {type:"hidden_input",  params:[recv_json.val.DestinationPortList,      "DestinationPortList"]},
+                 {type:"hidden_input",  params:[recv_json.val.CpuTx,                    "CpuTx"]},
+                 {type:"hidden_input",  params:[recv_json.val.CpuRx,                    "CpuRx"]}
+                ]
+              };
+        table_rows.push(row);
+    }
+
+}
+
+function removePortFromPortList(portList, selectPort)
+{
+    var pos;
+
+    pos = portList.search(selectPort);
+
+    if (pos < 0) {
+        return portList;
+    }
+
+    if (selectPort.length != portList.length) {
+        if (pos !== 0) {
+            var ch = ",";
+            selectPort = ch.concat(selectPort);
+        } else {
+            selectPort = selectPort.concat(",");
+        }
+    }
+
+    var replace_pattern = new RegExp(selectPort,"g"); 
+    portList = portList.replace(replace_pattern, "");
+
+    return portList;
+}
+
+function addPortToPortList(portList, selectPort)
+{
+    var pos;
+
+    pos = portList.search(selectPort);
+
+    if (pos >= 0) {
+        alert(selectPort + "is already in " + portList);
+        return portList;
+    }
+
+    if (portList) {
+        portList = portList.concat("," + selectPort);
+    } else {
+        portList = portList.concat(selectPort);
+    }
+
+    return portList;
+
+}
+
+
+function changeSource()
+{
+    var portId = this.id.split("_");
+    var posTx, posRx;
+    var selectPort              = portId[1] + " " + portId[2] + "/" + portId[3];
+    var portListTx              = $("SourcePortListTx").value;
+    var portListRx              = $("SourcePortListRx").value;
+    var destinationportList     = $("DestinationPortList").value;
+    var pattern                 = new RegExp(selectPort,"g"); 
+
+    posTx = portListTx.search(selectPort);
+    posRx = portListRx.search(selectPort);
+
+    if (this.value != "Disabled" && this.value != "Rx_only") {
+        if (destinationportList.match(pattern)) {
+            alert(" This port is configured as destination port");
+            resetForms();
+            return;
+        }
+    }
+
+    if (portId[1] != "CPU") {
+        if (this.value == "Disabled") {
+            if (posTx < 0 && posRx < 0) {
+                return;
+            }
+
+            if (posTx >= 0) {
+                $("SourcePortListTx").value = removePortFromPortList(portListTx, selectPort);
+            }
+
+            if (posRx >= 0) {
+                $("SourcePortListRx").value = removePortFromPortList(portListRx, selectPort);
+            }
+
+        } else if (this.value == "Rx_only") {
+            if (posRx >= 0 && posTx < 0) {
+                return;
+            }
+
+            if (posRx < 0) {
+                $("SourcePortListRx").value = addPortToPortList(portListRx, selectPort);
+            }
+
+            if (posTx >= 0) {
+                $("SourcePortListTx").value = removePortFromPortList(portListTx, selectPort);
+            }
+        } else if (this.value == "Tx_only") {
+            if (posRx < 0 && posTx >= 0) {
+                return;
+            }
+
+            if (posTx < 0) {
+                $("SourcePortListTx").value = addPortToPortList(portListTx, selectPort);
+            }
+
+            if (posRx >= 0) {
+                $("SourcePortListRx").value = removePortFromPortList(portListRx, selectPort);
+            }
+        } else if (this.value == "Both") {
+            if (posTx >= 0 && posRx >= 0) {
+                return;
+            }
+
+            if (posTx < 0) {
+                $("SourcePortListTx").value = addPortToPortList(portListTx, selectPort);
+            }
+
+            if (posRx < 0) {
+                $("SourcePortListRx").value = addPortToPortList(portListRx, selectPort);
+            }
+        } else {
+            alert("BUG !!!, value is " + this.value);
+        }
+    } else {
+        if (this.value == "Disabled") {
+            if ($("CpuTx").value == "false" && $("CpuRx").value == "false") {
+                return;
+            }
+
+            if ($("CpuTx").value == "true") {
+                $("CpuTx").value = "false";
+            }
+
+            if ($("CpuRx").value == "true") {
+                $("CpuRx").value = "false";
+            }
+        } else if (this.value == "Rx_only") {
+            if ($("CpuTx").value == "false" && $("CpuRx").value == "true") {
+                return;
+            }
+
+            if ($("CpuTx").value == "true") {
+                $("CpuTx").value = "false";
+            }
+
+            if ($("CpuRx").value == "false") {
+                $("CpuRx").value = "true";
+            }
+
+        } else if (this.value == "Tx_only") {
+            if ($("CpuTx").value == "true" && $("CpuRx").value == "false") {
+                return;
+            }
+
+            if ($("CpuTx").value == "false") {
+                $("CpuTx").value = "true";
+            }
+
+            if ($("CpuRx").value == "true") {
+                $("CpuRx").value = "false";
+            }
+
+        } else if (this.value == "Both") {
+            if ($("CpuTx").value == "true" && $("CpuRx").value == "true") {
+                return;
+            }
+
+            if ($("CpuTx").value == "false") {
+                $("CpuTx").value = "true";
+            }
+
+            if ($("CpuRx").value == "false") {
+                $("CpuRx").value = "true";
+            }
+
+        } else {
+            alert("BUG !!!, value is " + this.value);
+        }
+
+    }
+
+    updatePortTable($("Type").value);
+}
+
+function changeDestination()
+{
+    var selPortId                  = this.id.split("_");
+    var selectPort              = selPortId[1] + " " + selPortId[2] + "/" + selPortId[3];
+    var portList                = $("DestinationPortList").value;
+    var portListTx              = $("SourcePortListTx").value;
+    var portListRx              = $("SourcePortListRx").value;
+    var pattern                 = new RegExp(selectPort,"g"); 
+    var pos;
+
+    if (this.checked === true) {
+        if (portListTx.match(pattern)) {
+            alert(" This port is configured as source port");
+            resetForms();
+            return false;
+        }
+    }
+
+    pos = portList.search(selectPort);
+    if (this.checked === true && pos >= 0 || (this.checked === false && pos < 0)) {
+        return true;
+    } else if (this.checked === true) {
+        if ($("Type").selectedIndex == oVType.indexOf("mirror")) {
+            Object.each(oDCurrentPort, function(port, idx) {
+                var portType    = port.split(" ");
+                var portId      = portType[1].split("/");
+
+                if (selectPort != port && $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).checked === true) {
+                    $("DestinationPortList").value = removePortFromPortList(portList, port);
+                    $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).checked = false;
+                    portList = $("DestinationPortList").value;
+                }
+
+            });
+
+            if ($("DestinationPortList").value.length !== 0) {
+                if(!confirm("There is port in another switches to be configured as destination ports.\nDo you want to overwirte it anyway?")) {
+                    return false;
+                }
+                $("DestinationPortList").value.removePortToPortList(portList, selectPort);
+                portList = $("DestinationPortList").value;
+            }
+        }
+        $("DestinationPortList").value = addPortToPortList(portList, selectPort);
+
+    } else if (this.checked === false) {
+        $("DestinationPortList").value = removePortFromPortList(portList, selectPort);
+
+        if ($("Type").selectedIndex == oVType.indexOf("mirror")) {
+            Object.each(oDCurrentPort, function(port, idx) {
+                var portType    = port.split(" ");
+                var portId      = portType[1].split("/");
+
+                if (selectPort == port) {
+                    return true;
+                }
+
+                if ($("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]).value == "Disabled") {
+                    $("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]).disabled = false;
+                }
+                return true;
+            });
+        }
+
+    }
+
+    updatePortTable($("Type").value);
+    return true;
+}
+
+function addPortRow(port_idx, source, destination)
+{
+    var portType = oDCurrentPort[port_idx].split(" ");
+    var portId = portType[1].split("/");
+    var row = {
+        fields:[
+            {type:"text",       params:[oTCurrentPort[port_idx]]},
+            {type:"select",     params:[oTSource, oVSource, source, "cl", "source_" + portType[0] + "_" + portId[0] + "_" + portId[1], "100%", null, null, changeSource]},
+            {type:"chkbox",     params:[destination, "c", "destination_" + portType[0] + "_" + portId[0] + "_" + portId[1], changeDestination]}
+           ]
+    };
+
+    return row;
+}
+
+function addRows(recv_json, name)
+{
+    var table_rows = new Array();
+    var i;
+    var source;
+    var destination;
+
+    // Add table header
+    addHeader(table_rows, name, recv_json);
+
+    // Add single row
+    if (name == "portDynamicTable") { 
+            Object.each(oDCurrentPort, function(port, idx) {
+            if (port.split(" ")[0] != "CPU") {
+                if (recv_json.val.SourcePortListTx.indexOf(port) >= 0 && recv_json.val.SourcePortListRx.indexOf(port) >= 0) {
+                   source = "Both";
+                } else if (recv_json.val.SourcePortListTx.indexOf(port) >= 0) {
+                   source = "Tx_only";
+                } else if (recv_json.val.SourcePortListRx.indexOf(port) >= 0) {
+                   source = "Rx_only";
+                } else {
+                   source = "Disabled";
+                }
+            } else {
+                if (recv_json.val.CpuTx && recv_json.val.CpuRx) {
+                   source = "Both";
+                } else if (recv_json.val.CpuTx) {
+                   source = "Tx_only";
+                } else if (recv_json.val.CpuRx) {
+                   source = "Rx_only";
+                } else {
+                   source = "Disabled";
+                }
+            }
+
+            destination = recv_json.val.DestinationPortList.indexOf(port) >= 0 ? true : false;
+            table_rows.push(addPortRow(idx, source, destination));
+        });
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    var record          = null;
+    var table_rows      = new Array();
+    var i;
+
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    if(pageSessionId) {
+        for (i = 0; i < recv_json.length; i++) {
+            if (pageSessionId == recv_json[i].key) {
+                record = recv_json[i];
+                break;
+            }
+        }
+
+        if (!record) {
+            alert("Session #" + pageSessionId + " does not exist.");
+            redirectPage();
+            return;
+        }
+
+    } else {
+        alert("Redirect with Session ID 0.");
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson("config", recv_json);
+
+
+    for (i = 0; i < 3; i++) {
+        var name = i === 0 ? "globalDynamicTable" : i == 1 ? "vlanDynamicTable" : "portDynamicTable";
+        var dyna_table = name == "globalDynamicTable" ? globalDynamicTable : name == "vlanDynamicTable" ? vlanDynamicTable : portDynamicTable;
+
+        // Add table rows
+        table_rows = addRows(record, name);
+        dyna_table.addRows(table_rows);
+
+        // Update this dynamic table
+        dyna_table.update();
+
+    }
+    updateType($("Type").value);
+    var cBar = new HeaderControlBar([{text: "*", className: "cr"},{name: "source"},{name: "destination"}]);
+    cBar.construct("portTableContentTbody", 'config_odd');
+
+    sName_1 = "source";
+    $("__ctl__1").onchange =
+    function() {
+        var val = this.get('value');
+        $$('select[id^="' + sName_1 + '"]:enabled').each(function(item) {
+            item.getElements('option').each(function(opt, i) {
+                if (val == opt.value) {
+                    opt.selected = true;
+                    item.selectedIndex = i;
+                    $try(function() {item.onchange.call($(item));});
+                }
+            });
+        });
+    };
+
+    sName_2 = "destination";
+    $("__ctl__2").onclick =
+    function() {
+        var val = this.checked;
+        $$('input[id^="' + sName_2 + '"]:enabled').each(function(item) {
+                item.set('checked', val);
+                $try(function() {item.onchange.call($(item));});
+            });
+    };
+
+}
+
+function checkForm(form)
+{
+    var switch_type;
+    var fld;
+
+    // Check created VLANs
+    if (!is_vlan_list("vlans", true)) {
+        return false;
+    }
+
+    //vid
+    switch_type = document.getElementById("type").value;
+    fld = document.getElementById("vid");
+    if ( switch_type == VTSS_APPL_RMIRROR_SWITCH_TYPE_MIRROR ) {
+        return true;
+    }
+    if (!isWithinRange("vid", 1, 4095, "'VLAN ID'", " ")) {
+        return false;
+    }
+    if (fld.value == mgmtVid) {
+        GiveAlert("The RMIRROR VLAN ID should not equal switch management VLAN ID.", fld);
+        return false;
+    }
+
+    //check switch type
+    if ( switch_type == VTSS_APPL_RMIRROR_SWITCH_TYPE_SOURCE ) {
+        reflector_port = document.getElementById("portselect").value;
+        fld = document.getElementById("portselect");
+        if ( reflector_port == RMIRROR_DISABLED_PORT ) {
+            GiveAlert("The reflector port needs to select on source switch.", fld);
+            return false;
+        }
+    }
+
+    return true;                // Feed the chickens and go home
+}
+
+function isStacking()
+{
+    var sel = SpomGetSelector();
+
+    if(sel && sel.selectedIndex >= 0 && sel.options[sel.selectedIndex].value > 0) {
+        return true;
+    } else if (sel && sel.selectedIndex >= 0) {
+        return false;
+    } else {
+        alert("SpomGetSelector fail");
+        return false;
+    }
+}
+
+function prepareUpdate(recv_json, name)
+{
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+    var sel = SpomGetSelector();
+    var opt;
+
+    // This table one JSON data.
+
+
+    if (name == "stacking_info"){
+        Object.each(recv_json, function(record, idx) {
+            if (record.val.EnableStacking) {
+                oDStackPorts.push(record.val.StackIfA);
+                oDStackPorts.push(record.val.StackIfB);
+            }
+        });
+    }
+
+    if ((isStacking() === false && myDynamicTable.getRecvJsonCnt() == 2) ||
+        (isStacking() === true && myDynamicTable.getRecvJsonCnt() == 3)) {
+        var recv_port = myDynamicTable.getRecvJson("port_info");
+
+        if (recv_port && recv_port.length) {
+            var current_swid_offset = 0;
+
+            while (oTCurrentPort.length) {
+                oTCurrentPort.pop();
+            }
+            while (oVCurrentPort.length) {
+                oVCurrentPort.pop();
+            }
+            while (oDCurrentPort.length) {
+                oDCurrentPort.pop();
+            }
+
+            Object.each(recv_port, function(record, idx) {
+                if (oDStackPorts.indexOf(record.key) >= 0) {
+                    return true;
+                }
+                if(idx > 0 && (recv_port[idx - 1].key.split(" ")[1].split("/")[0] != recv_port[idx].key.split(" ")[1].split("/")[0])) {
+                    current_swid_offset = idx;
+                }
+
+                if ((currentSid = SpomGetCurrentSid()) == -1) {
+                    currentSid = 1;
+                }
+
+                if (record.key.split(" ")[1].split("/")[0] == currentSid) {
+                    oTCurrentPort.push(configPortName(parseInt(idx - current_swid_offset, 10) + configPortMin, 1));
+                    oVCurrentPort.push(parseInt(idx - current_swid_offset, 10) + configPortMin);
+                    oDCurrentPort.push(record.key);
+                }
+
+                return true;
+            });
+            if (myCapabilities.CpuMirrorSupport) {
+                oTCurrentPort.push("CPU");
+                oDCurrentPort.push("CPU 1/1");
+            }
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+
+        while (oTReflectorSwitch.length) {
+            oTReflectorSwitch.pop();
+        }
+        while (oVReflectorSwitch.length) {
+            oVReflectorSwitch.pop();
+        }
+
+        if(sel && sel.selectedIndex >= 0 && sel.options[sel.selectedIndex].value > 0) {
+            Object.each(sel.options, function(record, idx) {
+                    oTReflectorSwitch.push("Swtich " + record.value);
+                    oVReflectorSwitch.push(parseInt(record.value, 10));
+            });
+        } else if (sel && sel.selectedIndex >= 0) {
+                    oTReflectorSwitch.push("Swtich " + 1);
+                    oVReflectorSwitch.push(parseInt(1, 10));
+        } else {
+            alert("SpomGetSelector fail");
+        }
+
+       processUpdate(myDynamicTable.getRecvJson("config"));
+    }
+}
+ 
+function requestUpdate(recv_json, name)
+{
+
+    // Restore table content
+    myDynamicTable.restore();
+    globalDynamicTable.restore();
+    vlanDynamicTable.restore(); 
+    portDynamicTable.restore(); 
+
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    }
+
+    // This table one JSON data.
+    requestJsonDoc("mirror.config.session.get", null, prepareUpdate, "config");
+    requestJsonDoc("port.status.get", null, prepareUpdate, "port_info");
+    if(isStacking() === true) {
+        requestJsonDoc("topo.config.stacking.get", null, prepareUpdate, "stacking_info");
+    }
+
+}
+
+function requestUpdateBySessionID()
+{
+    var sid;
+
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    sid = document.getElementById("sessionid").value;
+    loadXMLDoc(SpomAddSidArg("/config/rmirror?sessionid="+sid), processUpdate, 'RMIRRORData');
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    portDynamicTable.restore();
+    prepareUpdate(myDynamicTable.getRecvJson("port_info"), "port_info");
+}
+
+function DocLoad()
+{
+    var port_sel = document.getElementById("portselect");
+    for (var i = configPortMin; i <= rmirrorPortMax; i++) {
+        // to skip the stack ports:
+        if (isStackPort(i)) {
+            continue;
+        }
+
+        var opt = document.createElement("option");
+        opt.appendChild(document.createTextNode("Port " + i));
+        opt.setAttribute("value", i);
+        port_sel.appendChild(opt);
+    }
+
+    //requestUpdate();
+    requestUpdateBySessionID();
+}
+
+// Because we disables some of the element in "runtime", we need to
+// do take special care of the reset.
+function ResetUpdate()
+{
+    //document.RMIRRORForm.reset();
+    //ChangeMode();
+
+    myDynamicTable.resetEvent();
+//    processUpdate(reqObject, 'RMIRRORData');
+}
+
+function redirectPage(recv_json)
+{
+    document.location.href = "mirror_ctrl.htm";
+}
+
+
+function submitForms()
+{
+    var attach_if, depth, recv_json;
+    var json_array;
+
+    // Validate row data
+    if (!globalDynamicTable.validate() ||
+        !vlanDynamicTable.validate() ||
+        !portDynamicTable.validate()){
+        return;
+    }
+
+    is_vlan_list("internalSourceVlans", true);
+
+    recv_json = myDynamicTable.getRecvJson("config");
+    // Fill unnecessary fileds
+    var trim_ids = Array();
+
+    if (!myCapabilities.InternalReflectorPortSupport) {
+        trim_ids.push("internalReflectorSwitch");
+        trim_ids.push("internalReflectorPort");
+    }
+    trim_ids.push("internalSourceVlans");
+    trim_ids.push("__ctl__1");
+    trim_ids.push("__ctl__2");
+
+    Object.each(oDCurrentPort, function(port, idx) {
+        var portType = port.split(" ");
+        var portId = portType[1].split("/");
+
+        trim_ids.push("source_" + portType[0] + "_" + portId[0] + "_" + portId[1]);
+        trim_ids.push("destination_" + portType[0] + "_" + portId[0] + "_" + portId[1]);
+    });
+
+    // Convert HTML object to JSON
+    var json_obj = html2Json(myTablesForm, trim_ids);
+
+    // 
+    json_obj.RMirrorVlan                = JSON.decode($("RMirrorVlan").value);
+
+    json_array                          = $("SourceVlans").value.split(",");
+    json_obj.SourceVlans                = json_array[0].length ? json_array.map(Number) : [];
+
+    json_array                          = $("SourcePortListTx").value.split(",");
+    json_obj.SourcePortListTx           = json_array[0].length ? json_array : [];
+
+    json_array                          = $("SourcePortListRx").value.split(",");
+    json_obj.SourcePortListRx           = json_array[0].length ? json_array : [];
+
+    json_array                          = $("DestinationPortList").value.split(",");
+    json_obj.DestinationPortList        = json_array[0].length ? json_array : [];
+
+    json_obj.CpuTx                      = JSON.decode($("CpuTx").value);
+    json_obj.CpuRx                      = JSON.decode($("CpuRx").value);
+    // Submit data with JSON format
+    var key = pageSessionId ? pageSessionId : $("session_id").value;
+    var submit_json = [key, json_obj];
+    requestJsonDoc("mirror.config.session.set", submit_json, redirectPage);
+}
+
+function resetForms()
+{
+    //globalDynamicTable.resetEvent();
+    //vlanDynamicTable.resetEvent();
+    //portDynamicTable.resetEvent();
+    processUpdate(myDynamicTable.getRecvJson("config"));
+}
+
+function clickCancel()
+{
+    document.location.href="mirror_ctrl.htm";
+}
+
+
+/* Disable enter key press.
+ * If there is a form with several text input fields, after the user hits "ENTER"
+ * key in a input field, the browser will submit this form immediately.
+ * To disable the event action, adding the following line in your script.
+ * document.onkeypress = disableEnterKeyPress;
+ */
+function disableEnterKeyPress(evt) {
+    var e = (evt) ? evt : ((event) ? event : null);
+    var node = (e.target) ? e.target : ((e.srcElement) ? e.srcElement : null);
+    if ((e.keyCode == 13 /* Key code of enter button */ ) &&
+        ((node.type == "text") || (node.type == "password"))) {
+        return false; // Cancel default action
+    }
+}
+
+window.addEvent('domready', function() {
+    document.onkeypress = disableEnterKeyPress;
+
+    // Create a from with table body for receive/transmit JSON data
+        // ???
+    myDynamicTable = new DynamicTable("globalTableContent", "config", "columnOrder");
+
+    globalDynamicTable = new DynamicTable("globalTableContent", "config", "columnOrder");
+    vlanDynamicTable = new DynamicTable("vlanTableContent", "config");
+    portDynamicTable = new DynamicTable("portTableContent", "config");
+
+    // This table requires three JSON data(capabilities/globalConfig/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requrested only one time.
+    requestJsonDoc("mirror.capabilities.get", null, requestUpdate, "capabilities");
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>Mirror &amp; RMirror Configuration</h1>
+
+<form id="myTablesForm" action="">
+
+<h2>Global Settings</h2>
+<div id="globalTableContent"></div>
+
+<h2>Source VLAN(s) Configuration</h2>
+<div id="vlanTableContent"></div>
+
+<h2>Port Configuration</h2>
+<h2 class="SPOM_only"> <span id="display_sid"></span></h2>
+<div id="portTableContent"></div>
+</form>
+
+<p>
+<input type="hidden" id="sessionid" name="sessionid" value="1">
+<input type="hidden" id="submit_sid" name="sid">
+<input type="hidden" id="hidden_switch_id" name="hidden_switch_id">
+<input type="button" value="Save" onclick="submitForms();">
+<input type="button" value="Reset" onclick="resetForms();">
+<input type="button" value="Cancel" onclick="clickCancel();">
+</p>
+
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</body>
+</html>

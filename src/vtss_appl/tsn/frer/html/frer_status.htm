@@ -1,0 +1,265 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>FRER Status</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="frer_lib.js"></script>
+<script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_frer_status.htm";
+
+// Global variables
+var statusTable, variables;
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(inst, err_msg, last)
+{
+    if (err_msg) {
+        alert("Instance " + inst + ": " + err_msg);
+    }
+
+    if (last) {
+        // Done with all of them. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// submit_clear_reset_request()
+/******************************************************************************/
+function submit_clear_reset_request(inst, reset)
+{
+    var insts, submit_json = {Reset: reset, LaErrClear: !reset};
+
+    insts = [];
+
+    if (inst == 'all') {
+        variables.statu.forEach(function(key) {
+            insts.push([key.key, submit_json]);
+        });
+    } else {
+        insts.push([inst, submit_json]);
+    }
+
+    frer_lib_json_submit("frer.control.clear.set", insts, on_submit_done);
+}
+
+/******************************************************************************/
+// on_led_clear_button_click()
+/******************************************************************************/
+function on_led_clear_button_click(inst)
+{
+   submit_clear_reset_request(inst, false);
+}
+
+/******************************************************************************/
+// on_reset_button_click()
+/******************************************************************************/
+function on_reset_button_click(inst)
+{
+    submit_clear_reset_request(inst, true);
+}
+
+/******************************************************************************/
+// reset_button_active()
+/******************************************************************************/
+function reset_button_active(statu)
+{
+    return statu && statu.OperState == "active";
+}
+
+/******************************************************************************/
+// led_clear_button_active()
+/******************************************************************************/
+function led_clear_button_active(statu, conf)
+{
+    return statu && statu.OperState == "active" && conf && conf.Mode == "recovery" && conf.LaErrDetection;
+}
+
+/******************************************************************************/
+// enable_disable_update()
+/******************************************************************************/
+function enable_disable_update()
+{
+    var inst, conf, statu, fld;
+
+    Object.each(variables.statu, function(record) {
+        inst  = record.key;
+        statu = record.val;
+        conf  = frer_lib_inst_get(variables.conf, inst);
+
+        fld = $("ResetButton_" + inst);
+        if (fld) {
+            fld.disabled = !reset_button_active(statu);
+        }
+
+        fld = $("ledClearButton_" + inst);
+        if (fld) {
+            fld.disabled = !led_clear_button_active(statu, conf.val);
+        }
+    });
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Reset"]},
+        {type: "disp_hdr", params: ["Clear Latent Error"]},
+        {type: "disp_hdr", params: ["Instance"]},
+        {type: "disp_hdr", params: ["Mode"]},
+        {type: "disp_hdr", params: ["Operational State"]},
+        {type: "disp_hdr", params: ["Latent Error"]}]
+    });
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(inst, statu, conf)
+{
+    var reset_button_name, led_clear_button_name;
+
+    reset_button_name = "ResetButton_" + inst;
+    if (reset_button_active(statu)) {
+        frer_lib_disable_button_add(reset_button_name);
+    } else {
+        frer_lib_disable_button_del(reset_button_name);
+    }
+
+    led_clear_button_name = "ledClearButton_" + inst;
+    if (led_clear_button_active(statu, conf)) {
+        frer_lib_disable_button_add(led_clear_button_name);
+    } else {
+        frer_lib_disable_button_del(led_clear_button_name);
+    }
+
+    return {fields: [
+        {type: "button", params: ["Reset", "c", reset_button_name,     function() {on_reset_button_click(inst);}]},
+        {type: "button", params: ["Clear", "c", led_clear_button_name, function() {on_led_clear_button_click(inst);}]},
+        {type: "digit",  params: [inst]},
+        {type: "text",   params: [frer_lib_mode_map[conf.Mode]]},
+        {type: "image",  params: ["c", frer_lib_oper_state_to_image(statu), frer_lib_oper_state_to_str(statu)]},
+        {type: "image",  params: ["c", frer_lib_led_error_to_image(statu, conf)]}]
+    };
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows, inst_conf;
+
+    table_rows = new Array();
+    add_header(table_rows);
+
+    // Add single row
+    Object.each(variables.statu, function(record) {
+        inst_conf = frer_lib_inst_get(variables.conf, record.key);
+        table_rows.push(add_row(record.key, record.val, inst_conf ? inst_conf.val : undefined));
+    });
+
+    // Empty row
+    if (!variables.statu.length) {
+        table_rows.push({fields: [{type: "empty_row", params: [6, "No FRER instances"]}]});
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Add table rows
+    statusTable.addRows(add_rows());
+
+    // Update this dynamic table
+    statusTable.update();
+
+    enable_disable_update();
+
+    // Refresh timer
+    frer_lib_autorefresh_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}};
+    frer_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    statusTable = new DynamicTable("statusTableContent", "display");
+
+    frer_lib_disable_button_add("autorefresh");
+    frer_lib_disable_button_add("refresh_button");
+    frer_lib_disable_button_add("reset_all_button");
+    frer_lib_disable_button_add("clear_all_button");
+    requestUpdate();
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>FRER Status</h1>
+
+<div class="refreshbar">
+    <label for="autorefresh">Auto-refresh</label>
+    <input type="checkbox" name="autorefresh" id="autorefresh"   onclick="frer_lib_on_autorefresh_click();">
+    <input type="button" id="refresh_button"   value="Refresh"   onclick="requestUpdate();                  this.blur();">
+    <input type="button" id="reset_all_button" value="Reset All" onclick="on_reset_button_click('all');     this.blur();">
+    <input type="button" id="clear_all_button" value="Clear All" onclick="on_led_clear_button_click('all'); this.blur();">
+    <img id="frer_update" alt="" src="images/updating.gif">
+</div>
+
+<div id="statusTableContent"></div>
+
+</body>
+</html>
+

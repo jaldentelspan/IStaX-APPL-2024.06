@@ -1,0 +1,41 @@
+commit 791c0ec0ffe8965dc6b73ab1ab6c6dbe2888fe1e
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Tue Nov 3 13:56:51 2020 +0100
+
+    1260-fix-version-in-log.patch
+
+diff --git a/lib/libfrr.c b/lib/libfrr.c
+index 86ec8b4..f3ee8b0 100644
+--- a/lib/libfrr.c
++++ b/lib/libfrr.c
+@@ -899,12 +899,10 @@ void frr_detach(void)
+ 	frr_check_detach();
+ }
+ 
+-void frr_run(struct thread_master *master)
++static int frr_log_version(struct thread *t)
+ {
+ 	char instanceinfo[64] = "";
+ 
+-	frr_vty_serv();
+-
+ 	if (di->instance)
+ 		snprintf(instanceinfo, sizeof(instanceinfo), "instance %u ",
+ 			 di->instance);
+@@ -912,6 +910,16 @@ void frr_run(struct thread_master *master)
+ 	zlog_notice("%s %s starting: %svty@%d%s", di->name, FRR_VERSION,
+ 		    instanceinfo, di->vty_port, di->startinfo);
+ 
++	return 0;
++}
++
++void frr_run(struct thread_master *master)
++{
++	frr_vty_serv();
++
++        // Have to defer this until a possible log file is opened.
++	thread_add_event(master, frr_log_version, NULL, 0, NULL);
++
+ 	if (di->terminal) {
+ 		nodetach_term = true;
+ 

@@ -1,0 +1,315 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Detailed RedBox Statistics</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="redbox_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_redbox_statistics_details.htm";
+var statisticsTable, globals, variables;
+
+// Page arguments
+var page_args = searchArgs(window.location.search);
+
+var selected_inst = 1;
+if (page_args["inst"]) {
+    selected_inst = parseInt(page_args["inst"], 10);
+}
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(inst, err_msg, last)
+{
+    if (err_msg) {
+        alert(err_msg);
+    }
+
+    if (last) {
+        // Done. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_clear_button_click()
+/******************************************************************************/
+function on_clear_button_click()
+{
+    redbox_lib_json_submit("redbox.control.statisticsClear.set", [[selected_inst, true]], on_submit_done);
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // 1st row (numbers are colspan, rowspan)
+    row = {fields: [
+              {type: "disp_hdr", params: ["Counter", 1, 2, "146px"]},
+              {type: "disp_hdr", params: ["Port A",  2, 1]},
+              {type: "disp_hdr", params: ["Port B",  2, 1]},
+              {type: "disp_hdr", params: ["Port C",  2, 1]}]
+          };
+
+    table_rows.push(row);
+
+    row = {fields: [
+              // Port A
+              {type: "disp_hdr", params: ["Rx", 1, 1, "100px"]},
+              {type: "disp_hdr", params: ["Tx", 1, 1, "100px"]},
+
+              // Port B
+              {type: "disp_hdr", params: ["Rx", 1, 1, "100px"]},
+              {type: "disp_hdr", params: ["Tx", 1, 1, "100px"]},
+
+              // Port C
+              {type: "disp_hdr", params: ["Rx", 1, 1, "100px"]},
+              {type: "disp_hdr", params: ["Tx", 1, 1, "100px"]}]
+          };
+
+    table_rows.push(row);
+
+}
+
+/******************************************************************************/
+// add_counter_rx_tx_row()
+/******************************************************************************/
+function add_counter_rx_tx_row(stati, name, dscr)
+{
+    var row;
+
+    row = {fields: [
+              {type: "text",  params: [dscr, "cl"]},
+              {type: "digit", params: [stati["PortARx" + name + "Cnt"]]},
+              {type: "digit", params: [stati["PortATx" + name + "Cnt"]]},
+              {type: "digit", params: [stati["PortBRx" + name + "Cnt"]]},
+              {type: "digit", params: [stati["PortBTx" + name + "Cnt"]]},
+              {type: "digit", params: [stati["PortCRx" + name + "Cnt"]]},
+              {type: "digit", params: [stati["PortCTx" + name + "Cnt"]]}]
+          };
+
+    return row;
+}
+
+/******************************************************************************/
+// add_counter_rx_row()
+/******************************************************************************/
+function add_counter_rx_row(stati, name, dscr)
+{
+    var row;
+
+    row = {fields: [
+              {type: "text",  params: [dscr, "cl"]},
+              {type: "digit", params: [stati["PortARx" + name + "Cnt"]]},
+              {type: "digit", params: ["-"]},
+              {type: "digit", params: [stati["PortBRx" + name + "Cnt"]]},
+              {type: "digit", params: ["-"]},
+              {type: "digit", params: [stati["PortCRx" + name + "Cnt"]]},
+              {type: "digit", params: ["-"]}]
+          };
+
+    return row;
+}
+
+/******************************************************************************/
+// add_counter_tx_row()
+/******************************************************************************/
+function add_counter_tx_row(stati, name, dscr)
+{
+    var row;
+
+    row = {fields: [
+              {type: "text",  params: [dscr, "cl"]},
+              {type: "digit", params: ["-"]},
+              {type: "digit", params: [stati["PortATx" + name + "Cnt"]]},
+              {type: "digit", params: ["-"]},
+              {type: "digit", params: [stati["PortBTx" + name + "Cnt"]]},
+              {type: "digit", params: ["-"]},
+              {type: "digit", params: [stati["PortCTx" + name + "Cnt"]]}]
+          };
+
+    return row;
+}
+
+/******************************************************************************/
+// add_counter_rows()
+/******************************************************************************/
+function add_counter_rows(table_rows, stati, statu)
+{
+    if (statu && statu.OperState == "active") {
+        table_rows.push(add_counter_rx_tx_row(stati, "Tagged",     "Tagged"));
+        table_rows.push(add_counter_rx_tx_row(stati, "Untagged",   "Untagged"));
+        table_rows.push(add_counter_rx_tx_row(stati, "LinkLocal",  "BPDUs"));
+        table_rows.push(add_counter_rx_row(   stati, "Own",        "Own"));
+        table_rows.push(add_counter_rx_row(   stati, "WrongLan",   "Wrong LAN"));
+        table_rows.push(add_counter_tx_row(   stati, "DuplZero",   "Zero Duplicates"));
+        table_rows.push(add_counter_tx_row(   stati, "DuplOne",    "One Duplicate"));
+        table_rows.push(add_counter_tx_row(   stati, "DuplMulti",  "Two or More Duplicates"));
+        table_rows.push(add_counter_rx_tx_row(stati, "SvPrpDd",    "PRP-DD Supervision"));
+        table_rows.push(add_counter_rx_tx_row(stati, "SvPrpDa",    "PRP-DA Supervision"));
+        table_rows.push(add_counter_rx_tx_row(stati, "SvHsr",      "HSR Supervision"));
+        table_rows.push(add_counter_rx_row(   stati, "SvErr",      "Erroneous Supervision"));
+        table_rows.push(add_counter_rx_row(   stati, "SvFiltered", "Filtered Supervision"));
+    } else {
+        table_rows.push({fields: [{type: "empty_row", params: [7, statu ? "Inactive" : "Not created"]}]});
+    }
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows;
+
+    table_rows = new Array();
+    add_header(table_rows);
+
+    // Update which mode this RedBox is running in.
+    $("selected_mode").innerHTML = variables.conf ? " (" + redbox_lib_mode_map[variables.conf.Mode] + " mode)" : "";
+
+    // Add counter rows
+    add_counter_rows(table_rows, variables.stati, variables.statu);
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Update which instance we are showing detailed statistics for
+    $("selected_inst").innerHTML = selected_inst;
+
+    // Add table rows
+    statisticsTable.addRows(add_rows());
+
+    // Update this dynamic table
+    statisticsTable.update();
+
+    // Refresh timer
+    redbox_lib_autorefresh_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}, stati: {}};
+    redbox_lib_json_request(variables, processUpdate, selected_inst);
+}
+
+/******************************************************************************/
+// on_inst_select()
+/******************************************************************************/
+function on_inst_select(fld)
+{
+    selected_inst = fld.options[fld.selectedIndex].value;
+    requestUpdate();
+}
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    var inst, selector, option;
+
+    // Update instance selector combo box.
+    selector = $("inst_select");
+    clearChildNodes(selector);
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        option = document.createElement("option");
+        option.appendChild(document.createTextNode("Instance #" + inst));
+        option.setAttribute("value", inst);
+        if (inst == selected_inst) {
+            option.setAttribute("selected", true);
+        }
+
+        selector.options.add(option);
+    }
+
+    requestUpdate();
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    // Create a form with table body for receive/transmit JSON data
+    statisticsTable = new DynamicTable("statisticsTableContent", "display");
+
+    redbox_lib_disable_button_add("inst_select");
+    redbox_lib_disable_button_add("autorefresh");
+    redbox_lib_disable_button_add("refresh_button");
+    redbox_lib_disable_button_add("clear_button");
+
+    globals = {capabilities: {}};
+    redbox_lib_json_request(globals, on_globals_received);
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>Detailed RedBox Statistics for Instance #<span id="selected_inst"></span><span id="selected_mode"></span></h1>
+
+<div class="refreshbar">
+ <form action="#">
+  <select id="inst_select" onchange="on_inst_select(this);">
+     <option value="1">Instance #</option>
+  </select>
+
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="redbox_lib_on_autorefresh_click();">
+  <input type="button" id=refresh_button" value="Refresh"    onClick="requestUpdate();         this.blur();">
+  <input type="button" id=clear_button"   value="Clear"      onClick="on_clear_button_click(); this.blur();">
+  <img id="redbox_update" alt="" src="images/updating.gif">
+  </form>
+</div>
+
+<div id="statisticsTableContent"/>
+
+</body>
+</html>
+

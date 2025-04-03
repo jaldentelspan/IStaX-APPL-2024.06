@@ -1,0 +1,322 @@
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "cli_io_api.h"
+#include "board_subjects.hxx"
+#include "interrupt_api.h"
+INCLUDE_END
+
+FUNCTION_BEGIN
+static BOOL runtime_irq_names_get(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    u32 i = 0;
+
+    if (runtime == NULL) {
+        return FALSE;
+    }
+
+    switch (ask) {
+    case ICLI_ASK_CWORD:
+        for (auto e : vtss::irq_list) {
+            if (e) {
+                runtime->cword[i++] = (char *)e->name();
+            }
+        }
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL runtime_intr_names_get(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    meba_event_t source_id;
+
+    if (runtime == NULL) {
+        return FALSE;
+    }
+
+    switch (ask) {
+    case ICLI_ASK_CWORD:
+        for (source_id = MEBA_EVENT_FIRST; source_id < MEBA_EVENT_LAST; source_id++) {
+            runtime->cword[source_id] = (char *)vtss_interrupt_source_text(source_id);
+        }
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static void monitor_interrupt_function(meba_event_t source_id, u32 instance_id)
+{
+    printf("Applicaton Interrupt: %s, instance %u\n", vtss_interrupt_source_text(source_id), instance_id);
+
+    if (vtss_interrupt_source_hook_set(VTSS_MODULE_ID_MISC, monitor_interrupt_function, source_id, INTERRUPT_PRIORITY_NORMAL) != VTSS_RC_OK) {
+        printf("%% Unable to re-hook %s interrupt\n", vtss_interrupt_source_text(source_id));
+    }
+}
+
+static void interrupt_monitor(u32 session_id, meba_event_t source_id, BOOL enable)
+{
+    if (enable) {
+        if (vtss_interrupt_source_hook_set(VTSS_MODULE_ID_MISC, monitor_interrupt_function, source_id, INTERRUPT_PRIORITY_NORMAL) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to hook %s interrupt\n", vtss_interrupt_source_text(source_id));
+        }
+    } else if (vtss_interrupt_source_hook_clear(monitor_interrupt_function, source_id) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to unhook %s interrupt\n", vtss_interrupt_source_text(source_id));
+    }
+}
+
+FUNCTION_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug irq [<cword> [mask | unmask]]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! irq
+CMD_VAR =
+RUNTIME =
+HELP    = Application-handled IRQ count (see also 'debug show irq' for OS-handled)
+BYWORD  =
+
+! <cword>
+CMD_VAR = irq_name
+RUNTIME = runtime_irq_names_get
+HELP    = Optional name of IRQ to display or mask/unmask
+BYWORD  =
+
+VARIABLE_BEGIN
+    bool first = true;
+VARIABLE_END
+
+CODE_BEGIN
+    for (auto e : vtss::irq_list) {
+        if (e) {
+            if (irq_name && strcmp(irq_name, e->name()) != 0) {
+                // User asked for particular IRQ name, but it's not this one.
+                continue;
+            }
+
+            if (first) {
+                ICLI_PRINTF("IRQ # Name        Cnt       \n");
+                ICLI_PRINTF("----- ----------- ----------\n");
+                first = false;
+            }
+
+            ICLI_PRINTF("%5d %-11s %10u\n", e->irq_no(), e->name(), e->cnt());
+        }
+    }
+
+    if (!first) {
+        ICLI_PRINTF("\n\"Cnt\" shows the total number of times this IRQ has been invoked.\n");
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug interrupt [source {[<cword>] | [all]}]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! interrupt
+CMD_VAR =
+RUNTIME =
+HELP    = Application-handled interrupt source
+BYWORD  =
+
+! source
+CMD_VAR =
+RUNTIME =
+HELP    = Select which source to display
+BYWORD  =
+
+! <cword>
+CMD_VAR = intr_name
+RUNTIME = runtime_intr_names_get
+HELP    = Optional name of interrupt to display
+BYWORD  =
+
+! all
+CMD_VAR = has_all
+RUNTIME =
+HELP    = Show also source interrupts that haven't been invoked yet.
+BYWORD  =
+
+VARIABLE_BEGIN
+    bool                           first = true;
+    u32                            hook_cnt, no_hook_cnt;
+    meba_event_t                 source_id;
+    mesa_rc                        rc;
+VARIABLE_END
+
+CODE_BEGIN
+    for (source_id = MEBA_EVENT_FIRST; source_id < MEBA_EVENT_LAST; source_id++) {
+        vtss::Vector<vtss_module_id_t> listeners;
+
+        if (intr_name && strcmp(intr_name, vtss_interrupt_source_text(source_id)) != 0) {
+            // User asked for particular interrupt name, but it's not this one.
+            continue;
+        }
+
+        if ((rc = vtss_interrupt_source_info_get(source_id, &hook_cnt, &no_hook_cnt, listeners)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Obtaining info for source ID = %d = %s failed\n", source_id, vtss_interrupt_source_text(source_id));
+            return ICLI_RC_ERROR;
+        }
+
+        if (!intr_name && !has_all && hook_cnt == 0 && no_hook_cnt == 0 && listeners.size() == 0) {
+            // Don't display zero-entries unless we're asked to with either a particular interrupt name or the 'all' keyword.
+            continue;
+        }
+
+        if (first) {
+            ICLI_PRINTF("Intr # Name                   Cnt w/ hooks Cnt w/o hooks Listeners\n");
+            ICLI_PRINTF("------ ---------------------- ------------ ------------- -----------------------\n");
+            first = false;
+        }
+
+        ICLI_PRINTF("%6d %-22s %12u %13u", source_id, vtss_interrupt_source_text(source_id), hook_cnt, no_hook_cnt);
+
+        if (listeners.size()) {
+            for (auto itr = listeners.cbegin(); itr != listeners.cend(); ++itr) {
+                ICLI_PRINTF("%s%s", itr == listeners.cbegin() ? " " : ", ", vtss_module_names[*itr]);
+            }
+
+            ICLI_PRINTF("\n");
+        } else {
+            ICLI_PRINTF(" -\n");
+        }
+    }
+
+    if (first) {
+        if (intr_name) {
+            ICLI_PRINTF("%% No such interrupt source found: %s\n", intr_name);
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        ICLI_PRINTF("\n\"Cnt w/ hooks\" and \"Cnt w/o hooks\" indicate the number of times the "
+                    "corresponding source interrupt has been signaled with and without an "
+                    "application-defined handler attached, respectively.\n");
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug interrupt monitor [source <cword>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! interrupt
+CMD_VAR =
+RUNTIME =
+HELP    = Application-handled interrupt source
+BYWORD  =
+
+! monitor
+CMD_VAR =
+RUNTIME =
+HELP    = Print a line on the console every time the corresponding source interrupt fires.
+BYWORD  =
+
+! source
+CMD_VAR =
+RUNTIME =
+HELP    = Select a particular source interrupt to monitor
+BYWORD  =
+
+! <cword>
+CMD_VAR = intr_name
+RUNTIME = runtime_intr_names_get
+HELP    = Optional name of interrupt to monitor
+BYWORD  =
+
+VARIABLE_BEGIN
+    meba_event_t source_id;
+VARIABLE_END
+
+CODE_BEGIN
+    for (source_id = MEBA_EVENT_FIRST; source_id < MEBA_EVENT_LAST; source_id++) {
+        if (intr_name && strcmp(intr_name, vtss_interrupt_source_text(source_id)) != 0) {
+            // User asked for particular interrupt name, but it's not this one.
+            continue;
+        }
+
+        interrupt_monitor(session_id, source_id, TRUE);
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    for (meba_event_t source_id = MEBA_EVENT_FIRST; source_id < MEBA_EVENT_LAST; source_id++) {
+        if (intr_name && strcmp(intr_name, vtss_interrupt_source_text(source_id)) != 0) {
+            // User asked for particular interrupt name, but it's not this one.
+            continue;
+        }
+
+        interrupt_monitor(session_id, source_id, FALSE);
+    }
+NO_FORM_CODE_END
+CMD_END
+

@@ -1,0 +1,1742 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include <vtss/appl/tsn.h>          /* For vtss_appl_tsn_XXX()                   */
+#include "tsn_api.h"                /* For vtss_appl_tsn_XXX()                   */
+#include "icli_cmd_func.h"          /* For icli_config_XXX()                     */
+#include "icli_porting_util.h"      /* For icli_port_info_txt()                  */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include "topo_api.h"               /* for topo_usid2isid()                      */
+#include "mgmt_api.h"               /* For mgmt_bf2txt                           */
+#include "tsn_serializer.hxx"       /* For mgmt_enum_descriptor2txt()            */
+#include "tsn_tas_serializer.hxx"   /* For mgmt_enum_descriptor2txt()            */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+
+#define CAPA vtss_appl_tsn_capabilities
+
+INCLUDE_END
+
+FUNCTION_BEGIN
+#define PRINTF                   (void)icli_session_self_printf
+
+#undef IC_RC
+#define IC_RC(expr) do {                              \
+    mesa_rc _rc_ = (expr);                            \
+    if (_rc_ != VTSS_RC_OK) {                            \
+        ICLI_PRINTF("%% TSN: %s!\n", error_txt(_rc_));\
+        return _rc_;                                  \
+    }                                                 \
+} while (0)
+
+#ifdef VTSS_SW_OPTION_ICFG
+
+// Helper macros:
+#define SHOW_(p)  ((req->all_defaults) || (c.p != dc.p))
+#define PRT_(...) do { VTSS_RC(vtss_icfg_printf(result, __VA_ARGS__)); } while (0)
+
+#define SHOW_unit(p)  (p.admin_cycle_time_denominator == 1000 ? "ms" : p.admin_cycle_time_denominator == 1000000 ? "us" : "ns")
+
+/******************************************************************************/
+// TSN_tas_ICFG_global_conf()
+/******************************************************************************/
+static mesa_rc TSN_tas_ICFG_global_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_tsn_tas_cfg_global_t c;
+    vtss_appl_tsn_tas_cfg_global_t dc;
+    dc.always_guard_band = TRUE;
+    vtss_appl_tsn_tas_cfg_get_global(&c);
+    if (SHOW_(always_guard_band)) {
+        if (c.always_guard_band) {
+            PRT_("tsn tas always-guard-band\n");
+        } else {
+            PRT_("no tsn tas always-guard-band\n");
+        }
+    }
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// TSN_tas_ICFG_port_conf()
+/******************************************************************************/
+static mesa_rc TSN_tas_ICFG_port_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_isid_t             isid = topo_usid2isid(req->instance_id.port.usid);
+    mesa_port_no_t          iport = uport2iport(req->instance_id.port.begin_uport);
+    vtss_ifindex_t          ifindex;
+    mesa_bool_t             gate_enabled;
+    bool                    show_gate_enabled;
+    char                    buf[32];
+    int                     queue_no = 0;
+    int                     admin_control_list_length;
+    vtss_gcl_index_t        gcl_index;
+    VTSS_RC(vtss_ifindex_from_port(isid, iport, &ifindex));
+
+    for (queue_no = 0; queue_no < MESA_QUEUE_ARRAY_SIZE; queue_no ++) {
+        vtss_appl_tsn_tas_max_sdu_t dc;
+        dc.max_sdu = MAX_SDU_DEFAULT; //default
+        vtss_appl_tsn_tas_max_sdu_t c;
+        VTSS_RC(vtss_appl_tsn_tas_per_q_max_sdu_get(ifindex, queue_no, &c));
+        if (SHOW_(max_sdu)) {
+            if (c.max_sdu != dc.max_sdu) {
+                PRT_(" tsn tas max-sdu queue %d %u\n", queue_no, c.max_sdu);
+            } else {
+                PRT_(" no tsn tas max-sdu queue %d\n", queue_no);
+            }
+        }
+    }
+    
+    {   // namespace for c and dc
+        vtss_appl_tsn_tas_cfg_t dc;
+        vtss_appl_tsn_tas_cfg_t c;
+
+        VTSS_RC(vtss_appl_tsn_tas_cfg_get_default(&dc));
+        VTSS_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+
+        admin_control_list_length   = c.admin_control_list_length;
+        gate_enabled                = c.gate_enabled;
+
+        if (SHOW_(admin_gate_states)) {
+            if (c.admin_gate_states) {
+                mgmt_bf2txt(&c.admin_gate_states, 0, 7, buf);
+                PRT_(" tsn tas gate-states queue %s open\n", buf);
+            } else {
+                PRT_(" tsn tas gate-states queue 0-7 closed\n");
+            }
+        }
+        if (SHOW_(admin_cycle_time_numerator) || SHOW_(admin_cycle_time_denominator)) {
+            PRT_(" tsn tas cycle-time %u %s \n", c.admin_cycle_time_numerator, SHOW_unit(c));
+        }
+        if (SHOW_(admin_cycle_time_extension)) {
+            PRT_(" tsn tas cycle-time-extension %u\n", c.admin_cycle_time_extension);
+        }
+        if (SHOW_(admin_base_time.seconds) || SHOW_(admin_base_time.nanoseconds)) {
+            PRT_(" tsn tas base-time seconds %u nanoseconds %u\n", c.admin_base_time.seconds, c.admin_base_time.nanoseconds);
+        }
+        if (SHOW_(admin_control_list_length)) {
+            PRT_(" tsn tas control-list-length %u\n", c.admin_control_list_length);
+        }
+        show_gate_enabled = SHOW_(gate_enabled);
+    }
+
+    for (gcl_index = 0; gcl_index < MIN(admin_control_list_length, CAPA->tas_max_gce_cnt); gcl_index++) {
+        vtss_appl_tsn_tas_gcl_t dc;
+        vtss_appl_tsn_tas_gcl_t c;
+        VTSS_RC(vtss_appl_tsn_tas_gcl_admin_get_default(&dc));
+        VTSS_RC(vtss_appl_tsn_tas_gcl_admin_get(ifindex, gcl_index, &c));
+        if (SHOW_(gate_state) || SHOW_(time_interval)) {
+            if (c.gate_state) {
+                mgmt_bf2txt(&c.gate_state, 0, 7, buf);
+                PRT_(" tsn tas control-list index %u gate-state queue %s open time-interval %u\n", gcl_index, buf, c.time_interval);
+            } else {
+                PRT_(" tsn tas control-list index %u gate-state queue 0-7 closed time-interval %u\n", gcl_index, c.time_interval);
+            }
+        }
+    }
+
+    if (show_gate_enabled) {
+        if (gate_enabled) {
+            PRT_(" tsn tas gate-enabled\n");
+        } else {
+            PRT_(" no tsn tas gate-enabled\n");
+        }
+    }
+
+    if (gate_enabled) {
+        vtss_appl_tsn_tas_oper_state_t status;
+        VTSS_RC(vtss_appl_tsn_tas_status_get(ifindex, &status));
+        if (status.config_change_time.seconds || status.config_change_time.nanoseconds) {
+            PRT_(" tsn tas config-change\n"); /* This must be the last line in TAS config */
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// tsn_tas_icfg_init()
+/******************************************************************************/
+mesa_rc tsn_tas_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_TAS_GLOBAL_CONF, "tsn", TSN_tas_ICFG_global_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_TAS_PORT_CONF, "tsn", TSN_tas_ICFG_port_conf));
+    return VTSS_RC_OK;
+}
+
+#endif /* VTSS_SW_OPTION_ICFG */
+
+static BOOL TSN_ICLI_runtime_tas(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = CAPA->has_tas;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL TSN_ICLI_runtime_tas_range(icli_runtime_ask_t ask, icli_runtime_t *runtime, const char *help, u32 min, u32 max)
+{
+    if (ask == ICLI_ASK_HELP) {
+        if (help) {
+            icli_sprintf(runtime->help, "%s", help);
+            return TRUE;
+        }
+    } else if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = min;
+        runtime->range.u.ur.range[0].max = max;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL TSN_ICLI_runtime_tas_max_sdu(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    char buf[128];
+    sprintf(buf, "Maximum SDU size supported by the queue <Default:%d>", MAX_SDU_DEFAULT);
+    return TSN_ICLI_runtime_tas_range(ask, runtime, buf, 0, CAPA->tas_max_sdu_max);
+}
+
+static BOOL TSN_ICLI_runtime_tas_cycle_time_numerator(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    char buf[512];
+    sprintf(buf, "Time. A number of time units defining the CycleTime."
+                 "The resulting CycleTime must be >= %u ns and <= %u ns. <Default:100 ms>", CAPA->tas_ct_min, CAPA->tas_ct_max);
+    return TSN_ICLI_runtime_tas_range(ask, runtime, buf, 1, CAPA->tas_ct_max);
+}
+
+static BOOL TSN_ICLI_runtime_tas_cycle_time_extension(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    char buf[512];
+    sprintf(buf, "Extension, Integer number of nanoseconds <Default:%d>", CAPA->tas_ct_min);
+    return TSN_ICLI_runtime_tas_range(ask, runtime, buf, CAPA->tas_ct_min, CAPA->tas_ct_max);
+}
+
+static BOOL TSN_ICLI_runtime_tas_control_list_length(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return TSN_ICLI_runtime_tas_range(ask, runtime, "Admin Control List length", 0, CAPA->tas_max_gce_cnt);
+}
+
+static BOOL TSN_ICLI_runtime_tas_control_list_index(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return TSN_ICLI_runtime_tas_range(ask, runtime, "Admin Control List index", 0, CAPA->tas_max_gce_cnt - 1);
+}
+
+static BOOL TSN_ICLI_runtime_tas_time_interval(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return TSN_ICLI_runtime_tas_range(ask, runtime, NULL, 1, CAPA->tas_ct_max);
+}
+
+static void TSN_ICLI_tas_max_sdu_conf(icli_stack_port_range_t *plist, icli_unsigned_range_t *queue, u32 *sdu) {
+    port_iter_t                  pit;
+    vtss_ifindex_t               ifindex;
+    vtss_appl_tsn_tas_max_sdu_t  max_sdu;
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        if (vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex) != VTSS_RC_OK) {
+            PRINTF("%% Failed to get ifindex from port:%u\n", pit.iport);
+            return;
+        }
+        if (queue) { /* queue_num may contain multiple values */
+            u32 queuenum_cnt, queuenum_val;
+            for (queuenum_cnt = 0; queuenum_cnt < queue->cnt; queuenum_cnt++) {
+                for (queuenum_val = queue->range[queuenum_cnt].min; queuenum_val <= queue->range[queuenum_cnt].max; queuenum_val++) {
+                    if (vtss_appl_tsn_tas_per_q_max_sdu_get(ifindex, queuenum_val, &max_sdu) != VTSS_RC_OK) {
+                        PRINTF("%% Failed to get TAS Max SDU configuration from port:%u\n", pit.iport);
+                        return;
+                    }
+                    max_sdu.max_sdu = sdu ? *sdu : 0;
+                    if (vtss_appl_tsn_tas_per_q_max_sdu_set(ifindex, queuenum_val, &max_sdu) != VTSS_RC_OK) {
+                        PRINTF("%% Failed to set TAS Max SDU configuration for port:%u\n", pit.iport);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void TSN_ICLI_tas_conf(icli_stack_port_range_t *plist, BOOL enable) {
+    port_iter_t               pit;
+    vtss_ifindex_t            ifindex;
+    vtss_appl_tsn_tas_cfg_t   cfg;
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        if (vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex) != VTSS_RC_OK) {
+            PRINTF("%% Failed to get ifindex from port:%u\n", pit.iport);
+            return;
+        }
+        if (vtss_appl_tsn_tas_cfg_get(ifindex, &cfg) != VTSS_RC_OK) {
+            PRINTF("%% Failed to get TAS configuration from port:%u\n", pit.iport);
+            return;
+        }
+        cfg.gate_enabled = enable;
+        if (vtss_appl_tsn_tas_cfg_set(ifindex, &cfg) != VTSS_RC_OK) {
+            PRINTF("%% Failed to set TAS configuration from port:%u\n", pit.iport);
+            return;
+        }
+    }
+}
+
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+HELP_TSN                        = Time Sensitive Network
+HELP_TSN_INTERFACE              = Interface
+HELP_TSN_INTERFACE_LIST         = Interface selector
+HELP_TSN_TAS                    = Time Aware Shaping
+
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show tsn tas status [ interface <port_type_list> ]
+
+DOC_CMD_DESC    = Displays the operational parameters of TAS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show tsn tas interface gi 1/1 status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! status
+CMD_VAR =
+RUNTIME =
+HELP    = Status of operational parameters
+BYWORD  =
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_INTERFACE
+BYWORD  = interface : Option
+
+! <port_type_list>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_TSN_INTERFACE_LIST
+BYWORD  = <Port : port_type_list>
+
+VARIABLE_BEGIN
+    port_iter_t                    pit;
+    vtss_ifindex_t                 ifindex, next_ifindex;
+    vtss_appl_tsn_tas_cfg_t        cfg;
+    vtss_appl_tsn_tas_oper_state_t status;
+    vtss_appl_tsn_tas_gcl_t        gcl_status;
+    char                           buf[128];
+VARIABLE_END
+
+CODE_BEGIN
+        (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, port)) {
+            IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+            IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &cfg));
+            IC_RC(vtss_appl_tsn_tas_status_get(ifindex, &status));
+
+            ICLI_PRINTF("interface %s\n", icli_port_info_txt(VTSS_ISID_START, pit.uport, buf));
+            ICLI_PRINTF(" GateEnabled           : %s\n", cfg.gate_enabled ? "TRUE" : "FALSE");
+            ICLI_PRINTF(" OperGateStates        : 0x%02x\n", status.oper_gate_states);
+            ICLI_PRINTF(" OperCycleTime         : %u %s\n", status.oper_cycle_time_numerator, status.oper_cycle_time_denominator == 1000 ? "ms" : status.oper_cycle_time_denominator == 1000000 ? "us" : "ns");
+            ICLI_PRINTF(" OperCycleTimeExtension: %u nanoseconds\n", status.oper_cycle_time_extension);
+            ICLI_PRINTF(" OperBaseTime          : %" PRIu64 " seconds, %u nanoseconds\n",
+                        ((u64)status.oper_base_time.sec_msb << 32) + status.oper_base_time.seconds,
+                        status.oper_base_time.nanoseconds);
+            ICLI_PRINTF(" ConfigChangeTime      : %" PRIu64 " seconds, %u nanoseconds\n",
+                        ((u64)status.config_change_time.sec_msb << 32) + status.config_change_time.seconds,
+                        status.config_change_time.nanoseconds);
+            ICLI_PRINTF(" TickGranularity       : %u tenths of nanoseconds\n", status.tick_granularity);
+            ICLI_PRINTF(" CurrentTime           : %" PRIu64 " seconds, %u nanoseconds\n",
+                        ((u64)status.current_time.sec_msb << 32) + status.current_time.seconds,
+                        status.current_time.nanoseconds);
+            ICLI_PRINTF(" ConfigPending         : %s\n", status.config_pending ? "TRUE" : "FALSE");
+            ICLI_PRINTF(" ConfigChangeError     : %" PRIu64 "\n", status.config_change_error);
+            ICLI_PRINTF(" SupportedListMax      : %u\n", status.supported_list_max);
+            ICLI_PRINTF(" OperControlListLength : %u\n", status.oper_control_list_length);
+            vtss_gcl_index_t gcl_index;
+            for (mesa_rc rc = vtss_appl_tsn_tas_gcl_oper_itr(&ifindex, &next_ifindex, nullptr, &gcl_index);
+                 rc == MESA_RC_OK && ifindex == next_ifindex;
+                 rc = vtss_appl_tsn_tas_gcl_oper_itr(&ifindex, &next_ifindex, &gcl_index, &gcl_index)) {
+                 
+                vtss_appl_tsn_tas_gcl_oper_get(ifindex, gcl_index, &gcl_status);
+                const char *gate_operation_txt = "Undefined";
+                for (int enum_value = 0; vtss_appl_tsn_tas_gco_txt[enum_value].valueName != 0; ++enum_value) {
+                    if (gcl_status.gate_operation == vtss_appl_tsn_tas_gco_txt[enum_value].intValue) {
+                        gate_operation_txt = vtss_appl_tsn_tas_gco_txt[enum_value].valueName;
+                        break;
+                    }
+                }
+                ICLI_PRINTF(" GateControlEntry %-3d  : GateStates 0x%02x, TimeInterval %u nanoseconds, operation %s\n",
+                            gcl_index, gcl_status.gate_state, gcl_status.time_interval, gate_operation_txt);
+            }
+        }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas always-guard-band
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! always-guard-band
+CMD_VAR =
+RUNTIME =
+HELP    = Guard band is implemented for any queue to scheduled queues transition.
+BYWORD  =
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_tas_cfg_global_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_tas_cfg_get_global(&c));
+    if (c.always_guard_band != TRUE) {
+        c.always_guard_band = TRUE;
+        IC_RC(vtss_appl_tsn_tas_cfg_set_global(&c));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas always-guard-band
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! always-guard-band
+CMD_VAR =
+RUNTIME =
+HELP    = Guard band is implemented for any queue to scheduled queues transition.
+BYWORD  =
+
+VARIABLE_BEGIN
+    vtss_appl_tsn_tas_cfg_global_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_tas_cfg_get_global(&c));
+    if (c.always_guard_band != FALSE) {
+        c.always_guard_band = FALSE;
+        IC_RC(vtss_appl_tsn_tas_cfg_set_global(&c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas max-sdu queue <0~7> <uint>
+
+DOC_CMD_DESC    = Configures max-sdu for particular queue or range of queues
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas max-sdu queue 6-7 512
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! max-sdu
+CMD_VAR =
+RUNTIME =
+HELP    = Queue Max SDU configuration
+BYWORD  =
+
+! queue
+CMD_VAR =
+RUNTIME =
+HELP    = Specify queue
+BYWORD  =
+
+! <0~7>
+CMD_VAR = queue
+RUNTIME =
+HELP    = Specific queue or range
+BYWORD  = <Queue : 0~7>
+
+! <uint>
+CMD_VAR = sdu
+RUNTIME = TSN_ICLI_runtime_tas_max_sdu
+HELP    =
+BYWORD  = <Sdu : uint>
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    TSN_ICLI_tas_max_sdu_conf(plist, queue, &sdu);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas max-sdu queue <0~7>
+
+DOC_CMD_DESC    = Configures max-sdu for particular queue or range of queues to default value
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn tas max-sdu queue 1,3
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! max-sdu
+CMD_VAR =
+RUNTIME =
+HELP    = Queue Max SDU configuration
+BYWORD  =
+
+! queue
+CMD_VAR =
+RUNTIME =
+HELP    = Specify queue
+BYWORD  =
+
+! <0~7>
+CMD_VAR = queue
+RUNTIME =
+HELP    = Specific queue or range
+BYWORD  = <Queue : 0~7>
+
+VARIABLE_BEGIN
+u32 sdu = MAX_SDU_DEFAULT;
+VARIABLE_END
+
+CODE_BEGIN
+    TSN_ICLI_tas_max_sdu_conf(plist, queue, &sdu);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas gate-enabled
+
+DOC_CMD_DESC    = Enables Time Aware Shaper
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas gate-enabled
+
+NO_FORM_DOC_CMD_DESC    = Disables Time Aware Shaper
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE = no tsn tas gate-enabled
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! gate-enabled
+CMD_VAR =
+RUNTIME =
+HELP    = Enabled state of Time Aware Shaping
+BYWORD  =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    TSN_ICLI_tas_conf(plist, TRUE);
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    TSN_ICLI_tas_conf(plist, FALSE);
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas gate-states queue <0~7> { open | closed }
+
+DOC_CMD_DESC    = Configures initial gate states for each queue
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas gate-states queue 5,7 open
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! gate-states
+CMD_VAR =
+RUNTIME =
+HELP    = Initial gate state for each queue
+BYWORD  =
+
+! queue
+CMD_VAR =
+RUNTIME =
+HELP    = Specify queue
+BYWORD  =
+
+! <0~7>
+CMD_VAR = queue
+RUNTIME =
+HELP    = Specific queue or range
+BYWORD  = <Queue : 0~7>
+
+! open
+CMD_VAR = has_open
+RUNTIME =
+HELP    = Open the gate
+BYWORD  = open : Option
+
+! closed
+CMD_VAR =
+RUNTIME =
+HELP    = Close the gate
+BYWORD  = closed : Option
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        if (queue) { /* queue may contain multiple values */
+            u32 cnt, val;
+            u8 gate_states = 0;
+            for (cnt = 0; cnt < queue->cnt; cnt++) {
+                for (val = queue->range[cnt].min; val <= queue->range[cnt].max; val++) {
+                    gate_states |= (1 << val);
+                }
+            }
+            c.admin_gate_states = (has_open) ? gate_states : ~gate_states;
+        }
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas gate-states
+
+DOC_CMD_DESC    = Configures initial gate states for each queue to default value
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn tas gate-states
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! gate-states
+CMD_VAR =
+RUNTIME =
+HELP    = Set initial gate state for each queue to default
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+    vtss_appl_tsn_tas_cfg_t dc;
+VARIABLE_END
+
+CODE_BEGIN
+      IC_RC(vtss_appl_tsn_tas_cfg_get_default(&dc));
+      (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+      while (icli_port_iter_getnext(&pit, plist)) {
+          IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+          IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+          c.admin_gate_states = dc.admin_gate_states;
+          IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+      }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas control-list-length <uint>
+
+DOC_CMD_DESC    = Configures Control List Length
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas control-list-length 2
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! control-list-length
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Admin Control List Length
+BYWORD  =
+
+! <uint>
+CMD_VAR = length
+RUNTIME = TSN_ICLI_runtime_tas_control_list_length
+HELP    = Length of Admin Control List
+BYWORD  = <Length : uint>
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.admin_control_list_length = length;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas control-list-length
+
+DOC_CMD_DESC    = Configures Control List Length to default value
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn tas control-list-length
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! control-list-length
+CMD_VAR =
+RUNTIME =
+HELP    = Set Admin Control List Length to default
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t dc;
+    vtss_appl_tsn_tas_cfg_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_tas_cfg_get_default(&dc));
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.admin_control_list_length = dc.admin_control_list_length;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas control-list index <uint> gate-state queue <0~7> { open | closed } time-interval <uint> [ operation { set | set-hold | set-release } ]
+
+DOC_CMD_DESC    = Configures Admin Control List
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas control-list index 1 gate-state queue 7 open time-interval 1000
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! control-list
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Admin Control List
+BYWORD  =
+
+! index
+CMD_VAR =
+RUNTIME =
+HELP    = Specify index
+BYWORD  =
+
+! <uint>
+CMD_VAR = index
+RUNTIME = TSN_ICLI_runtime_tas_control_list_index
+HELP    =
+BYWORD  = <Index : uint>
+
+! gate-state
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Admin Gate State
+BYWORD  =
+
+! queue
+CMD_VAR =
+RUNTIME =
+HELP    = Specify queue
+BYWORD  =
+
+! <0~7>
+CMD_VAR = queue
+RUNTIME =
+HELP    = Specific queue or range
+BYWORD  = <Queue : 0~7>
+
+! open
+CMD_VAR = has_open
+RUNTIME =
+HELP    = Open the gate
+BYWORD  = open : Option
+
+! closed
+CMD_VAR =
+RUNTIME =
+HELP    = Close the gate
+BYWORD  = closed : Option
+
+! time-interval
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Time Interval
+BYWORD  =
+
+! <uint>
+CMD_VAR = interval
+RUNTIME = TSN_ICLI_runtime_tas_time_interval
+HELP    = Time Interval in Nanoseconds <Default:1>
+BYWORD  = <Interval : uint>
+
+! operation
+CMD_VAR =
+RUNTIME =
+HELP    = Specify operation (deprecated, has no effect)
+BYWORD  =
+
+! set
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Gate operation to Set (deprecated, has no effect)
+BYWORD  = set : Option
+
+! set_hold
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Gate operation to Set and hold MAC (deprecated, has no effect)
+BYWORD  = set-hold : Option
+
+! set_release
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Gate operation to Set and release MAC (deprecated, has no effect)
+BYWORD  = set-release : Option
+
+VARIABLE_BEGIN
+    port_iter_t                  pit;
+    vtss_ifindex_t               ifindex;
+    vtss_appl_tsn_tas_gcl_t      cfg;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC (vtss_appl_tsn_tas_gcl_admin_get(ifindex, index, &cfg));
+        if (queue) { /* queue may contain multiple values */
+            u32 cnt, val;
+            u8 gate_state = 0;
+            for (cnt = 0; cnt < queue->cnt; cnt++) {
+                for (val = queue->range[cnt].min; val <= queue->range[cnt].max; val++) {
+                    gate_state |= (1 << val);
+                }
+            }
+            cfg.gate_state = (has_open) ? gate_state : ~gate_state;
+        }
+        cfg.time_interval = interval;
+        IC_RC(vtss_appl_tsn_tas_gcl_admin_set(ifindex, index, &cfg));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas control-list index <uint>
+
+DOC_CMD_DESC    = Configures Admin Control List to default
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn tas control-list index 1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! control-list
+CMD_VAR =
+RUNTIME =
+HELP    = Set Admin Control List to default
+BYWORD  =
+
+! index
+CMD_VAR =
+RUNTIME =
+HELP    = Specify index
+BYWORD  =
+
+! <uint>
+CMD_VAR = index
+RUNTIME = TSN_ICLI_runtime_tas_control_list_index
+HELP    =
+BYWORD  = <Index : uint>
+
+VARIABLE_BEGIN
+    port_iter_t                  pit;
+    vtss_ifindex_t               ifindex;
+    vtss_appl_tsn_tas_gcl_t      cfg;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    IC_RC(vtss_appl_tsn_tas_gcl_admin_get_default(&cfg));
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_gcl_admin_set(ifindex, index, &cfg));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas cycle-time <uint> { ms | us | ns }
+
+DOC_CMD_DESC    = Configure Admin Cycle Time
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas cycle-time 123 ns
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! cycle-time
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Admin Cycle Time
+BYWORD  =
+
+! <uint>
+CMD_VAR = time
+RUNTIME = TSN_ICLI_runtime_tas_cycle_time_numerator
+HELP    =
+BYWORD  = <Time : uint>
+
+! ms
+CMD_VAR = has_ms
+RUNTIME =
+HELP    = milliseconds
+BYWORD  =
+
+! us
+CMD_VAR = has_us
+RUNTIME =
+HELP    = microseconds
+BYWORD  =
+
+! ns
+CMD_VAR =
+RUNTIME =
+HELP    = nanoseconds
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+    uint32_t denom;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        if(has_ms) {
+            denom = 1000;
+        } else if (has_us) {
+            denom = 1000000;
+        } else {
+            denom = 1000000000;
+        }
+        c.admin_cycle_time_numerator = time;
+        c.admin_cycle_time_denominator = denom;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas cycle-time
+
+DOC_CMD_DESC    = Set Admin Cycle Time to default
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn tas cycle-time
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! cycle-time
+CMD_VAR =
+RUNTIME =
+HELP    = Set Admin Cycle Time to default
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+    vtss_appl_tsn_tas_cfg_t dc;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_tas_cfg_get_default(&dc));
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.admin_cycle_time_numerator = dc.admin_cycle_time_numerator;
+        c.admin_cycle_time_denominator = dc.admin_cycle_time_denominator;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas cycle-time-extension <uint>
+
+DOC_CMD_DESC    = Configure Admin Cycle Time Extenstion
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas cycle-time-extension 400
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! cycle-time-extension
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Admin Cycle Time Extension
+BYWORD  =
+
+! <uint>
+CMD_VAR = extension
+RUNTIME = TSN_ICLI_runtime_tas_cycle_time_extension
+HELP    = runtime
+BYWORD  = <Extension : uint>
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.admin_cycle_time_extension = extension;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas cycle-time-extension
+
+DOC_CMD_DESC    = Set Admin Cycle Time Extenstion to default
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no tsn tas cycle-time-extension
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! cycle-time-extension
+CMD_VAR =
+RUNTIME =
+HELP    = Set Admin Cycle Time Extension to default
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+    vtss_appl_tsn_tas_cfg_t dc;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_tas_cfg_get_default(&dc));
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.admin_cycle_time_extension = dc.admin_cycle_time_extension;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas base-time seconds <0-4294967295> nanoseconds <0-999999999>
+
+DOC_CMD_DESC    = Configure Admin Base Time
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas base-time seconds 3600 nanoseconds 400
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! base-time
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Admin Base Time
+BYWORD  =
+
+! seconds
+CMD_VAR =
+RUNTIME =
+HELP    = Specify seconds
+BYWORD  =
+
+! <uint>
+CMD_VAR = seconds
+RUNTIME =
+HELP    = Seconds <Default:0>
+BYWORD  = <Seconds : 0-4294967295>
+
+! nanoseconds
+CMD_VAR =
+RUNTIME =
+HELP    = Specify nanoseconds
+BYWORD  =
+
+! <0-999999999>
+CMD_VAR = nanoseconds
+RUNTIME =
+HELP    = Nanoseconds <Default:0>
+BYWORD  = <Nanoseconds : 0-999999999>
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.admin_base_time.seconds = seconds;
+        c.admin_base_time.nanoseconds = nanoseconds;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no tsn tas base-time
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! no
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    =
+BYWORD  =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! base-time
+CMD_VAR =
+RUNTIME =
+HELP    = Set Admin Base Time to default
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+    vtss_appl_tsn_tas_cfg_t dc;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_tsn_tas_cfg_get_default(&dc));
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.admin_base_time = dc.admin_base_time;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = tsn tas config-change
+
+DOC_CMD_DESC    = Start a configuration change
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = tsn tas config-change
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+! tsn
+CMD_VAR =
+RUNTIME = TSN_ICLI_runtime_tas
+HELP    = ##HELP_TSN
+BYWORD  =
+
+! tas
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN_TAS
+BYWORD  =
+
+! config-change
+CMD_VAR =
+RUNTIME =
+HELP    = Start a configuration change
+BYWORD  =
+
+VARIABLE_BEGIN
+    port_iter_t             pit;
+    vtss_ifindex_t          ifindex;
+    vtss_appl_tsn_tas_cfg_t c;
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, plist)) {
+        IC_RC(vtss_ifindex_from_port(VTSS_ISID_START, pit.iport, &ifindex));
+        IC_RC(vtss_appl_tsn_tas_cfg_get(ifindex, &c));
+        c.config_change = TRUE;
+        IC_RC(vtss_appl_tsn_tas_cfg_set(ifindex, &c));
+    }
+CODE_END
+
+CMD_END

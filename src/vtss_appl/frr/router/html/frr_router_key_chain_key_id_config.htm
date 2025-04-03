@@ -1,0 +1,431 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>Router Key-Chain Key IDs Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_router_key_chain_key_id_config.htm";
+
+// Global variables
+var defSelectedKeyChainName = "All"; /* Display all entries by default */
+var pageArgs = searchArgs(window.location.search);
+var selectedKeyChainName = pageArgs.KeyChainName ? unescape(pageArgs.KeyChainName) : defSelectedKeyChainName;
+
+var myDynamicTable, myCapabilities, routerKeyChainNameInfo;
+
+var oTRouterKeyChainName = Array("All");
+var oTRouterKeyChainNameNewRow = Array();
+
+/* Send the HTML request */
+function sendRequest() {
+    routerKeyChainNameInfo = null;
+    requestJsonDoc("router.config.key_chain.name.get", null, requestUpdate, "routerKeyChainNameInfo");
+}
+
+function onChangeSelectMenu(sel) {
+    selectedKeyChainName = sel.options[sel.selectedIndex].value;
+    sendRequest();
+}
+
+function checkNewPwd(elem_id) {
+    var is_chk_id = elem_id.replace(/NewPwd/, "IsChangePwd");
+    if ($(is_chk_id).checked && $(elem_id).value.length < myCapabilities.MinKeyChainPlainTextKeyStringLen) {
+        return GiveAlert("The minimum length of key string is " + myCapabilities.MinKeyChainPlainTextKeyStringLen + ".",
+            $(elem_id));
+    }
+    return true;
+}
+
+function changePwd() {
+    // Change "NewPwd" field R/W attriable
+    var pwd_id = this.id.replace(/IsChangePwd/, "NewPwd");
+    var pwd_fld = $(pwd_id);
+    pwd_fld.disabled = !this.checked;
+    if (pwd_fld.disabled) {
+        pwd_fld.value = "";
+    }
+}
+
+/* Check if the table row key is duplicated or note */
+function isDuplicatedRowKey() {
+    var recv_json = myDynamicTable.getRecvJson("original_config");
+    var new_key_prefix = myDynamicTable.getRowPrefixs("newrowKeyPrefix");
+    var del_prefix = myDynamicTable.getRowPrefixs("rowDelPrefix");
+    var i, j;
+    var new_key_chain_name_fld;
+
+    // The new row key index start from 1
+    var newrow_count = myDynamicTable.getNewrowsCnt();
+    for (i = 1; i <= newrow_count; i++) {
+        new_key_chain_name_fld = $(new_key_prefix + i + "_KeyChainName");
+        new_key_id_fld = $(new_key_prefix + i + "_KeyId");
+        if (!new_key_chain_name_fld || !new_key_id_fld) {
+            continue;
+        }
+
+        // Lookup original entries
+        for (j = 0; j < recv_json.length; j++) {
+            // Ignore the deleted entry
+            if ($(del_prefix + rowKey2Id(recv_json[j].key)) &&
+                $(del_prefix + rowKey2Id(recv_json[j].key)).checked) {
+                continue;
+            }
+
+            // Ignore different Key chain name
+            if ($(new_key_prefix + i + "_KeyChainName").value != recv_json[j].key[0]) {
+                continue;
+            }
+
+            if (new_key_chain_name_fld.value == recv_json[j].key[0] &&
+                new_key_id_fld.value == recv_json[j].key[1]) {
+                // Found duplicated key
+                return GiveAlert("The entry {Key-Chain Name: '" +
+                    new_key_chain_name_fld.value + "', Key ID:" +
+                    new_key_id_fld.value + "} already exists.",
+                    new_key_id_fld);
+            }
+        }
+
+        // Lookup new entries
+        for (j = i + 1; j <= newrow_count; j++) {
+            if (!$(new_key_prefix + j + "_KeyChainName")) {
+                continue;
+            }
+
+            if (new_key_chain_name_fld.value == $(new_key_prefix + j + "_KeyChainName").value &&
+                new_key_id_fld.value == $(new_key_prefix + j + "_KeyId").value) {
+                // Found duplicated key
+                return GiveAlert("The entry {Key-Chain Name: '" +
+                    new_key_chain_name_fld.value + "', Key ID:" +
+                    new_key_id_fld.value + "} already exists.",
+                    new_key_id_fld);
+            }
+        }
+    }
+
+    return true;
+}
+
+/* Check function before send out the HTML request */
+function checkForm() {
+    // Check if duplicated row key
+    if (!isDuplicatedRowKey()) {
+        return false;
+    }
+
+    // Trim the unnecessary fields from the HTTP POST JSON data
+    var trim_ids = Array();
+    $('myTableContent').getElements('input[name^=IsChangePwd]').each(function (elm) {
+        // Apply new setting to filed "IsEncrypted"
+        if (elm.checked) {
+            var encrypted_id = elm.id.replace(/IsChangePwd/, "IsEncrypted");
+            $(encrypted_id).checked = false;
+
+            var new_pwd_id = elm.id.replace(/IsChangePwd/, "NewPwd");
+            var simple_pwd_id = elm.id.replace(/IsChangePwd/, "KeyString");
+            $(simple_pwd_id).value = $(new_pwd_id).value;
+        }
+
+        trim_ids.push(elm.id);
+    });
+    $('myTableContent').getElements('input[name^=NewPwd]').each(function (elm) {
+        trim_ids.push(elm.id);
+    });
+    myDynamicTable.setTrimIds(trim_ids);
+
+    return true;
+}
+
+/* Ge the default entry of table row */
+function geRowDefaultRow() {
+    def_row = {
+        //key chain name, key id
+        "key": [selectedKeyChainName, 1],
+        "val": { "IsEncrypted": false, "KeyString": "" }
+    };
+
+    return def_row;
+}
+
+/* Add table header */
+function addHeader(table_rows) {
+    var row = {
+        fields: [
+            { type: "disp_hdr", params: ["Delete"] },
+            { type: "disp_hdr", params: ["Key Chain Name"] },
+            { type: "disp_hdr", params: ["Key ID"] },
+            { type: "disp_hdr", params: ["Change Key String",2] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+/* Add a single row in the dynamic table.
+ * Notice:
+ * Except for the general usage, this function also can be a callback function
+ * which is registered by addNewRowButton().
+ * In this case, the value of parameter "key" is an integer number (start from 1),
+ * it identify the new row index for the entry and the value of parameter "val"
+ * is null.
+ */
+function addRow(key, val, key_prefix) {
+    var elem_id, new_row_key, is_new_row = false;
+
+    /* When the value of parameter "val" is null, it means this function is
+     * called by addNewRowButton(). It requires the default entry datas. */
+    if (!val) {
+        is_new_row = true;
+        new_row_key = geRowDefaultRow().key;
+        val = geRowDefaultRow().val;
+    }
+
+    var row_affix = (is_new_row ? key_prefix : myDynamicTable.getRowPrefixs("rowKeyPrefix")) + rowKey2Id(key);
+    var row = {
+        "key": is_new_row ? new_row_key : key,
+        fields: [
+            {
+                type: "chkbox",
+                params: [0, "c", key_prefix + rowKey2Id(key)]
+            },
+            { //Key Chain Name
+                type: "text",
+                params: [is_new_row ? new_row_key[0] : key[0], "cr"]
+            },
+            { //Key ID
+                type: "text",
+                params: [is_new_row ? new_row_key[1] : key[1], "cr"]
+            },
+            { //Checkbox of Key String
+                type: "chkbox",
+                params: [val.IsEncrypted, "c", "IsEncrypted_" + row_affix],
+                "hidden": true
+            },
+            { //Key String
+                type: "input",
+                params: [val.KeyString, "cr", "KeyString_" + row_affix, 32, 128, null, null, true],
+                "hidden": true
+            },
+            { // Change password
+                type: "chkbox",
+                params: [is_new_row ? true : false, "c", "IsChangePwd_" + row_affix, changePwd],
+                "hidden": is_new_row ? false : false,
+                "disabled": is_new_row ? true : false
+            },
+            { //New Pwd
+                type: "password",
+                params: ["", "cr", "NewPwd_" + row_affix, myCapabilities.MaxKeyChainPlainTextKeyStringLen],
+                "disabled": is_new_row ? false : true,
+                validate: { func: checkNewPwd, params: ["NewPwd_" + row_affix] }
+            }
+        ]
+    };
+
+    /* When a new row is created, use <input> form for the entry key.
+     * Notice that the element ID MUST start with the following syntax
+     * newrowKey_<key_idx>_<json_name>
+     * For example, "newrowKey_1_Network", "newrowKey_1_IpSubnetMaskLength".
+     */
+    if (is_new_row) {
+        var new_row_prefix = key_prefix + key;
+
+        // Router key chain name
+        elem_id = new_row_prefix + "_KeyChainName";
+        if (selectedKeyChainName != defSelectedKeyChainName) {
+            row.fields[1] = {
+                type: "input",
+                params: [new_row_key[0], "cr", elem_id, 10, 10, null, null, true]
+            };
+        } else {
+            row.fields[1] = {
+                type: "select",
+                params: [oTRouterKeyChainNameNewRow, oTRouterKeyChainNameNewRow, "VLAN 1", "c", elem_id]
+            };
+        }
+
+        // key ID
+        elem_id = new_row_prefix + "_KeyId";
+        row.fields[2] = {
+            type: "input",
+            params: [new_row_key[1], "cr", elem_id, 3, 3],
+            validate: { func: isWithinRange, params: [elem_id, myCapabilities.MinKeyChainKeyId, myCapabilities.MaxKeyChainKeyId, "Key ID"] }
+        };
+    }
+
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 4;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected key chain name
+    // or equals the default configuration.
+    var myConf = Array();
+    if (selectedKeyChainName == defSelectedKeyChainName) { /* Display all entries */
+        myConf = recv_json;
+    } else {
+        Object.each(recv_json, function (record) {
+            if (selectedKeyChainName == record.key[0]) {
+                myConf.push(record);
+            }
+        });
+    }
+
+    // Save the received JSON data (both of the original and filtered)
+    myDynamicTable.saveRecvJson(name, myConf);
+    myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addNewRowButton(addRow, myCapabilities.MaxKeyChainIdMaxCount - recv_json.length + myConf.length);
+    myDynamicTable.addSubmitButton(name, "router.config.key_chain.key", sendRequest);
+    myDynamicTable.addResetButton();
+
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+        { name: myDynamicTable.getRowPrefixs("rowDelPrefix") },
+        { text: "*", className: "c" },
+        { text: "*", className: "c" },
+        { text: "*", className: "c" },
+        { text: "*", className: "c" }
+    ]);
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+            myCapabilities.MaxKeyChainIdMaxCount = 0xffffffff;
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(capabilities) failed.");
+            return;
+        }
+    } else if (name == "routerKeyChainNameInfo") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            routerKeyChainNameInfo = myDynamicTable.cloneRecvJson(recv_json);
+
+            // Update the Router key chain name selected menu.
+            oTRouterKeyChainName.length = 1; // Restore to default; default is only 1 option
+            oTRouterKeyChainNameNewRow.length = 0; // Restore to default; default is empty
+            Object.each(recv_json, function (record) {
+                oTRouterKeyChainName.push(record.key);
+                oTRouterKeyChainNameNewRow.push(record.key);
+            });
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(routerKeyChainNameInfo) failed.");
+            return;
+        }
+    }
+
+    if (myCapabilities && routerKeyChainNameInfo) {
+        UpdateIdSelect("routerKeyChainNameSelectMenu", oTRouterKeyChainName, oTRouterKeyChainName, selectedKeyChainName);
+        requestJsonDoc("router.config.key_chain.key.get", null, processUpdate, "config");
+
+        // Update page header
+        if (selectedKeyChainName != defSelectedKeyChainName) {
+            $("selectedKeyChainName").innerHTML = " Key Chain Name: " + selectedKeyChainName;
+        } else {
+            $("selectedKeyChainName").innerHTML = "";
+        }
+    }
+}
+
+/* Initialize restores when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", { func: checkForm, params: [] });
+
+    // This table requires three JSON data(capabilities/config/routerKeyChainNameInfo).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requested only one time.
+    requestJsonDoc("router.capabilities.get", null, requestUpdate, "capabilities");
+    sendRequest();
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>Router Key-Chain Key IDs Configuration</h1>
+    <h2><span id="selectedKeyChainName"></span></h2>
+    <div class="refreshbar">
+        VLAN ID&nbsp;
+        <select id="routerKeyChainNameSelectMenu" onchange="onChangeSelectMenu(this);">
+            <option value="0">All</option>
+        </select>
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+</body>
+
+</html>

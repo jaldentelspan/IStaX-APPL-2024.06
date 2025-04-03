@@ -1,0 +1,288 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>DHCPv6 Relay Status</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_dhcp6_relay_status.htm";
+
+// Global variables
+var defSelectedInstanceId = 0; /* Display all entries by default */
+var pageArgs = searchArgs(window.location.search);
+var selectedInstanceId = pageArgs.InstanceId ? parseInt(pageArgs.InstanceId, 10) : defSelectedInstanceId;
+
+var timerID; // For auto-refresh button
+
+var myDynamicTable, ospfInstanceIdInfo; // For dynamic table
+
+var myConf, statsMap;
+
+var oTOspfInstanceId = oTOspfInstanceId = Array("All"),
+    oVOspfInstanceId = genArrayInt(0, 1);
+
+function onChangeSelectMenu(sel) {
+    selectedInstanceId = parseInt(sel.options[sel.selectedIndex].value, 10);
+    requestJsonDoc("dhcp6_relay.status.vlan.get", null, requestUpdate, "ospfInstanceIdInfo");
+}
+
+function addHeader(table_rows) {
+    var row;
+    //1st row
+    row = {
+        fields: [
+            { type: "disp_hdr", params: ["Interface", 1, 1] },
+            { type: "disp_hdr", params: ["Relay Interface", 1, 1] },
+            { type: "disp_hdr", params: ["Relay Address", 1, 1] },
+            { type: "disp_hdr", params: ["Tx to server", 1, 1] },
+            { type: "disp_hdr", params: ["Rx from server", 1, 1] },
+            { type: "disp_hdr", params: ["Server pkts dropped", 1, 1] },
+            { type: "disp_hdr", params: ["Tx to client", 1, 1] },
+            { type: "disp_hdr", params: ["Rx from client", 1, 1] },
+            { type: "disp_hdr", params: ["Client pkts dropped", 1, 1] },
+            { type: "disp_hdr", params: ["Clear stats", 1, 1] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+function clearVlanStats(_key) {
+    var key = _key.split("_");
+    var index =  {
+        "vlanInterface": _key[0]
+    };
+
+    var relIndex = {
+        "relayVlanInterface": _key[1]
+    };
+    var val = {
+        "TxToServer" : 0,
+        "RxFromServer" : 0,
+        "ServerPktDropped" : 0,
+        "TxToClient" : 0,
+        "RxFromClient" : 0,
+        "ClientPktDropped" : 0
+    };
+
+    var params = [key[0], key[1], val];
+
+    requestJsonDoc("dhcp6_relay.statistics.vlan.set", params);
+    milliSleep(500);
+    requestUpdate();
+}
+
+function clearAllStats() {
+    var data = {
+        "ClearAllStatistics" : true
+    };
+
+    requestJsonDoc("dhcp6_relay.control.global.set", data);
+
+    milliSleep(500);
+    requestUpdate();    
+}
+
+function addRow(key, val, idx) {
+    var _key = key[0] + "_" + key[1];
+    var stats = statsMap.get(_key);
+
+    var row = {
+        fields: [
+            { type: "text", params: [key[0], "cr"] },
+            { type: "text", params: [key[1], "cr"] },
+            { type: "text", params: [val.RelayDestination, "cr"] },
+            { type: "text", params: [stats.TxToServer, "cr"] },
+            { type: "text", params: [stats.RxFromServer, "cr"] },
+            { type: "text", params: [stats.ServerPktDropped, "cr"] },
+            { type: "text", params: [stats.TxToClient, "cr"] },
+            { type: "text", params: [stats.RxFromClient, "cr"] },
+            { type: "text", params: [stats.ClientPktDropped, "cr"] },
+            { type: "button", params: ["clear", "cr", "button_" + _key]}
+    ]
+    };
+
+    return row;
+}
+
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 3;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record, idx) {
+        table_rows.push(addRow(record.key, record.val, idx));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+function addButtonClickEvent(value, key, map) {
+    var id = "button_" + key;
+    var button = document.getElementById(id);
+    button.addEventListener("click", function(){
+        clearVlanStats(key);
+    });
+}
+
+function getGlobalStats(recv_json, name) {
+    if (!recv_json) {
+        alert("getGlobalStats() failed: Get dynamic data failed.");
+        return;
+    }
+
+    var elem = document.getElementById("intopt");
+    elem.textContent = recv_json.NumIntfMissing;
+}
+
+function processDataUpdate(recv_json, name) {
+    if (!recv_json) {
+        alert("processDataUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    var stats = recv_json;
+
+    myDynamicTable.saveRecvJson(name, stats);
+    myDynamicTable.saveRecvJson("original_" + name, recv_json);
+
+    statsMap = new Map();
+
+    Object.each(recv_json, function (record, idx) {
+        var _key = record.key[0] + "_" + record.key[1];
+        statsMap.set(_key, record.val);
+    });
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    statsMap.forEach(addButtonClickEvent);
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+
+    requestJsonDoc("dhcp6_relay.statistics.global.get", null, getGlobalStats, "global_statistics");
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected OSPF instance ID
+    // or equals the default configuration.
+    myConf = recv_json;
+
+    // Save the received JSON data (both of the original and filted)
+    myDynamicTable.saveRecvJson(name, myConf);
+    myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+    requestJsonDoc("dhcp6_relay.statistics.vlan.get", null, processDataUpdate, "statistics");
+
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+    requestJsonDoc("dhcp6_relay.status.vlan.get", null, processUpdate, "config");
+}
+
+function checkRefresh(fld) {
+    if (fld.checked) {
+        requestJsonDoc("dhcp6_relay.status.vlan.get", null, requestUpdate, "ospfInstanceIdInfo");
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+/* Initialize resores when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+
+    // To ensure the completed data, we request the configured data after the
+    // instance data is received and it is requested only one time.
+    requestJsonDoc("dhcp6_relay.status.vlan.get", null, requestUpdate, "ospfInstanceIdInfo");
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>DHCPv6 Relay Status and Statistics</h1>
+    <div class="refreshbar">
+        <!-- Instance ID&nbsp;-->
+        <!-- select id="ospfInstanceIdSelectMenu" onchange="onChangeSelectMenu(this);">
+            <option value="0">All</option>
+        </select -->
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="checkRefresh(this);">
+        <input type="button" value="Refresh" onClick='requestJsonDoc("dhcp6_relay.status.vlan.get", null, requestUpdate, "ospfInstanceIdInfo"); this.blur();'>
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div><p>Dropped server packets with interface option missing: <b id="intopt"></b></p></div>
+    <div>
+        <div id="myTableContent"></div>
+        <div style="padding-top:1em">
+            <input type="button" value="Clear all statistics" onClick="clearAllStats()">
+        </div>
+    </div>
+</body>
+
+</html>

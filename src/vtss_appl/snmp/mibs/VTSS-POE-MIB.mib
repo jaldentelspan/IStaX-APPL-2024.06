@@ -1,0 +1,799 @@
+-- *****************************************************************
+-- POE-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-POE-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Integer32 FROM SNMPv2-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    TruthValue FROM SNMPv2-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    ;
+
+vtssPoeMib MODULE-IDENTITY
+    LAST-UPDATED "202405070000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "This is a private version of Power over Ethernet (PoE)."
+    REVISION    "202405070000Z"
+    DESCRIPTION
+        "Extended VTSSPoeStatusInterfaceEntry with
+         vtssPoeStatusInterfaceUdlCount, vtssPoeStatusInterfaceOvlCount,
+         vtssPoeStatusInterfaceShortCircuitCount,
+         vtssPoeStatusInterfaceInvalidSignatureCount,
+         vtssPoeStatusInterfacePowerDeniedCount and changed type of
+         vtssPoeStatusInterfacePDClassAltA and vtssPoeStatusInterfacePDClassAltB
+         from Integer32 to VTSSUnsigned8 "
+    REVISION    "202310240000Z"
+    DESCRIPTION
+        "Change name of object vtssPoeConfigSwitchParamSystemPwrReserved to
+         vtssPoeConfigSwitchParamSystemPwrUsage"
+    REVISION    "202310030000Z"
+    DESCRIPTION
+        "Added attrributes vtssPoeConfigGlobalsSystemPwrReserved (causing some
+         other attributes to change oid) and
+         vtssPoeConfigSwitchParamSystemPwrReserved (also causing some other
+         attributes to change oid)."
+    REVISION    "202308300000Z"
+    DESCRIPTION
+        "Change structure of global data for PoE to better capture all features
+         of IEEE802.3BT."
+    REVISION    "202303270000Z"
+    DESCRIPTION
+        "Change structure of global data for PoE."
+    REVISION    "201904100000Z"
+    DESCRIPTION
+        "Add ability to disable PoE lldp functionality."
+    REVISION    "201903140000Z"
+    DESCRIPTION
+        "Refactor according to IEEE802.3BT requirement."
+    REVISION    "201609300000Z"
+    DESCRIPTION
+        "Enhanced PoE interface status messages. Added reserved power status
+         entry."
+    REVISION    "201408200000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 43 }
+
+
+VTSSpoeCableLength ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the port cable length."
+    SYNTAX      INTEGER { max10(1), max30(3), max60(6), max100(10) }
+
+VTSSpoeLldpDisable ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the port disable status."
+    SYNTAX      INTEGER { enable(0), disable(1) }
+
+VTSSpoePdStructure ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the PD structure."
+    SYNTAX      INTEGER { notDetected(0), open(1),
+                          invalidSignature(2), ieee4PairSingleSig(3),
+                          legacy4PairSingleSig(4),
+                          ieee4PairDualSig(5), p2p4CandidateFalse(6),
+                          ieee2Pair(7), legacy2Pair(8) }
+
+VTSSpoePortStatus ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration define the status of the poe port."
+    SYNTAX      INTEGER { unknownState(0), budgetExceeded(1),
+                          noPdDetected(2), pdOn(3), pdOverloaded(4),
+                          notSupported(5), disabled(6), shutdown(7),
+                          pdFault(8), pseFault(9) }
+
+VTSSpoePowerPriority ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the port power priority."
+    SYNTAX      INTEGER { low(0), high(1), critical(2) }
+
+VTSSpoebtMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the types of port PoE mode."
+    SYNTAX      INTEGER { disable(0), standard(1), plus(2) }
+
+VTSSpoebtPowerManagement ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the types of port PoE PM."
+    SYNTAX      INTEGER { dynamic(0), static(1), hybrid(2) }
+
+VTSSpoebtPowerType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the types of port PoE type."
+    SYNTAX      INTEGER { type3pwr15w(0), type3pwr30w(1),
+                          type3pwr60w(2), type4pwr90w(3) }
+
+vtssPoeMibObjects OBJECT IDENTIFIER
+    ::= { vtssPoeMib 1 }
+
+vtssPoeCapabilities OBJECT IDENTIFIER
+    ::= { vtssPoeMibObjects 1 }
+
+vtssPoeCapabilitiesInterfaceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPoeCapabilitiesInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table to interface capabilities"
+    ::= { vtssPoeCapabilities 1 }
+
+vtssPoeCapabilitiesInterfaceEntry OBJECT-TYPE
+    SYNTAX      VTSSPoeCapabilitiesInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each interface has a set of capability parameters"
+    INDEX       { vtssPoeCapabilitiesInterfaceIfIndex }
+    ::= { vtssPoeCapabilitiesInterfaceTable 1 }
+
+VTSSPoeCapabilitiesInterfaceEntry ::= SEQUENCE {
+    vtssPoeCapabilitiesInterfaceIfIndex  VTSSInterfaceIndex,
+    vtssPoeCapabilitiesInterfacePoE      TruthValue
+}
+
+vtssPoeCapabilitiesInterfaceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssPoeCapabilitiesInterfaceEntry 1 }
+
+vtssPoeCapabilitiesInterfacePoE OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether interface is PoE capable or not."
+    ::= { vtssPoeCapabilitiesInterfaceEntry 2 }
+
+vtssPoeCapabilitiesPsu OBJECT IDENTIFIER
+    ::= { vtssPoeCapabilities 2 }
+
+vtssPoeCapabilitiesPsuUserConfigurable OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether the user can and need to specify the amount of power
+         the PSU can deliver"
+    ::= { vtssPoeCapabilitiesPsu 1 }
+
+vtssPoeCapabilitiesPsuMaxPower OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the max power in Watt the PoE board can handle. No reason to
+         use a bigger PSU than this. For systems with internal PSU, this is the
+         size of the built-in PSU."
+    ::= { vtssPoeCapabilitiesPsu 2 }
+
+vtssPoeCapabilitiesPsuSystemReservedPower OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "For systems where the switch itself is powered by the same PSU as used
+         for the PoE functionality, this shall reflect the amount of power
+         required to keep the switch operating."
+    ::= { vtssPoeCapabilitiesPsu 3 }
+
+vtssPoeCapabilitiesPsuLegacyModeConfigurable OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether the PSE supports detection of legacy PD devices, and
+         that the user can configure this feature."
+    ::= { vtssPoeCapabilitiesPsu 4 }
+
+vtssPoeCapabilitiesPsuInterruptiblePowerSupported OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether switch can reset software without affecting PoE
+         powered devices connected to the switch."
+    ::= { vtssPoeCapabilitiesPsu 5 }
+
+vtssPoeCapabilitiesPsuAutoClass OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether Auto class is active "
+    ::= { vtssPoeCapabilitiesPsu 6 }
+
+vtssPoeCapabilitiesPsuLegacyPdClassMode OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether legacy pd class mode mode is selected "
+    ::= { vtssPoeCapabilitiesPsu 7 }
+
+vtssPoeCapabilitiesPsuIsBt OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether poe firmware is bt or at "
+    ::= { vtssPoeCapabilitiesPsu 8 }
+
+vtssPoeConfig OBJECT IDENTIFIER
+    ::= { vtssPoeMibObjects 2 }
+
+vtssPoeConfigGlobals OBJECT IDENTIFIER
+    ::= { vtssPoeConfig 1 }
+
+vtssPoeConfigGlobalsSwitchId OBJECT-TYPE
+    SYNTAX      Unsigned32 (1..16)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User Switch Id."
+    ::= { vtssPoeConfigGlobals 1 }
+
+vtssPoeConfigGlobalsMaxPower OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The Maximum power(in Watt) that the power sourcing equipment(such as
+         switch) can deliver. This value can only be configured if the
+         CapabilitiesPsuUserConfigurable object is true. If the Maximum power is
+         configurable, the valid range is from 0 to the value of the
+         CapabilitiesPsuMaxPower object."
+    ::= { vtssPoeConfigGlobals 2 }
+
+vtssPoeConfigGlobalsSystemPwrUsage OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The power which reserved to pwer the system (in Watt) If the Maximum
+         power is configurable, the valid range is from 0 to the value of the
+         CapabilitiesPsuMaxPower object."
+    ::= { vtssPoeConfigGlobals 3 }
+
+vtssPoeConfigGlobalsCapacitorDetection OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether switch capacitor detection feature is enabled or not."
+    ::= { vtssPoeConfigGlobals 4 }
+
+vtssPoeConfigGlobalsInterruptiblePower OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether software reset of switch shall affect PoE powered
+         devices connected to the switch."
+    ::= { vtssPoeConfigGlobals 5 }
+
+vtssPoeConfigGlobalsPDAutoClassRequest OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether PDAutoClassRequest mode is active. "
+    ::= { vtssPoeConfigGlobals 6 }
+
+vtssPoeConfigGlobalsLegacyPdClassMode OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates which legacy pd class mode is selected. "
+    ::= { vtssPoeConfigGlobals 7 }
+
+vtssPoeConfigSwitch OBJECT IDENTIFIER
+    ::= { vtssPoeConfig 2 }
+
+vtssPoeConfigSwitchParamTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPoeConfigSwitchParamEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table to configure PoE configurations for a switch."
+    ::= { vtssPoeConfigSwitch 1 }
+
+vtssPoeConfigSwitchParamEntry OBJECT-TYPE
+    SYNTAX      VTSSPoeConfigSwitchParamEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each switch has a set of PoE configurable parameters"
+    INDEX       { vtssPoeConfigSwitchParamSwitchId }
+    ::= { vtssPoeConfigSwitchParamTable 1 }
+
+VTSSPoeConfigSwitchParamEntry ::= SEQUENCE {
+    vtssPoeConfigSwitchParamSwitchId            Unsigned32,
+    vtssPoeConfigSwitchParamMaxPower            Integer32,
+    vtssPoeConfigSwitchParamSystemPwrUsage      Integer32,
+    vtssPoeConfigSwitchParamCapacitorDetection  TruthValue,
+    vtssPoeConfigSwitchParamInterruptiblePower  TruthValue,
+    vtssPoeConfigSwitchParamPDAutoClassRequest  TruthValue,
+    vtssPoeConfigSwitchParamLegacyPdClassMode   Integer32
+}
+
+vtssPoeConfigSwitchParamSwitchId OBJECT-TYPE
+    SYNTAX      Unsigned32 (1..16)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "User Switch Id."
+    ::= { vtssPoeConfigSwitchParamEntry 1 }
+
+vtssPoeConfigSwitchParamMaxPower OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The Maximum power(in Watt) that the power sourcing equipment(such as
+         switch) can deliver. This value can only be configured if the
+         CapabilitiesPsuUserConfigurable object is true. If the Maximum power is
+         configurable, the valid range is from 0 to the value of the
+         CapabilitiesPsuMaxPower object."
+    ::= { vtssPoeConfigSwitchParamEntry 2 }
+
+vtssPoeConfigSwitchParamSystemPwrUsage OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The power which reserved to pwer the system (in Watt) If the Maximum
+         power is configurable, the valid range is from 0 to the value of the
+         CapabilitiesPsuMaxPower object."
+    ::= { vtssPoeConfigSwitchParamEntry 3 }
+
+vtssPoeConfigSwitchParamCapacitorDetection OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether switch capacitor detection feature is enabled or not."
+    ::= { vtssPoeConfigSwitchParamEntry 4 }
+
+vtssPoeConfigSwitchParamInterruptiblePower OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether software reset of switch shall affect PoE powered
+         devices connected to the switch."
+    ::= { vtssPoeConfigSwitchParamEntry 5 }
+
+vtssPoeConfigSwitchParamPDAutoClassRequest OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether PDAutoClassRequest mode is active. "
+    ::= { vtssPoeConfigSwitchParamEntry 6 }
+
+vtssPoeConfigSwitchParamLegacyPdClassMode OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates which legacy pd class mode is selected. "
+    ::= { vtssPoeConfigSwitchParamEntry 7 }
+
+vtssPoeConfigInterface OBJECT IDENTIFIER
+    ::= { vtssPoeConfig 3 }
+
+vtssPoeConfigInterfaceParamTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPoeConfigInterfaceParamEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table to configure PoE configurations for a specific
+         interface."
+    ::= { vtssPoeConfigInterface 1 }
+
+vtssPoeConfigInterfaceParamEntry OBJECT-TYPE
+    SYNTAX      VTSSPoeConfigInterfaceParamEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each interface has a set of PoE configurable parameters"
+    INDEX       { vtssPoeConfigInterfaceParamIfIndex }
+    ::= { vtssPoeConfigInterfaceParamTable 1 }
+
+VTSSPoeConfigInterfaceParamEntry ::= SEQUENCE {
+    vtssPoeConfigInterfaceParamIfIndex      VTSSInterfaceIndex,
+    vtssPoeConfigInterfaceParamType         VTSSpoebtPowerType,
+    vtssPoeConfigInterfaceParamMode         VTSSpoebtMode,
+    vtssPoeConfigInterfaceParamPwrMng       VTSSpoebtPowerManagement,
+    vtssPoeConfigInterfaceParamPriority     VTSSpoePowerPriority,
+    vtssPoeConfigInterfaceParamLldp         VTSSpoeLldpDisable,
+    vtssPoeConfigInterfaceParamCableLength  VTSSpoeCableLength
+}
+
+vtssPoeConfigInterfaceParamIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssPoeConfigInterfaceParamEntry 1 }
+
+vtssPoeConfigInterfaceParamType OBJECT-TYPE
+    SYNTAX      VTSSpoebtPowerType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set PoE Type. "
+    ::= { vtssPoeConfigInterfaceParamEntry 2 }
+
+vtssPoeConfigInterfaceParamMode OBJECT-TYPE
+    SYNTAX      VTSSpoebtMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set PoE mode or disable PoE feature, two PoE modes are supported. POE:
+         Enables PoE based on IEEE 802.3af standard, and provides power up to
+         15.4W(154 deciwatt) of DC power to powered device. When changing to
+         standard mode the MaxPower is automatically adjust to 15.4 W, if it
+         currently exceeds 15.4 W. POE_PLUS: Enabled PoE based on IEEE 802.3at
+         standard, and provides power up to 30W(300 deciwatt) of DC power to
+         powered device."
+    ::= { vtssPoeConfigInterfaceParamEntry 3 }
+
+vtssPoeConfigInterfaceParamPwrMng OBJECT-TYPE
+    SYNTAX      VTSSpoebtPowerManagement
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set PoE port power management. "
+    ::= { vtssPoeConfigInterfaceParamEntry 4 }
+
+vtssPoeConfigInterfaceParamPriority OBJECT-TYPE
+    SYNTAX      VTSSpoePowerPriority
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set port power priority. Priority determines the order in which the
+         interfaces will receive power. Interfaces with a higher priority will
+         receive power before interfaces with a lower priority. PRIORITY_LOW
+         means lowest priority. PRIORITY_HIGH means medium priority.
+         PRIORITY_CRITICAL means highest priority."
+    ::= { vtssPoeConfigInterfaceParamEntry 5 }
+
+vtssPoeConfigInterfaceParamLldp OBJECT-TYPE
+    SYNTAX      VTSSpoeLldpDisable
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set port lldp awareness. If this value is disable, the PSE will ignore
+         PoE related parts of received LLDP frames."
+    ::= { vtssPoeConfigInterfaceParamEntry 6 }
+
+vtssPoeConfigInterfaceParamCableLength OBJECT-TYPE
+    SYNTAX      VTSSpoeCableLength
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set port cable length. length in meters x10 -> 0 to 10 "
+    ::= { vtssPoeConfigInterfaceParamEntry 7 }
+
+vtssPoeStatus OBJECT IDENTIFIER
+    ::= { vtssPoeMibObjects 3 }
+
+vtssPoeStatusInterfaceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPoeStatusInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table to Power over Ethernet interface status"
+    ::= { vtssPoeStatus 1 }
+
+vtssPoeStatusInterfaceEntry OBJECT-TYPE
+    SYNTAX      VTSSPoeStatusInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each interface has a set of status parameters"
+    INDEX       { vtssPoeStatusInterfaceIfIndex }
+    ::= { vtssPoeStatusInterfaceTable 1 }
+
+VTSSPoeStatusInterfaceEntry ::= SEQUENCE {
+    vtssPoeStatusInterfaceIfIndex                VTSSInterfaceIndex,
+    vtssPoeStatusInterfacePDClassAltA            VTSSUnsigned8,
+    vtssPoeStatusInterfacePDClassAltB            VTSSUnsigned8,
+    vtssPoeStatusInterfaceCurrentState           VTSSpoePortStatus,
+    vtssPoeStatusInterfacePSEType                VTSSpoebtPowerType,
+    vtssPoeStatusInterfacePDStructure            VTSSpoePdStructure,
+    vtssPoeStatusInterfacePowerRequested         Unsigned32,
+    vtssPoeStatusInterfacePowerAllocated         Unsigned32,
+    vtssPoeStatusInterfacePowerConsumption       Unsigned32,
+    vtssPoeStatusInterfaceCurrentConsumption     Unsigned32,
+    vtssPoeStatusInterfaceUdlCount               Unsigned32,
+    vtssPoeStatusInterfaceOvlCount               Unsigned32,
+    vtssPoeStatusInterfaceShortCircuitCount      Unsigned32,
+    vtssPoeStatusInterfaceInvalidSignatureCount  Unsigned32,
+    vtssPoeStatusInterfacePowerDeniedCount       Unsigned32
+}
+
+vtssPoeStatusInterfaceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssPoeStatusInterfaceEntry 1 }
+
+vtssPoeStatusInterfacePDClassAltA OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Powered device(PD) negotiates a power class with sourcing
+         equipment(PSE) during the time of initial connection, each class have a
+         maximum supported power. Class assigned to PD alternative A is based on
+         PD electrical characteristics. Value -1 means either PD attached to the
+         interface can not advertise its power class or no PD detected or PoE is
+         not supported or PoE feature is disabled or unsupported PD
+         class(classes 0-4 is supported)."
+    ::= { vtssPoeStatusInterfaceEntry 2 }
+
+vtssPoeStatusInterfacePDClassAltB OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Powered device(PD) negotiates a power class with sourcing
+         equipment(PSE) during the time of initial connection, each class have a
+         maximum supported power. Class assigned to PD alternative B is based on
+         PD electrical characteristics. Value -1 means either PD attached to the
+         interface can not advertise its power class or no PD detected or PoE is
+         not supported or PoE feature is disabled or unsupported PD
+         class(classes 0-4 is supported)."
+    ::= { vtssPoeStatusInterfaceEntry 3 }
+
+vtssPoeStatusInterfaceCurrentState OBJECT-TYPE
+    SYNTAX      VTSSpoePortStatus
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate port status. unknownState: PD state unknownbudgetExceeded: PoE
+         is turned OFF due to power budget exceeded on PSE.
+         noPoweredDeviceDetected: No PD detected. poweredDeviceOn: PSE supplying
+         power to PD through PoE. poweredDeviceOverloaded: PD consumes more
+         power than the maximum limit configured on the PSE port.notSupported:
+         PoE not supporteddisabled: PoE is disabled for the
+         interfacedisabledInterfaceShutdown: PD is powered down due to interface
+         shut-downpdFault: pd faultpseFault: pse fault"
+    ::= { vtssPoeStatusInterfaceEntry 4 }
+
+vtssPoeStatusInterfacePSEType OBJECT-TYPE
+    SYNTAX      VTSSpoebtPowerType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Type of power sourcing equipment(PSE) according to 802.3bt. A PSE type
+         1 supports PD class 1-3 PDs, a PSE type 2 supports PD class 1-4 PDs, a
+         PSE type 3 supports PD class 1-6 PDs, a PSE type 4 supports PD class
+         1-8 PDs."
+    ::= { vtssPoeStatusInterfaceEntry 5 }
+
+vtssPoeStatusInterfacePDStructure OBJECT-TYPE
+    SYNTAX      VTSSpoePdStructure
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "notPerformed: Test not yet performed, open: No device found,
+         invalidSignature: No valid signature found, ieee4PairSingleSig: four
+         pair single signature PD detected, legacy4PairSingleSig: four pair
+         single signature Microsemi legacy PD detected, ieee4PairDualSig: four
+         pair dual signature PD detected, p2p4CandidateFalse: TBD, ieee2Pair:
+         two pair PD detected, legacy2Pair: two pair Microsemi legacy PD
+         detected."
+    ::= { vtssPoeStatusInterfaceEntry 6 }
+
+vtssPoeStatusInterfacePowerRequested OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the power limit (in milliwatt) given by the class of the PD."
+    ::= { vtssPoeStatusInterfaceEntry 7 }
+
+vtssPoeStatusInterfacePowerAllocated OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The power (in deciwatt) reserved for the PD. When power is allocated on
+         basis of PD class, this number will be equal to the consumed power.
+         When LLDP is used to allocated power, this will be the amount of power
+         reserved through LLDP. The value is only meaningful when the PD is on."
+    ::= { vtssPoeStatusInterfaceEntry 8 }
+
+vtssPoeStatusInterfacePowerConsumption OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the power(in milliwatt) that the PD is consuming right now."
+    ::= { vtssPoeStatusInterfaceEntry 9 }
+
+vtssPoeStatusInterfaceCurrentConsumption OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the current(in mA) that the PD is consuming right now."
+    ::= { vtssPoeStatusInterfaceEntry 10 }
+
+vtssPoeStatusInterfaceUdlCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the total UDL counter."
+    ::= { vtssPoeStatusInterfaceEntry 11 }
+
+vtssPoeStatusInterfaceOvlCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the total OVL counter."
+    ::= { vtssPoeStatusInterfaceEntry 12 }
+
+vtssPoeStatusInterfaceShortCircuitCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the total short circuit counter."
+    ::= { vtssPoeStatusInterfaceEntry 13 }
+
+vtssPoeStatusInterfaceInvalidSignatureCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the total invalid signature counter."
+    ::= { vtssPoeStatusInterfaceEntry 14 }
+
+vtssPoeStatusInterfacePowerDeniedCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates the total power denied_counter."
+    ::= { vtssPoeStatusInterfaceEntry 15 }
+
+vtssPoeMibConformance OBJECT IDENTIFIER
+    ::= { vtssPoeMib 2 }
+
+vtssPoeMibCompliances OBJECT IDENTIFIER
+    ::= { vtssPoeMibConformance 1 }
+
+vtssPoeMibGroups OBJECT IDENTIFIER
+    ::= { vtssPoeMibConformance 2 }
+
+vtssPoeCapabilitiesInterfaceInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPoeCapabilitiesInterfaceIfIndex,
+                  vtssPoeCapabilitiesInterfacePoE }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPoeMibGroups 1 }
+
+vtssPoeCapabilitiesPsuInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPoeCapabilitiesPsuUserConfigurable,
+                  vtssPoeCapabilitiesPsuMaxPower,
+                  vtssPoeCapabilitiesPsuSystemReservedPower,
+                  vtssPoeCapabilitiesPsuLegacyModeConfigurable,
+                  vtssPoeCapabilitiesPsuInterruptiblePowerSupported,
+                  vtssPoeCapabilitiesPsuAutoClass,
+                  vtssPoeCapabilitiesPsuLegacyPdClassMode,
+                  vtssPoeCapabilitiesPsuIsBt }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPoeMibGroups 2 }
+
+vtssPoeConfigGlobalsInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPoeConfigGlobalsSwitchId,
+                  vtssPoeConfigGlobalsMaxPower,
+                  vtssPoeConfigGlobalsSystemPwrUsage,
+                  vtssPoeConfigGlobalsCapacitorDetection,
+                  vtssPoeConfigGlobalsInterruptiblePower,
+                  vtssPoeConfigGlobalsPDAutoClassRequest,
+                  vtssPoeConfigGlobalsLegacyPdClassMode }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPoeMibGroups 3 }
+
+vtssPoeConfigSwitchParamTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPoeConfigSwitchParamSwitchId,
+                  vtssPoeConfigSwitchParamMaxPower,
+                  vtssPoeConfigSwitchParamSystemPwrUsage,
+                  vtssPoeConfigSwitchParamCapacitorDetection,
+                  vtssPoeConfigSwitchParamInterruptiblePower,
+                  vtssPoeConfigSwitchParamPDAutoClassRequest,
+                  vtssPoeConfigSwitchParamLegacyPdClassMode }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPoeMibGroups 4 }
+
+vtssPoeConfigInterfaceParamTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPoeConfigInterfaceParamIfIndex,
+                  vtssPoeConfigInterfaceParamType,
+                  vtssPoeConfigInterfaceParamMode,
+                  vtssPoeConfigInterfaceParamPwrMng,
+                  vtssPoeConfigInterfaceParamPriority,
+                  vtssPoeConfigInterfaceParamLldp,
+                  vtssPoeConfigInterfaceParamCableLength }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPoeMibGroups 5 }
+
+vtssPoeStatusInterfaceTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPoeStatusInterfaceIfIndex,
+                  vtssPoeStatusInterfacePDClassAltA,
+                  vtssPoeStatusInterfacePDClassAltB,
+                  vtssPoeStatusInterfaceCurrentState,
+                  vtssPoeStatusInterfacePSEType,
+                  vtssPoeStatusInterfacePDStructure,
+                  vtssPoeStatusInterfacePowerRequested,
+                  vtssPoeStatusInterfacePowerAllocated,
+                  vtssPoeStatusInterfacePowerConsumption,
+                  vtssPoeStatusInterfaceCurrentConsumption,
+                  vtssPoeStatusInterfaceUdlCount,
+                  vtssPoeStatusInterfaceOvlCount,
+                  vtssPoeStatusInterfaceShortCircuitCount,
+                  vtssPoeStatusInterfaceInvalidSignatureCount,
+                  vtssPoeStatusInterfacePowerDeniedCount }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPoeMibGroups 6 }
+
+vtssPoeMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssPoeCapabilitiesInterfaceInfoGroup,
+                       vtssPoeCapabilitiesPsuInfoGroup,
+                       vtssPoeConfigGlobalsInfoGroup,
+                       vtssPoeConfigSwitchParamTableInfoGroup,
+                       vtssPoeConfigInterfaceParamTableInfoGroup,
+                       vtssPoeStatusInterfaceTableInfoGroup }
+
+    ::= { vtssPoeMibCompliances 1 }
+
+END

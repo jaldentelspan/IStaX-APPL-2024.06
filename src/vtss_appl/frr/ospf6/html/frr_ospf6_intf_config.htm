@@ -1,0 +1,277 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>OSPF6 Interface Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript" src="frr_ospf6_lib.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_ospf6_intf_config.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities;
+
+var oTCostMode = Array("Auto", "Specific");
+var oVCostMode = Array("false", "true");
+
+
+
+
+function changeCostMode() {
+    // Change "Cost" field R/W attriable
+    var cost_id = this.id.replace(/IsSpecificCost/, "Cost");
+    var cost_fld = $(cost_id);
+    var cost_mode = getSelectedOptElement(this.id);
+
+    if (cost_mode.text == "Auto") {
+        cost_fld.disabled = true;
+        // If auto-cost, "Cost" field is set to 0
+        cost_fld.value = 0;
+    } else {
+        cost_fld.disabled = false;
+        // If specified cost, restore "Cost" field to the original setting
+        var entry_id = this.id.split("_");
+        restoreFiledValue(cost_id, "config", entry_id[2], "Cost");
+    }
+}
+
+
+function isCostWithinRange(fld_id, MinVal, MaxVal, start_text, end_text) {
+    var cost_mode_id = fld_id.replace(/Cost/, "IsSpecificCost");
+    var cur_sel_opt = getSelectedOptElement(cost_mode_id);
+    // Do check only when the mode is enabled
+    if (cur_sel_opt.text != "Auto") {
+        return isWithinRange(fld_id, MinVal, MaxVal, start_text, end_text);
+    }
+    return true;
+}
+
+function isFastHelloWithinRange(fld_id, MinVal, MaxVal, start_text, end_text) {
+    var fasthellomod_id = fld_id.replace(/FastHelloPackets/, "IsFastHelloEnabled");
+    var fasthellomod_fld = $(fasthellomod_id);
+    // Do check only when the mode is enabled
+    if (fasthellomod_fld.checked) {
+        return isWithinRange(fld_id, MinVal, MaxVal, start_text, end_text);
+    }
+    return true;
+}
+
+/* Check function before send out the HTML request */
+function checkForm() {
+    return true;
+}
+
+/* Add table header */
+function addHeader(table_rows) {
+    // 1st row
+    var row = {
+        fields: [
+            { type: "disp_hdr", params: ["Instance ID", 1, 2], "hidden": true },
+            { type: "disp_hdr", params: ["Interface", 1, 2] },
+            { type: "disp_hdr", params: ["Priority", 1, 2] },
+            { type: "disp_hdr", params: ["Passive Interface", 1, 2] },
+            { type: "disp_hdr", params: ["Cost", 2, 2] },
+            { type: "disp_hdr", params: ["Ignore MTU", 1, 2] },
+            { type: "disp_hdr", params: ["Interval", 3] }
+        ]
+    };
+    table_rows.push(row);
+
+    // 2nd row
+    row = {
+        fields: [
+            { type: "disp_hdr", params: ["Hello"] },
+            { type: "disp_hdr", params: ["Dead"] },
+            { type: "disp_hdr", params: ["Retransmit"] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+/* Add a single row in the dynamic table.
+ * Notice:
+ * Except for the general usage, this function also can be a callback function
+ * which is registered by addNewRowButton().
+ * In this case, the value of parameter "key" is an integer number (start from 1),
+ * it identify the new row index for the entry and the value of parameter "val"
+ * is null.
+ */
+function addRow(key, val, key_prefix) {
+    var elem_id;
+
+    var row_affix = myDynamicTable.getRowPrefixs("rowKeyPrefix") + rowKey2Id(key);
+    var row = {
+        "key": key,
+        fields: [
+            { type: "text", params: [key, "c", null, key_prefix + key] },
+            {
+                type: "input",
+                params: [val.Priority, "cr", "Priority_" + row_affix, 3, 3],
+                validate: { func: isWithinRange, params: ["Priority_" + row_affix, myCapabilities.MinPriority, myCapabilities.MaxPriority, "Priority Range"] }
+            },
+            {
+                type: "chkbox",
+                params: [val.IsPassiveInterface, "c", "IsPassiveInterface_" + row_affix]
+            },
+
+            { type: "select", params: [oTCostMode, oVCostMode, val.IsSpecificCost ? "true" : "false", "c", "IsSpecificCost_" + row_affix, null, null, false, changeCostMode] },
+            {
+                type: "input",
+                params: [val.Cost, "cr", "Cost_" + row_affix, 5, 5, null, null, val.IsSpecificCost ? false : true],
+                validate: { func: isCostWithinRange, params: ["Cost_" + row_affix, myCapabilities.MinInterfaceCost, myCapabilities.MaxInterfaceCost, "Cost Range"] }
+            },
+            { type: "chkbox", params: [val.MtuIgnore, "c", "MtuIgnore_" + row_affix] },
+            {
+                type: "input",
+                params: [val.HelloInterval, "cr", "HelloInterval_" + row_affix, 5, 5],
+                validate: { func: isWithinRange, params: ["HelloInterval_" + row_affix, myCapabilities.MinHelloInterval, myCapabilities.MaxHelloInterval, "Hello Interval"] }
+            },
+            {
+                type: "input",
+                params: [val.DeadInterval, "cr", "DeadInterval_" + row_affix, 5, 5],
+                validate: { func: isWithinRange, params: ["DeadInterval_" + row_affix, myCapabilities.MinDeadInterval, myCapabilities.MaxDeadInterval, "Dead Interval"] },
+                "disabled": val.IsFastHelloEnabled
+            },
+            {
+                type: "input",
+                params: [val.RetransmitInterval, "cr", "RetransmitInterval_" + row_affix, 5, 5],
+                validate: { func: isWithinRange, params: ["RetransmitInterval_" + row_affix, myCapabilities.MinRetransmitInterval, myCapabilities.MaxRetransmitInterval, "Retransmit Interval"] }
+            }
+        ]
+    };
+
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 13;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addSubmitButton(name, "ospf6.config.interface", requestUpdate);
+    myDynamicTable.addResetButton();
+
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+        { text: "*", className: "c" },
+        { name: "Priority" },
+        { name: "IsPassiveInterface" },
+        { name: "IsSpecificCost" },
+        { name: "Cost" },
+        { name: "MtuIgnore" },
+        { name: "HelloInterval" },
+        { name: "DeadInterval" },
+        { name: "RetransmitInterval" }
+    ]);
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("requestUpdate() failed: Get dynamic data failed.");
+            return;
+        }
+    }
+
+    if (myCapabilities) {
+        requestJsonDoc("ospf6.config.interface.get", null, processUpdate, "config");
+    }
+}
+
+/* Initialize resources when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", { func: checkForm, params: [] });
+
+    // This table requires two JSON data(capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requested only one time.
+    requestJsonDoc("ospf6.capabilities.get", null, requestUpdate, "capabilities");
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>OSPF6 Interface Configuration</h1>
+    <div class="refreshbar">
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+</body>
+
+</html>

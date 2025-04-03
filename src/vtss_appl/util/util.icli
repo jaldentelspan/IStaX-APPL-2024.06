@@ -1,0 +1,1214 @@
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+INCLUDE_BEGIN
+#include "main.h"
+#include "cli_trace_def.h"
+#include "vtss_trace_api.h"
+#include "cli_io_api.h"
+#include "vtss/basics/notifications/process-cmd.hxx"
+
+#include "vtss_process_manager.hxx"
+#include "crashhandler.hxx"
+
+#define TRACE_MODULE_ID_UNSPECIFIED -2
+#define TRACE_GRP_IDX_UNSPECIFIED   -2
+#define VTSS_TRACE_LVL_UNSPECIFIED  -2
+
+#ifdef CPRINTF
+#undef CPRINTF
+#endif
+#define PRINTF (void)icli_session_self_printf
+#define CPRINTF (void)icli_session_self_printf
+
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_NONE /* Should be the caller's module ID */
+INCLUDE_END
+
+FUNCTION_BEGIN
+static void _repeat_char(char c, uint n)
+{
+    for (; n > 0; n--) {
+        icli_session_self_printf("%c", c);
+    }
+}
+
+static BOOL parse_module_name(const char *module_name, int *module_id)
+{
+    if (!module_name) {
+        *module_id = TRACE_MODULE_ID_UNSPECIFIED;
+        return TRUE;
+    }
+
+    return vtss_trace_module_name_to_id(module_name, module_id) == MESA_RC_OK;
+}
+
+static BOOL parse_group_name(const char *group_name, int module_id, int *group_id)
+{
+    if (!group_name || module_id == TRACE_MODULE_ID_UNSPECIFIED) {
+        *group_id = TRACE_GRP_IDX_UNSPECIFIED;
+        return TRUE;
+    }
+
+    return vtss_trace_grp_name_to_id(group_name, module_id, group_id) == MESA_RC_OK;
+}
+
+static BOOL parse_level( BOOL is_none, BOOL is_error, BOOL is_warning,
+                         BOOL is_info, BOOL is_debug, BOOL is_noise,
+                         BOOL is_racket, int *lvl )
+{
+    if (is_none) {
+        *lvl = VTSS_TRACE_LVL_NONE;
+        return TRUE;
+    }
+
+    if (is_error) {
+        *lvl = VTSS_TRACE_LVL_ERROR;
+        return TRUE;
+    }
+
+    if (is_warning) {
+        *lvl = VTSS_TRACE_LVL_WARNING;
+        return TRUE;
+    }
+
+    if (is_info) {
+        *lvl = VTSS_TRACE_LVL_INFO;
+        return TRUE;
+    }
+
+    if (is_debug) {
+        *lvl = VTSS_TRACE_LVL_DEBUG;
+        return TRUE;
+    }
+
+    if (is_noise) {
+        *lvl = VTSS_TRACE_LVL_NOISE;
+        return TRUE;
+    }
+
+    if (is_racket) {
+        *lvl = VTSS_TRACE_LVL_RACKET;
+        return TRUE;
+    }
+
+    *lvl = VTSS_TRACE_LVL_UNSPECIFIED;
+    return TRUE;
+}
+
+static void icli_cmd_debug_trace_print_info(int module_id, int group_id, BOOL b_header)
+{
+    /* No level to be set => Print trace information */
+    int mid_start,  mid_stop;
+    int gidx_start, gidx_stop;
+
+    int mid=-1, gidx=-1;
+    const char *module_name;
+    const char *grp_name;
+
+    /* Work-around for problem with printf("%*s", ...) */
+    char name_format[10];
+    char lvl_format[10];
+
+    sprintf(name_format, "%%-%ds", VTSS_TRACE_MAX_NAME_LEN);
+    sprintf(lvl_format, "%%-%ds",  VTSS_TRACE_MAX_LVL_LEN);
+
+    if (module_id == TRACE_MODULE_ID_UNSPECIFIED) {
+        mid_start = -1;
+        mid_stop  = -1;
+    } else {
+        mid_start = MAX(module_id-1, -1);
+        mid_stop  = module_id;
+    }
+
+    if (group_id == TRACE_GRP_IDX_UNSPECIFIED) {
+        gidx_start = -1;
+        gidx_stop  = -1;
+    } else {
+        gidx_start = MAX(group_id - 1, -1);
+        gidx_stop  = group_id;
+    }
+
+    if (b_header) {
+
+        if (vtss_trace_global_lvl_get() != VTSS_TRACE_LVL_RACKET) {
+            CPRINTF("Global trace level: %s\n",
+                    vtss_trace_lvl_to_str(vtss_trace_global_lvl_get()));
+            CPRINTF("\n");
+        }
+
+    // Output format:
+    //
+    // Module      Group    Level  Usec  Ring Buf  Description
+    // ----------  -----    -----  ----  --------  -----------
+    // mirror      default         no    no        Bla bla bla
+    //             g1       error  no    yes       didadida
+    //             g2       error  yes   no        didadida
+
+        /* Header */
+        CPRINTF(name_format, "Module");
+        CPRINTF("  ");
+        CPRINTF(name_format, "Group");
+        CPRINTF("  ");
+        CPRINTF(lvl_format, "Level");
+        CPRINTF("  ");
+        CPRINTF("Usec  ");
+        CPRINTF("Ring Buf  ");
+        CPRINTF("Description\n");
+
+        _repeat_char('-', VTSS_TRACE_MAX_NAME_LEN);
+        CPRINTF("  ");
+        _repeat_char('-', VTSS_TRACE_MAX_NAME_LEN);
+        CPRINTF("  ");
+        _repeat_char('-', VTSS_TRACE_MAX_LVL_LEN);
+        CPRINTF("  ");
+        _repeat_char('-', strlen("Usec"));
+        CPRINTF("  ");
+        _repeat_char('-', strlen("Ring Buf"));
+        CPRINTF("  ");
+        _repeat_char('-', strlen("Description"));
+        CPRINTF("\n");
+    }
+
+    /* Modules */
+    mid = mid_start;
+    while ((module_name = vtss_trace_module_name_get_next(&mid))) {
+        BOOL one_line_format = 0;
+
+        gidx = gidx_start;
+        if (strcmp(vtss_trace_grp_name_get_next(mid, &gidx), "default") == 0) {
+            /* First group to print is named "default"
+             * =>
+             * print group name on same line as module name and
+             * skip printing group description */
+            one_line_format = 1;
+        }
+
+        CPRINTF(name_format, module_name);
+        CPRINTF("  ");
+        if (!one_line_format) {
+            CPRINTF(name_format, "");
+            CPRINTF("  ");
+            CPRINTF(lvl_format,  "");
+            CPRINTF("  ");
+            _repeat_char(' ', strlen("Usec"));
+            CPRINTF("  ");
+            _repeat_char(' ', strlen("Ring Buf"));
+            CPRINTF("  ");
+            CPRINTF("%s\n", vtss_trace_module_dscr_get(mid));
+        }
+
+        /* Groups */
+        gidx = gidx_start;
+        while ((grp_name = vtss_trace_grp_name_get_next(mid, &gidx))) {
+            if (!one_line_format) {
+                CPRINTF(name_format, "");
+                CPRINTF("  ");
+            }
+            CPRINTF(name_format, grp_name);
+            CPRINTF("  ");
+            CPRINTF(lvl_format, vtss_trace_lvl_to_str(vtss_trace_module_lvl_get(mid, gidx)));
+            CPRINTF("  ");
+            CPRINTF("%-4s  ", vtss_trace_grp_parm_get(VTSS_TRACE_MODULE_PARM_USEC,      mid, gidx) ? "yes" : "no");
+            CPRINTF("%-8s  ", vtss_trace_grp_parm_get(VTSS_TRACE_MODULE_PARM_RINGBUF,   mid, gidx) ? "yes" : "no");
+            if (!one_line_format) {
+                CPRINTF("%s\n", vtss_trace_grp_dscr_get(mid, gidx));
+            } else {
+                CPRINTF("%s\n", vtss_trace_module_dscr_get(mid));
+            }
+            one_line_format = 0; /* one_line_format only applicable to first group */
+
+            if (gidx == gidx_stop) break;
+        }
+
+        if (mid == mid_stop) break;
+    }
+}
+
+static void _all_groups_add(icli_runtime_t *runtime)
+{
+    int                    module_id;
+    const char             *module_name;
+    const vtss_trace_reg_t *reg;
+    int                    group_id;
+    char                   *group_name;
+    u32                    i, j;
+    bool                   already_found;
+
+    i = 0;
+    module_id = -1;
+    while ((module_name = vtss_trace_module_name_get_next(&module_id))) {
+        if (icli_str_len(module_name) == 0) {
+            continue;
+        }
+
+        if ((reg = vtss_trace_reg_get(module_id, -1)) == nullptr) {
+            continue;
+        }
+
+        for (group_id = 0; group_id < reg->grp_cnt; ++group_id) {
+            group_name = reg->grps[group_id].name;
+
+            if (icli_str_len(group_name) == 0) {
+                continue;
+            }
+
+            already_found = false;
+            for (j = 0; j < i; j++) {
+                if (strcmp(runtime->cword[j], group_name) == 0) {
+                    already_found = true;
+                    break;
+                }
+            }
+
+            if (!already_found) {
+                if (i >= ARRSZ(runtime->cword)) {
+                    T_E("Number of groups for all modules is > ARRSZ(runtime->cword) == %zu", ARRSZ(runtime->cword));
+                    return;
+                }
+
+                runtime->cword[i++] = group_name;
+            }
+        }
+    }
+}
+
+static BOOL _runtime_cword_module_name(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    u32        i;
+    int        module_id;
+    const char *module_name;
+
+    if (session_id){}
+
+    if (runtime == NULL) {
+        return FALSE;
+    }
+
+    switch (ask) {
+    case ICLI_ASK_CWORD:
+        module_id = -1;
+        i = 0;
+        while ((module_name = vtss_trace_module_name_get_next(&module_id))) {
+            if (icli_str_len(module_name)) {
+                if (i >= ARRSZ(runtime->cword)) {
+                    T_E("Number of modules is > ARRSZ(runtime->cword) == %zu", ARRSZ(runtime->cword));
+                    return TRUE;
+                }
+
+                runtime->cword[i++] = (char *)module_name;
+            }
+        }
+
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static BOOL _runtime_cword_group_name(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    u32                    i;
+    int                    module_id;
+    const char             *module_name;
+    icli_variable_value_t  *v;
+    const vtss_trace_reg_t *reg;
+    int                    group_id;
+    char                   *group_name;
+
+    if (runtime == NULL) {
+        return FALSE;
+    }
+
+    switch (ask) {
+    case ICLI_ASK_CWORD:
+        v = (icli_variable_value_t *)VTSS_MALLOC(sizeof(icli_variable_value_t));
+        if (v == NULL) {
+            return FALSE;
+        }
+
+        if (icli_session_cmd_value_get(session_id, 4, v) == ICLI_RC_OK) {
+            // specific module
+            module_name = v->u.u_cword;
+        } else {
+            // all modules
+            module_name = NULL;
+        }
+
+        if (module_name == NULL) {
+            _all_groups_add(runtime);
+            VTSS_FREE(v);
+            return TRUE;
+        }
+
+        if (parse_module_name(module_name, &module_id) == FALSE) {
+            VTSS_FREE(v);
+            return FALSE;
+        }
+
+        // free until module_name not used
+        VTSS_FREE(v);
+
+        reg = vtss_trace_reg_get(module_id, -1);
+        if (reg == NULL) {
+            return FALSE;
+        }
+
+        i = 0;
+        for (group_id = 0; group_id < reg->grp_cnt; ++group_id) {
+            group_name = reg->grps[group_id].name;
+            if (icli_str_len(group_name)) {
+                runtime->cword[i] = group_name;
+                ++i;
+            }
+        }
+        return TRUE;
+
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+FUNCTION_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND = no debug trace hunt
+
+DOC_CMD_DESC    = Stop hunting for string in trace messages
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = Delete trace hunt string
+BYWORD  =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! trace
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+! hunt
+CMD_VAR =
+RUNTIME =
+HELP    =
+BYWORD  =
+
+CODE_BEGIN
+    vtss_trace_hunt_set(NULL);
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace hunt <line64>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = target
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Set target string when hunting in traces and dump backtrace
+HELP = The text pattern to be hunted in log messages
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CODE_BEGIN
+    vtss_trace_hunt_set(target);
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace module level [ {<cword> | *} [ {<cword> | *} [none|error|warning|info|debug|noise|racket] ] ]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = module_name
+CMD_VAR = b_all_modules
+CMD_VAR = group_name
+CMD_VAR = b_all_groups
+CMD_VAR = b_none
+CMD_VAR = b_error
+CMD_VAR = b_warning
+CMD_VAR = b_info
+CMD_VAR = b_debug
+CMD_VAR = b_noise
+CMD_VAR = b_racket
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Module configuration
+HELP = Display or set trace level
+HELP = Module name
+HELP = All modules
+HELP = Group name
+HELP = All groups
+HELP = No trace
+HELP = Error trace level
+HELP = Warning trace level
+HELP = Information trace level
+HELP = Debug trace level
+HELP = Noise trace level
+HELP = Racket trace level
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = _runtime_cword_module_name
+RUNTIME =
+RUNTIME = _runtime_cword_group_name
+RUNTIME =
+
+VARIABLE_BEGIN
+    int                    module_id;
+    int                    group_id;
+    int                    lvl;
+    char                   *gname;
+    const char             *mname;
+    const vtss_trace_reg_t *reg;
+    BOOL                   b_header;
+VARIABLE_END
+
+CODE_BEGIN
+    if (group_name == NULL) {
+        b_all_groups = TRUE;
+    }
+
+    if (parse_module_name(module_name, &module_id) == FALSE) {
+        ICLI_PRINTF("%% Fail: parse module name, %s\n", module_name);
+        return ICLI_RC_ERROR;
+    }
+
+    if (parse_group_name(group_name, module_id, &group_id) == FALSE) {
+        ICLI_PRINTF("%% Fail: parse group name, %s\n", group_name);
+        return ICLI_RC_ERROR;
+    }
+
+    if (parse_level(b_none, b_error, b_warning, b_info, b_debug, b_noise, b_racket, &lvl) == FALSE) {
+        PRINTF("Failed to parse trace level\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (lvl == VTSS_TRACE_LVL_UNSPECIFIED) {
+        /* Display */
+        b_header = TRUE;
+        if (b_all_modules) {
+            if (b_all_groups) {
+                icli_cmd_debug_trace_print_info(module_id, group_id, b_header);
+            } else {
+                module_id = -1;
+                while ((mname = vtss_trace_module_name_get_next(&module_id))) {
+                    if (icli_str_len(mname)) {
+                        reg = vtss_trace_reg_get(module_id, -1);
+                        if (reg) {
+                            for (group_id = 0; group_id < reg->grp_cnt; ++group_id) {
+                                gname = reg->grps[group_id].name;
+                                if (icli_str_len(gname)) {
+                                    if (icli_str_cmp(group_name, gname) == 0) {
+                                        icli_cmd_debug_trace_print_info(module_id, group_id, b_header);
+                                        b_header = FALSE;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            icli_cmd_debug_trace_print_info(module_id, group_id, b_header);
+        }
+    } else {
+        /* Set */
+        if (b_all_modules) {
+            module_id = -1;
+            while ((mname = vtss_trace_module_name_get_next(&module_id))) {
+                if (icli_str_len(mname)) {
+                    reg = vtss_trace_reg_get(module_id, -1);
+                    if (reg) {
+                        for (group_id = 0; group_id < reg->grp_cnt; ++group_id) {
+                            gname = reg->grps[group_id].name;
+                            if (icli_str_len(gname)) {
+                                if (b_all_groups) {
+                                    vtss_trace_module_lvl_set(module_id, group_id, lvl);
+                                    vtss_api_trace_update();
+                                } else if (icli_str_cmp(group_name, gname) == 0) {
+                                    vtss_trace_module_lvl_set(module_id, group_id, lvl);
+                                    vtss_api_trace_update();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            /* specific module */
+            reg = vtss_trace_reg_get(module_id, -1);
+            if (reg) {
+                for (group_id = 0; group_id < reg->grp_cnt; ++group_id) {
+                    gname = reg->grps[group_id].name;
+                    if (icli_str_len(gname)) {
+                        if (b_all_groups) {
+                            vtss_trace_module_lvl_set(module_id, group_id, lvl);
+                            vtss_api_trace_update();
+                        } else if (icli_str_cmp(group_name, gname) == 0) {
+                                vtss_trace_module_lvl_set(module_id, group_id, lvl);
+                                vtss_api_trace_update();
+                                break;
+                        }
+                    }
+                }
+            } else {
+                ICLI_PRINTF("%% Fail to get data for module %s\n", module_name);
+                return ICLI_RC_ERROR;
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace configuration {read | write | erase}
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = do_read
+CMD_VAR = do_write
+CMD_VAR = do_erase
+
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP = Configuration operation on flash
+HELP = Read trace settings from flash
+HELP = Write trace settings to flash
+HELP = Erase trace settings from flash
+
+CODE_BEGIN
+{
+    mesa_rc rc;
+
+    if (do_read) {
+        ICLI_PRINTF("Reading trace settings from file...\n");
+        if ((rc = vtss_trace_cfg_rd()) != MESA_RC_OK) {
+            ICLI_PRINTF("%% Failed to read trace settings from flash. Error = %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else if (do_write) {
+        ICLI_PRINTF("Writing trace settings to file...\n");
+        if ((rc = vtss_trace_cfg_wr()) != MESA_RC_OK) {
+            ICLI_PRINTF("%% Failed to write trace settings to file. Error = %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else if (do_erase) {
+        ICLI_PRINTF("Erasing trace settings from file...\n");
+        if ((rc = vtss_trace_cfg_erase()) != MESA_RC_OK) {
+            ICLI_PRINTF("Failed to erase trace settings from file. Error = %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    }
+}
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace global level [ none | error | warning | info | debug | noise | racket ]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = b_none
+CMD_VAR = b_error
+CMD_VAR = b_warning
+CMD_VAR = b_info
+CMD_VAR = b_debug
+CMD_VAR = b_noise
+CMD_VAR = b_racket
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Global trace
+HELP = Display or set global trace level
+HELP = No trace
+HELP = Error trace level
+HELP = Warning trace level
+HELP = Information trace level
+HELP = Debug trace level
+HELP = Noise trace level
+HELP = Racket trace level
+
+VARIABLE_BEGIN
+    int     lvl;
+VARIABLE_END
+
+CODE_BEGIN
+    if ( parse_level(b_none, b_error, b_warning, b_info, b_debug, b_noise, b_racket, &lvl) == FALSE ) {
+        ICLI_PRINTF("%% Failed: parse level\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if ( lvl == VTSS_TRACE_LVL_UNSPECIFIED ) {
+        // display
+        ICLI_PRINTF("Global trace level: %s\n", vtss_trace_lvl_to_str(vtss_trace_global_lvl_get()));
+    } else {
+        // set
+        vtss_trace_global_lvl_set(lvl);
+        vtss_api_trace_update();
+    }
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace port [ enable | disable ]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+PROPERTY  = ICLI_CMD_PROP_GREP
+MODE_VAR  = plist
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = b_enable
+CMD_VAR = b_disable
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Display or set trace per port
+HELP = Enable trace per port
+HELP = Disable trace per port
+
+VARIABLE_BEGIN
+    u32     i;
+    u32     j;
+    u32     iport;
+    u32     uport;
+    BOOL    b_first;
+VARIABLE_END
+
+CODE_BEGIN
+    b_first = TRUE;
+
+    for ( i = 0; i < plist->cnt; ++i ) {
+        for ( j = 0; j < plist->switch_range[i].port_cnt; ++j ) {
+            iport = plist->switch_range[i].begin_iport + j;
+            uport = plist->switch_range[i].begin_uport + j;
+
+            if ( b_enable || b_disable ) {
+                // set
+                vtss_trace_port_set(iport, b_disable);
+            } else {
+                // display
+                if ( b_first ) {
+                    ICLI_PRINTF("USID Uport  Trace   \n");
+                    ICLI_PRINTF("---- -----  --------\n");
+                    b_first = FALSE;
+                }
+                ICLI_PRINTF("%4u %5u  %s\n", plist->switch_range[i].usid, uport, vtss_trace_port_get(iport) ? "Disabled" : "Enabled");
+            }
+        } // for j
+    } // for i
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace module ringbuffer <cword> <cword> { enable | disable }
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = module_name
+CMD_VAR = group_name
+CMD_VAR = b_enable
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Module configuration
+HELP = Redirect trace into ring buffer for module/group
+HELP = Module name
+HELP = Group name
+HELP = Enable ring buffer for module/group
+HELP = Disable ring buffer for module/group
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = _runtime_cword_module_name
+RUNTIME = _runtime_cword_group_name
+
+VARIABLE_BEGIN
+    int     module_id;
+    int     group_id;
+VARIABLE_END
+
+CODE_BEGIN
+    if (parse_module_name(module_name, &module_id) == FALSE) {
+        ICLI_PRINTF("%% Fail: parse module name\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (parse_group_name(group_name, module_id, &group_id) == FALSE) {
+        ICLI_PRINTF("%% Fail: parse group name\n");
+        return ICLI_RC_ERROR;
+    }
+
+    vtss_trace_module_parm_set(VTSS_TRACE_MODULE_PARM_RINGBUF, module_id, group_id, b_enable);
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace module usec <cword> <cword> { enable | disable }
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = module_name
+CMD_VAR = group_name
+CMD_VAR = b_enable
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Module configuration
+HELP = Enable/disable wall usec time stamp in trace for module/group
+HELP = Module name
+HELP = Group name
+HELP = Enable usec time stamp
+HELP = Disable usec time stamp
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = _runtime_cword_module_name
+RUNTIME = _runtime_cword_group_name
+
+VARIABLE_BEGIN
+    int     module_id;
+    int     group_id;
+VARIABLE_END
+
+CODE_BEGIN
+    if (parse_module_name(module_name, &module_id) == FALSE) {
+        ICLI_PRINTF("%% Fail: parse module name\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (parse_group_name(group_name, module_id, &group_id) == FALSE) {
+        ICLI_PRINTF("%% Fail: parse group name\n");
+        return ICLI_RC_ERROR;
+    }
+
+    vtss_trace_module_parm_set(VTSS_TRACE_MODULE_PARM_USEC, module_id, group_id, b_enable);
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug trace {revert | defaults}
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_revert
+CMD_VAR = has_defaults
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Revert to previous trace level settings
+HELP = Restore trace settings to defaults (as coded by modules)
+
+VARIABLE_BEGIN
+   mesa_rc rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_revert) {
+        vtss_trace_lvl_revert();
+        ICLI_PRINTF("Reverted to previous trace level settings.\n");
+    } else if (has_defaults) {
+        ICLI_PRINTF("Restoring trace settings to defaults...\n");
+        if ((rc = vtss_trace_defaults()) != MESA_RC_OK) {
+            ICLI_PRINTF("Failed to restore trace settings to defaults. Error = %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    vtss_api_trace_update();
+CODE_END
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+IF_FLAG = defined(__VTSS_TRACE_STREAM_DETAILS_LINUX_HXX__)
+COMMAND   = debug trace vtss-basics [fatal | error | warning | info | debug | noise | racket]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = b_fatal
+CMD_VAR = b_error
+CMD_VAR = b_warning
+CMD_VAR = b_info
+CMD_VAR = b_debug
+CMD_VAR = b_noise
+CMD_VAR = b_racket
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Trace setting
+HELP = Set or get vtss_basics trace level default value.
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    int vtss_basics_default_severity_level_get();
+    bool parse_vtss_basics_trace_level(bool b_fatal, bool b_error, bool b_warn, bool b_info,
+                                       bool b_debug, bool b_noise, bool b_racket, int *level);
+    void vtss_basics_default_severity_level_set(int level);
+
+    int level = -1;
+    if (parse_vtss_basics_trace_level(b_fatal,b_error,b_warning,b_info,b_debug,b_noise,b_racket, &level)) {
+        vtss_basics_default_severity_level_set(level);
+    } else {
+        ICLI_PRINTF("vtss_basics trace level default is: %s\n", vtss_basics_default_severity_level_get());
+    }
+CODE_END
+
+CMD_END
+
+!=============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND   = debug process manager
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+CODE_BEGIN
+    vtss::appl::util::process_manager_print(icli_session_self_printf);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND   = debug gdbserver
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+CODE_BEGIN
+    vtss_gdb_server_start();
+CODE_END
+CMD_END
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND   = no debug gdbserver
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+CODE_BEGIN
+    vtss_gdb_server_stop();
+CODE_END
+CMD_END
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND   = debug process cmd <line128>
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = cmd
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+CODE_BEGIN
+{
+    std::string o;
+    std::string e;
+    ICLI_PRINTF("Running command: %s\n", cmd);
+    int res = vtss::notifications::process_cmd(cmd, &o, &e);
+    ICLI_PRINTF("Return code: %d\n", res);
+    ICLI_PRINTF("out: %s\n", o.c_str());
+    ICLI_PRINTF("err: %s\n", e.c_str());
+    ICLI_PRINTF("done\n");
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = debug trace ringbuffer flush
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! debug
+CMD_VAR = 
+RUNTIME = 
+HELP    = 
+BYWORD  = 
+
+! trace
+CMD_VAR = 
+RUNTIME = 
+HELP    = 
+BYWORD  = 
+
+! ringbuffer
+CMD_VAR = 
+RUNTIME = 
+HELP    = ##RINGBUFFER_HELP
+BYWORD  = 
+
+! flush
+CMD_VAR = 
+RUNTIME = 
+HELP    = Flush contents of ring buffer
+BYWORD  = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_trace_rb_flush();
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+RINGBUFFER_HELP = RAM-based tracing ring buffer
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = debug trace ringbuffer print
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! debug
+CMD_VAR = 
+RUNTIME = 
+HELP    = 
+BYWORD  = 
+
+! trace
+CMD_VAR = 
+RUNTIME = 
+HELP    = 
+BYWORD  = 
+
+! ringbuffer
+CMD_VAR = 
+RUNTIME = 
+HELP    = ##RINGBUFFER_HELP
+BYWORD  = 
+
+! print
+CMD_VAR = 
+RUNTIME = 
+HELP    = Output contents of ring buffer
+BYWORD  = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_trace_rb_output_as_one_str(icli_session_self_printf_lstr);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = debug trace ringbuffer { start | stop }
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! debug
+CMD_VAR = 
+RUNTIME = 
+HELP    = 
+BYWORD  = 
+
+! trace
+CMD_VAR = 
+RUNTIME = 
+HELP    = 
+BYWORD  = 
+
+! ringbuffer
+CMD_VAR = 
+RUNTIME = 
+HELP    = ##RINGBUFFER_HELP
+BYWORD  = 
+
+! start
+CMD_VAR = has_start
+RUNTIME = 
+HELP    = Start tracing for modules that have ring buffer enabled
+BYWORD  = start : Option
+
+! stop
+CMD_VAR =
+RUNTIME = 
+HELP    = Stop tracing for modules that have ring buffer enabled
+BYWORD  = stop : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_trace_rb_ena(has_start);
+CODE_END
+
+CMD_END

@@ -1,0 +1,168 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>System Power Supply Status</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" language="JavaScript">
+
+// Refresh timer
+var timerID;
+
+// Help page magic
+var help_page = "/help/help_sys_psu_status.htm";
+
+var oTState = Array("Active", "Standby", "Not Present");
+
+function CreateTableHeader(frag)
+{
+    var tr = CreateStyledElement("tr", "config_header");
+    addTextHeaderCell(tr, "ID", "cr");
+    addTextHeaderCell(tr, "Description", "cr");
+    addTextHeaderCell(tr, "State", "cr");
+    frag.appendChild(tr);
+}
+
+function addTableRow(frag, i, values)
+{
+    var tr = CreateStyledElement("tr", i % 2 ? "config_odd" : "config_even");
+    addTextCell(tr, values[0], "cr");
+    addTextCell(tr, values[1], "cl");
+    addTextCell(tr, oTState[parseInt(values[2], 10)], "c");
+    frag.appendChild(tr);
+}
+
+function processUpdate(req, ref)
+{
+    // Format: [psu_id]/[descr]/[state]|...
+    var values = req.responseText.split("|");
+
+    document.getElementById("update").style.visibility = "hidden";
+
+    if (redirectOnError(req)) {
+      return;
+    }
+
+    // Create Table Header
+    var frag = document.createDocumentFragment();
+    CreateTableHeader(frag);
+
+    // Create Table Row
+    if (req.responseText) {
+        var statusData = req.responseText.split("|");
+        for (var i = 0; i < statusData.length; i++) {
+            if (statusData[i]) {
+                addTableRow(frag, i, statusData[i].split("/"));
+            }
+        }
+    }
+
+    // Update Table
+    tbody = document.getElementById(ref);
+    clearChildNodes(tbody);
+    if (!tbody.appendChild(frag)) {
+        alert("This browser doesn't support dynamic tables.");
+    }
+
+    // Update the timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+function requestUpdate()
+{
+    if (SpomNavigationLoading()) {
+        return; // Bail out, navigation will trigger update
+    }
+
+    document.getElementById("update").style.visibility = "visible";
+    loadXMLDoc(SpomAddSidArg("/stat/sys_psu_status"), processUpdate, "statusTable");
+    SpomUpdateDisplaySid("sid_display");
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        requestUpdate();
+    }
+}
+
+function SpomSidSelectorUpdate(sid, max_port_cnt)
+{
+    SpomSetCurrentSid(sid); // Save current SID
+    requestUpdate();        // Update page to reflect selector
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+  <h1>Power Supply Status<span>&nbsp;</span><span id="sid_display"></span><span>&nbsp;</span></h1>
+  <div class="refreshbar">
+    <form action="#">
+      <label for="autorefresh">Auto-refresh</label>
+      <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+      <input type="button" value="Refresh" onclick="requestUpdate(); this.blur();">
+      <img id="update" alt="" src="images/updating.gif">
+   </form>
+  </div>
+
+  <table summary="Power Supply Status" class="display">
+    <tbody id="statusTable"></tbody>
+  </table>
+
+</body>
+
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

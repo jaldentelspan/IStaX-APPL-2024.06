@@ -1,0 +1,293 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Media Redundancy Protocol Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="cfm_lib.js"></script>
+ <script type="text/javascript" src="iec_mrp_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_iec_mrp_ctrl.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities, myPortInfo;
+var timerID;
+var oTPort = Array(), oVPort = Array();
+
+function clickEditIcon()
+{
+    var elm_ids = this.id.split("_");
+    document.location.href = "iec_mrp_edit.htm?mrpid=" + elm_ids[1];
+}
+
+function clickDelIcon()
+{
+    var elm_ids = this.id.split("_");
+    var submit_json = [elm_ids[1]];
+    requestJsonDoc("iecMrp.config.del", submit_json, requestUpdate);
+}
+
+function clickAddIcon()
+{
+    document.location.href = "iec_mrp_edit.htm";
+}
+
+function addHeader(table_rows)
+{
+    var row;
+    // 1st row
+    row = {fields:[
+             {type:"disp_hdr", params:["Inst #", 1, 3]},
+             {type:"disp_hdr", params:["Ring", 9, 1]},
+             {type:"disp_hdr", params:["Interconnection", 6, 1]},
+             {type:"disp_hdr", params:["Enable", 1, 3]},
+             {type:"disp_hdr", params:["Oper", 1, 3]},
+             {type:"disp_hdr", params:["Warning", 1, 3]},
+             {type:"disp_hdr", params:["   ", 2, 3]}
+            ]
+          };
+    table_rows.push(row);
+
+    // 2nd row
+    row = {fields:[
+             {type:"disp_hdr", params:["Role", 1, 2]},
+             {type:"disp_hdr", params:["Domain", 2]},
+             {type:"disp_hdr", params:["Port1", 2]},
+             {type:"disp_hdr", params:["Port2", 2]},
+             {type:"disp_hdr", params:["Recovery Profile", 1, 2]},
+             {type:"disp_hdr", params:["VLAN", 1, 2]},
+             {type:"disp_hdr", params:["Role", 1, 2]},
+             {type:"disp_hdr", params:["Name", 1, 2]},
+             {type:"disp_hdr", params:["Port", 1, 2]},
+             {type:"disp_hdr", params:["SF", 1, 2]},
+             {type:"disp_hdr", params:["Recovery Profile", 1, 2]},
+             {type:"disp_hdr", params:["VLAN", 1, 2]}
+            ]
+          };
+    table_rows.push(row);
+
+    // 3rd row
+    row = {fields:[
+             {type:"disp_hdr", params:["Name"]},
+             {type:"disp_hdr", params:["Id"]},
+             {type:"disp_hdr", params:["Port"]},
+             {type:"disp_hdr", params:["SF"]},
+             {type:"disp_hdr", params:["Port"]},
+             {type:"disp_hdr", params:["SF"]}
+            ]
+          };
+
+    table_rows.push(row);
+}
+
+function addRow(key, val, idx)
+{
+    var operState = false;
+    var recv_status = myDynamicTable.getRecvJson("status");
+    var status = recv_status[idx].val;
+    operState = status.OperState == "active" ? true : false;
+
+    var row = {
+        "key":key,
+        fields:[
+            {type:"link",   params:["cr", "iec_mrp_status_instance.htm?source=config&mrpid=" + key, key]},
+            {type:"text",   params:[oTRole[oVRole.indexOf(val.Role)], "c"]},
+            {type:"text",   params:[val.DomainName, "c"]},
+            {type:"text",   params:[val.DomainId, "c"]},
+            {type:"text",   params:[val.RingPort1Interface === "NONE" ? "none" : oTPort[oVPort.indexOf(val.RingPort1Interface)], "c"]},
+            {type:"text",   params:[oTSfTrigger[oVSfTrigger.indexOf(val.RingPort1SfTrigger)], "c"]},
+            {type:"text",   params:[val.RingPort2Interface === "NONE" ? "none" : oTPort[oVPort.indexOf(val.RingPort2Interface)], "c"]},
+            {type:"text",   params:[oTSfTrigger[oVSfTrigger.indexOf(val.RingPort2SfTrigger)], "c"]},
+            {type:"text",   params:[oTRecoveryProfile[oVRecoveryProfile.indexOf(val.RecoveryProfile)], "c"]},
+            {type:"text",   params:[val.Vid, "c"]},
+            {type:"text",   params:[oTInRole[oVInRole.indexOf(val.InRole)], "c"]},
+            {type:"text",   params:[val.InName, "c"]},
+            {type:"text",   params:[val.InPortInterface === "NONE" ? "none" : oTPort[oVPort.indexOf(val.InPortInterface)], "c"]},
+            {type:"text",   params:[oTSfTrigger[oVSfTrigger.indexOf(val.InPortSfTrigger)], "c"]},
+            {type:"text",   params:[oTInRecoveryProfile[oVInRecoveryProfile.indexOf(val.InRecoveryProfile)], "c"]},
+            {type:"text",   params:[val.InVid, "c"]},
+            {type:"image",  params:["c", val.AdminActive ? "images/yes.gif" : "images/no.gif"]},
+            {type:"image",  params:["c", operState ? "images/led-up.gif" : "images/led-down.gif"]},
+            {type:"image",  params:["c", status.OperWarnings ? "images/led-yellow.gif" : "images/led-off.gif" , printOperWarnings(status.OperWarnings)]},
+            {type:"image",  params:["c", "images/edit.gif", "Edit", "Edit_" + key, clickEditIcon]},
+            {type:"image",  params:["c", "images/del.gif", "Delete", "Delete_" + key, clickDelIcon]}
+           ]
+    };
+
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var row, empty_colspan = 20;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function(record, idx) {
+        table_rows.push(addRow(record.key, record.val, idx));
+    });
+
+   // Add contrl bar icon
+    if (recv_json.length < myCapabilities.InstCntMax) {
+        table_rows.push({fields:[
+                           {type:"text", params:[" ", "c", empty_colspan]},
+                           {type:"image", params:["c", "images/add.gif", "Add New MRP instance", null, clickAddIcon]}
+                       ]});
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+function prepareUpdate(recv_json, name)
+{
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // This table has two JSON data sets.
+    if (myDynamicTable.getRecvJsonCnt() == 2) {
+       processUpdate(myDynamicTable.getRecvJson("config"));
+    }
+}
+   
+
+function requestUpdate(recv_json, name)
+{
+    // Restore table content
+    myDynamicTable.restore();
+    requestJsonDoc("iecMrp.config.get", null, prepareUpdate, "config");
+    requestJsonDoc("iecMrp.status.get", null, prepareUpdate, "status");
+}
+
+function checkRefresh(fld)
+{
+    if (fld.checked) {
+        requestUpdate();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            oTPort.push("none");
+            oVPort.push("NONE");
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myCapabilities && myPortInfo) {
+        requestUpdate();
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config");
+    requestJsonDoc("iecMrp.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>Media Redundancy Protocol Configuration</h1>
+
+<div class="refreshbar">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="checkRefresh(this);">
+  <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</body>
+</html>

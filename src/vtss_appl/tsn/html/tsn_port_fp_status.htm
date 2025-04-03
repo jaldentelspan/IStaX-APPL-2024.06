@@ -1,0 +1,199 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>TSN Egress Port Frame Preemption Status</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_tsn_port_fp_status.htm";
+
+var timerID;
+var myDynamicTable, myPortInfo;;
+var oTPort = Array(), oVPort = Array();
+
+function addHeader()
+{
+    return {fields:[
+               {type:"disp_hdr", params:["Port"]},
+               {type:"disp_hdr", params:["Hold Advance"]},
+               {type:"disp_hdr", params:["Release Advance"]},
+               {type:"disp_hdr", params:["Preemption Active"]},
+               {type:"disp_hdr", params:["Hold Request"]},
+               {type:"disp_hdr", params:["Status Verify"]},
+               {type:"disp_hdr", params:["LocPreemptsupport"]},
+               {type:"disp_hdr", params:["LocPreemptEnabled"]},
+               {type:"disp_hdr", params:["LocPreemptActive"]},
+               {type:"disp_hdr", params:["LocAddFragSize"]}
+               ]
+           };
+}
+
+function addRow(key, val)
+{
+    return {fields:[
+               {type:"text",   params:[oTPort[oVPort.indexOf(key)], "cr"]},
+               {type:"text",   params:[val.HoldAdvance, "cr"]},
+               {type:"text",   params:[val.ReleaseAdvance, "cr"]},
+               {type:"image",  params:["c", val.PreemptionActive ? "images/yes.gif" : "images/no.gif"]},
+               {type:"image",  params:["c", val.HoldRequest  ? "images/yes.gif" : "images/no.gif"]},
+               {type:"text",   params:[val.StatusVerify, "cr"]},
+               {type:"image",  params:["c", val.LocPreemptSupported ? "images/yes.gif" : "images/no.gif"]},
+               {type:"image",  params:["c", val.LocPreemptEnabled ? "images/yes.gif" : "images/no.gif"]},
+               {type:"image",  params:["c", val.LocPreemptActive ? "images/yes.gif" : "images/no.gif"]},
+               {type:"text",   params:[val.LocAddFragSize, "cr"]}
+               ]
+           };
+}
+
+function addRows(recv_json)
+{
+    var table_rows = [];
+
+    table_rows.push(addHeader());
+
+    Object.each(recv_json, function(record) {
+        table_rows.push(addRow(record.key, record.val));
+    });
+
+    // Empty row
+    if (!recv_json.length) {
+        table_rows.push({fields:[{type:"empty_row"}]});
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson("status", recv_json);
+
+    // Add table rows
+    myDynamicTable.addRows(addRows(recv_json));
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("tsn.status.interface.fp.get", null, processUpdate, "status");
+}
+
+function checkRefresh(fld)
+{
+    if (fld.checked) {
+        requestUpdate();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myPortInfo) {
+        requestUpdate();
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "display");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+});
+ </script>
+</head>
+
+<body class="content">
+
+<h1>TSN Egress Port Frame Preemption Status</h1>
+
+<div class="refreshbar">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="checkRefresh(this);">
+  <input type="button" value="Refresh"  onClick="requestUpdate();      this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+</body>
+</html>
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

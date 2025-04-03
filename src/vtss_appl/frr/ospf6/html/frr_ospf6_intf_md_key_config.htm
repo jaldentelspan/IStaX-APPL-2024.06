@@ -1,0 +1,439 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>OSPF6 Interface Message Digest Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_frr_ospf6_intf_md_key_config.htm";
+
+// Global variables
+var defSelectedIntfVlan = "All"; /* Display all entries by default */
+var pageArgs = searchArgs(window.location.search);
+var selectedIntfVlan = pageArgs.IntfVlan ? unescape(pageArgs.IntfVlan) : defSelectedIntfVlan;
+
+var myDynamicTable, myCapabilities, ospf6IntfVlanInfo, mdKeyPrecedence;
+
+var oTOspf6IntfVlan = Array("All");
+var oTOspf6IntfVlanNewRow = Array();
+
+/* Send the HTML request */
+function sendRequest() {
+    ospf6IntfVlanInfo = mdKeyPrecedence = null;
+    requestJsonDoc("ospf6.config.interface.get", null, requestUpdate, "ospf6IntfVlanInfo");
+    requestJsonDoc("ospf6.status.interface_md_key_precedence.get", null, requestUpdate, "mdKeyPrecedence");
+}
+
+function onChangeSelectMenu(sel) {
+    selectedIntfVlan = sel.options[sel.selectedIndex].value;
+    sendRequest();
+}
+
+function checkNewPwd(elem_id) {
+    if ($(elem_id).value.length === 0) {
+        return GiveAlert("The minimum length of simple password is 1.",
+            $(elem_id));
+    }
+
+    return true;
+}
+
+/* Check if the table row key is duplicated or note */
+function isDuplicatedRowKey() {
+    var recv_json = myDynamicTable.getRecvJson("original_config");
+    var new_key_prefix = myDynamicTable.getRowPrefixs("newrowKeyPrefix");
+    var del_prefix = myDynamicTable.getRowPrefixs("rowDelPrefix");
+    var i, j;
+    var new_intf_vlan_fld;
+
+    // The new row key index start from 1
+    var newrow_count = myDynamicTable.getNewrowsCnt();
+    for (i = 1; i <= newrow_count; i++) {
+        new_intf_vlan_fld = $(new_key_prefix + i + "_IntfVlan");
+        new_md_key_fld = $(new_key_prefix + i + "_MdKey");
+        if (!new_intf_vlan_fld || !new_md_key_fld) {
+            continue;
+        }
+
+        // Lookup original entries
+        for (j = 0; j < recv_json.length; j++) {
+            // Ignore the deleted entry
+            if ($(del_prefix + rowKey2Id(recv_json[j].key)) &&
+                $(del_prefix + rowKey2Id(recv_json[j].key)).checked) {
+                continue;
+            }
+
+            // Ignore different OSPF6 Intf Vlan
+            if ($(new_key_prefix + i + "_IntfVlan").value != recv_json[j].key[0]) {
+                continue;
+            }
+
+            if (new_intf_vlan_fld.value == recv_json[j].key[0] &&
+                new_md_key_fld.value == recv_json[j].key[1]) {
+                // Found duplicated key
+                return GiveAlert("The entry {Interface:" +
+                    new_intf_vlan_fld.value + ", MD Key ID:" +
+                    new_md_key_fld.value + "} already exists.",
+                    new_md_key_fld);
+            }
+        }
+
+        // Lookup new entries
+        for (j = i + 1; j <= newrow_count; j++) {
+            if (!$(new_key_prefix + j + "_IntfVlan")) {
+                continue;
+            }
+
+            if (new_intf_vlan_fld.value == $(new_key_prefix + j + "_IntfVlan").value &&
+                new_md_key_fld.value == $(new_key_prefix + j + "_MdKey").value) {
+                // Found duplicated key
+                return GiveAlert("The entry {Interface:" +
+                    new_intf_vlan_fld.value + ", MD Key ID:" +
+                    new_md_key_fld.value + "} already exists.",
+                    new_md_key_fld);
+            }
+        }
+    }
+
+    return true;
+}
+
+/* Check function before send out the HTML request */
+function checkForm() {
+    // Check if duplicated row key
+    if (!isDuplicatedRowKey()) {
+        return false;
+    }
+
+    // Trim the unnecessary fields from the HTTP POST JSON data
+    var trim_ids = Array();
+    $('myTableContent').getElements('input[name^=IsChangePwd]').each(function (elm) {
+        // Apply new setting to filed "IsEncrypted"
+        if (elm.checked) {
+            var encrypted_id = elm.id.replace(/IsChangePwd/, "IsEncrypted");
+            $(encrypted_id).disabled = false;
+
+            var new_pwd_id = elm.id.replace(/IsChangePwd/, "NewPwd");
+            var simple_pwd_id = elm.id.replace(/IsChangePwd/, "SimplePwd");
+            $(simple_pwd_id).value = $(new_pwd_id).value;
+        }
+
+        trim_ids.push(elm.id);
+    });
+    $('myTableContent').getElements('input[name^=NewPwd]').each(function (elm) {
+        trim_ids.push(elm.id);
+    });
+    myDynamicTable.setTrimIds(trim_ids);
+
+    return true;
+}
+
+/* Ge the default entry of table row */
+function geRowDefaultRow() {
+    def_row = {
+        //interface vlan, key id
+        "key": [selectedIntfVlan, 1],
+        "val": { "IsEncrypted": false, "MdKey": "" }
+    };
+
+    return def_row;
+}
+
+/* Add table header */
+function addHeader(table_rows) {
+    var row = {
+        fields: [
+            { type: "disp_hdr", params: ["Delete"] },
+            { type: "disp_hdr", params: ["Interface"] },
+            { type: "disp_hdr", params: ["MD Key ID"] },
+            { type: "disp_hdr", params: ["Password"] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+/* Add a single row in the dynamic table.
+ * Notice:
+ * Except for the general usage, this function also can be a callback function
+ * which is registered by addNewRowButton().
+ * In this case, the value of parameter "key" is an integer number (start from 1),
+ * it identify the new row index for the entry and the value of parameter "val"
+ * is null.
+ */
+function addRow(key, val, key_prefix) {
+    var elem_id, new_row_key, is_new_row = false;
+
+    /* When the value of parameter "val" is null, it means this function is
+     * called by addNewRowButton(). It requires the default entry datas. */
+    if (!val) {
+        is_new_row = true;
+        new_row_key = geRowDefaultRow().key;
+        val = geRowDefaultRow().val;
+    }
+
+    var row_affix = (is_new_row ? key_prefix : myDynamicTable.getRowPrefixs("rowKeyPrefix")) + rowKey2Id(key);
+    var row = {
+        "key": is_new_row ? new_row_key : key,
+        fields: [
+            {
+                type: "chkbox",
+                params: [0, "c", key_prefix + rowKey2Id(key)]
+            },
+            { //Interface
+                type: "text",
+                params: [is_new_row ? new_row_key[0] : key[0], "cr"]
+            },
+            { //MD key
+                type: "text",
+                params: [is_new_row ? new_row_key[1] : key[1], "cr"]
+            },
+            {
+                type: "chkbox",
+                params: [val.IsEncrypted, "c", "IsEncrypted_" + row_affix],
+                "hidden": true
+            },
+            {
+                type: "input",
+                params: [val.MdKey, "cr", "MdKey_" + row_affix, 32, 128, null, null, true],
+                "hidden": true
+            },
+            { type: "text", params: ["********", "c"] }
+        ]
+    };
+
+    /* When a new row is created, use <input> form for the entry key.
+     * Notice that the element ID MUST start with the following syntax
+     * newrowKey_<key_idx>_<json_name>
+     * For example, "newrowKey_1_Network", "newrowKey_1_IpSubnetMaskLength".
+     */
+    if (is_new_row) {
+        var new_row_prefix = key_prefix + key;
+
+        // OSPF6 interface Vlan
+        elem_id = new_row_prefix + "_IntfVlan";
+        if (selectedIntfVlan != defSelectedIntfVlan) {
+            row.fields[1] = {
+                type: "input",
+                params: [new_row_key[0], "cr", elem_id, 10, 10, null, null, true]
+            };
+        } else {
+            row.fields[1] = {
+                type: "select",
+                params: [oTOspf6IntfVlanNewRow, oTOspf6IntfVlanNewRow, "VLAN 1", "c", elem_id]
+            };
+        }
+
+        // MD key ID
+        elem_id = new_row_prefix + "_MdKey";
+        row.fields[2] = {
+            type: "input",
+            params: [new_row_key[1], "cr", elem_id, 3, 3],
+            validate: { func: isWithinRange, params: [elem_id, myCapabilities.MinMdKeyId, myCapabilities.MaxMdKeyId, "MD Key ID"] }
+        };
+
+        // New password
+        row.fields[4] = { type: "text", params: [""], "hidden": true };
+        row.fields[5] = {
+            type: "password",
+            params: ["", "cr", "MdKey_" + row_affix, myCapabilities.MaxMdKeyLen],
+            validate: { func: checkNewPwd, params: ["MdKey_" + row_affix] }
+        };
+
+
+    }
+
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 4;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    // Filter the records which are matched the selected OSPF6 instance ID
+    // or equals the default configuration.
+    var myConf = Array();
+    if (selectedIntfVlan == defSelectedIntfVlan) { /* Display all entries */
+        myConf = recv_json;
+    } else {
+        Object.each(recv_json, function (record) {
+            if (selectedIntfVlan == record.key[0]) {
+                myConf.push(record);
+            }
+        });
+    }
+
+    // Sort the display records by the precedence
+    var mySortedConf = Array();
+    Object.each(mdKeyPrecedence, function (elem) {
+        Object.each(myConf, function (record) {
+            if (record.key[0] == elem.key[0] &&
+                record.key[1] == elem.val.MdKeyId) {
+                mySortedConf.push(record);
+            }
+        });
+    });
+
+    // Save the received JSON data (both of the original and filtered)
+    myDynamicTable.saveRecvJson(name, mySortedConf);
+    myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+    // Add table rows
+    var table_rows = addRows(mySortedConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addNewRowButton(addRow, myCapabilities.MaxMdKeyCnt - recv_json.length + myConf.length);
+    myDynamicTable.addSubmitButton(name, "ospf6.config.interface_md_key", sendRequest);
+    myDynamicTable.addResetButton();
+
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+        { name: myDynamicTable.getRowPrefixs("rowDelPrefix") },
+        { text: "*", className: "c" },
+        { text: "*", className: "c" },
+        { text: "*", className: "c" }
+    ]);
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+            myCapabilities.MaxMdKeyCnt = myCapabilities.MaxMdKeyId - myCapabilities.MinMdKeyId + 1;
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(capabilities) failed.");
+            return;
+        }
+    } else if (name == "ospf6IntfVlanInfo") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            ospf6IntfVlanInfo = myDynamicTable.cloneRecvJson(recv_json);
+
+            // Update the OPSF interface VLAN selected menu.
+            oTOspf6IntfVlan.length = 1; // Restore to default; default is only 1 option
+            oTOspf6IntfVlanNewRow.length = 0; // Restore to default; default is empty
+            Object.each(recv_json, function (record) {
+                oTOspf6IntfVlan.push(record.key);
+                oTOspf6IntfVlanNewRow.push(record.key);
+            });
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(ospf6IntfVlanInfo) failed.");
+            return;
+        }
+    } else if (name == "mdKeyPrecedence") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            mdKeyPrecedence = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("requestUpdate() failed: Get dynamic data(mdKeyPrecedence) failed.");
+            return;
+        }
+    }
+
+    if (myCapabilities && ospf6IntfVlanInfo && mdKeyPrecedence) {
+        UpdateIdSelect("ospf6IntfVlanSelectMenu", oTOspf6IntfVlan, oTOspf6IntfVlan, selectedIntfVlan);
+        requestJsonDoc("ospf6.config.interface_md_key.get", null, processUpdate, "config");
+
+        // Update page header
+        if (selectedIntfVlan != defSelectedIntfVlan) {
+            $("selectedIntfVlan").innerHTML = " Interface: " + selectedIntfVlan;
+        } else {
+            $("selectedIntfVlan").innerHTML = "";
+        }
+    }
+}
+
+/* Initialize restores when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", { func: checkForm, params: [] });
+
+    // This table requires three JSON data(capabilities/config/ospf6IntfVlanInfo/mdKeyPrecedence).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requested only one time.
+    requestJsonDoc("ospf6.capabilities.get", null, requestUpdate, "capabilities");
+    sendRequest();
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>OSPF6 Interface Message Digest Configuration</h1>
+    <h2><span id="selectedIntfVlan"></span></h2>
+    <div class="refreshbar">
+        VLAN ID&nbsp;
+        <select id="ospf6IntfVlanSelectMenu" onchange="onChangeSelectMenu(this);">
+            <option value="0">All</option>
+        </select>
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+</body>
+
+</html>

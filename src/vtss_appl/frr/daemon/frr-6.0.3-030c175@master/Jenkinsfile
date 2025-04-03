@@ -1,0 +1,74 @@
+properties([
+        [$class: 'BuildDiscarderProperty', strategy: [$class: 'LogRotator', artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '5', numToKeepStr: '20']],
+        [$class: 'GithubProjectProperty', projectUrlStr: 'https://bitbucket.microchip.com/projects/UNGE/repos/sw-webstax-quagga-layer/'],
+//        [$class: 'ThrottleJobProperty', categories: [], limitOneJobWithMatchingParams: false, maxConcurrentPerNode: 0, maxConcurrentTotal: 1, paramsToUseForLimit: '', throttleEnabled: true, throttleOption: 'project']
+        ])
+
+node('blademaster') {
+    try {
+        stage("SCM Checkout") {
+            checkout([
+                $class: 'GitSCM',
+                branches: scm.branches,
+                doGenerateSubmoduleConfigurations: scm.doGenerateSubmoduleConfigurations,
+                extensions: scm.extensions + [[$class: 'CloneOption', noTags: false, reference: '/gitref/quagga.git', shallow: false]],
+                submoduleCfg: [],
+                userRemoteConfigs: scm.userRemoteConfigs
+            ])
+            sh "git reset --hard; git clean -ffdx"
+        }
+
+        currentBuild.result = 'SUCCESS' // updated by catchError if needed
+        step([$class: 'GitHubSetCommitStatusBuilder', statusMessage: [content: 'Build in progress']])
+        stage("Build") {
+            try {
+                // Use Docker to build. Details in .docker.env
+                sh "./docker-build-quagga.sh"
+            } catch (error) {
+                currentBuild.result = 'FAILURE'
+                throw error
+            } finally {
+                catchError { archive '*.tar.gz' }
+                catchError { archive 'status.json' }
+            }
+        }
+    } catch(error) {
+    } finally {
+        step([
+                $class: 'GitHubCommitStatusSetter',
+                errorHandlers: [[$class: 'ShallowAnyErrorHandler']],
+                statusResultSource: [
+                $class: 'ConditionalStatusResultSource',
+                results: [
+                [$class: 'BetterThanOrEqualBuildResult', result: 'SUCCESS', state: 'SUCCESS', message: currentBuild.description],
+                [$class: 'BetterThanOrEqualBuildResult', result: 'FAILURE', state: 'FAILURE', message: currentBuild.description],
+                [$class: 'AnyBuildResult', state: 'FAILURE', message: 'Loophole']
+                ]
+                ]
+        ])
+    }
+}
+
+if (currentBuild.result == 'SUCCESS') {
+    stage("Deploy input") {
+        timeout(time:5, unit:'DAYS') {
+            input message: "Deploy?"
+        }
+    }
+
+    node('master') {
+        stage("Publishing") {
+            sh "rm -rf *"
+            unarchive mapping: ['*' : '.']
+            VER = sh (
+                script: 'basename *.tar.gz .tar.gz',
+                returnStdout: true
+            ).trim()
+            manager.addShortText(VER)
+            sh "md5sum *.tar.gz status.json > files.md5"
+            sh "install -m 0755 -d /data/www/public_html/jenkins/frr/${VER}"
+            sh "install -m 0644 files.md5 *.tar.gz status.json /data/www/public_html/jenkins/frr/${VER}"
+        }
+    }
+}
+

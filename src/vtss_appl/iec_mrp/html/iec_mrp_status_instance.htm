@@ -1,0 +1,700 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Media Redundancy Protocol Detailed Status</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="iec_mrp_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_iec_mrp_status_instance.htm";
+
+var timerID;
+
+// Page Argument
+var pageArgs = searchArgs(window.location.search);
+
+var pageMrpId = 0;
+if (pageArgs["mrpid"]) {
+    pageMrpId = parseInt(pageArgs["mrpid"], 10);
+}
+
+var sourceLink = "iec_mrp_status.htm";
+
+if (pageArgs["source"]) { 
+    if ( pageArgs["source"] == "status" ) {
+        sourceLink = "iec_mrp_status.htm";
+    } else if (pageArgs["source"] == "config" ) {
+        sourceLink = "iec_mrp_ctrl.htm";
+    }
+}
+
+// Global variables
+var configDynamicTable, statusDynamicTable, statisDynamicTable, myCapabilities, myPortInfo;
+var oTPort = Array(), oVPort = Array();
+
+function redirectPage(recv_json)
+{
+    document.location.href = sourceLink;
+}
+
+function addStatusHeader(table_rows)
+{
+    var row = {
+        fields:[
+            {type:"disp_hdr",   params:["Oper", 1, 3]},
+            {type:"disp_hdr",   params:["Warning", 1, 3]},
+            {type:"disp_hdr",   params:["Flushes", 1, 3]},
+            {type:"disp_hdr",   params:["Ring", 6, 1]},
+            {type:"disp_hdr",   params:["Interconnection", 5, 1]}
+        ]
+    };
+    table_rows.push(row);
+
+    row = {
+        fields:[
+            {type:"disp_hdr",   params:["State", 1 ,2]},
+            {type:"disp_hdr",   params:["Transitions", 1,2]},
+            {type:"disp_hdr",   params:["Mrm-Mrc Transitions", 1, 2]},
+            {type:"disp_hdr",   params:["round-trip time (ms)", 3, 1]},
+            {type:"disp_hdr",   params:["State", 1 , 2]},
+            {type:"disp_hdr",   params:["Transitions", 1, 2]},
+            {type:"disp_hdr",   params:["round-trip time (ms)", 3, 1]}
+        ]
+    };
+    table_rows.push(row);
+
+    row = {
+        fields:[
+            {type:"disp_hdr",   params:["Min"]},
+            {type:"disp_hdr",   params:["Last"]},
+            {type:"disp_hdr",   params:["Max"]},
+            {type:"disp_hdr",   params:["Min"]},
+            {type:"disp_hdr",   params:["Last"]},
+            {type:"disp_hdr",   params:["Max"]}
+        ]
+    };
+    table_rows.push(row);
+
+}
+
+function addStatusRow(key, val)
+{
+    var operState = val.OperState == "active" ? true : false;
+    
+    // Only used if operational role (oper_role) is MRM.
+
+    var rtdValid = ( val.RoundTripLastUpdateSec !== 0  && val.OperRole == "manager"  && val.RoundTripValid ) ? true : false;
+
+    // Only used if in_role is MIM and in_mode is RC. config values val.InRole and val.InMode must be checked
+    var inRtdValid = (val.InRoundTripLastUpdateSec !== 0  && ( val.InRingState == "open" || val.InRingState == "closed" )) ? true : false;
+    var inRingStateDisabled = val.InRingState == "disabled" ? true : false;
+
+    var row = {
+        "key":key,
+        fields:[
+            {type:"image",  params:["c", operState ? "images/led-up.gif" : "images/led-down.gif"]},
+            {type:"image",  params:["c", val.OperWarnings ? "images/led-yellow.gif" : "images/led-off.gif", printOperWarnings(val.OperWarnings)]},
+            {type:"text",   params:[val.FdbFlushCnt, "c"]},
+            {type:"text",   params:[oTState[oVState.indexOf(val.RingState)], "c"]},
+            {type:"text",   params:[val.Transitions, "c"]},
+            {type:"text",   params:[val.MrmMrcTransitions, "c"]},
+            {type:"text",   params:[!rtdValid ? "-" : val.RoundTripMsecMin, "c"]},
+            {type:"text",   params:[!rtdValid ? "-" : val.RoundTripMaxLast, "c"]},
+            {type:"text",   params:[!rtdValid ? "-" : val.RoundTripMsecMax, "c"]},
+            {type:"text",   params:[oTState[oVState.indexOf(val.InRingState)], "c"]},
+            {type:"text",   params:[val.InTransitions, "c"]},
+            {type:"text",   params:[!inRtdValid ? "-" : val.InRoundTripMsecMin, "c"]},
+            {type:"text",   params:[!inRtdValid ? "-" : val.InRoundTripMaxLast, "c"]},
+            {type:"text",   params:[!inRtdValid ? "-" : val.InRoundTripMsecMax, "c"]}
+        ]
+    };
+    return row;
+}
+
+function addConfigHeader(table_rows)
+{
+    var row;
+    // 1st row
+    row = {fields:[
+             {type:"disp_hdr", params:["Inst #", 1, 3]},
+             {type:"disp_hdr", params:["Ring", 9, 1]},
+             {type:"disp_hdr", params:["Interconnection", 6, 1]},
+             {type:"disp_hdr", params:["Enable", 1, 3]}
+            ]
+          };
+    table_rows.push(row);
+
+    // 2nd row
+    row = {fields:[
+             {type:"disp_hdr", params:["Role", 1, 2]},
+             {type:"disp_hdr", params:["Domain", 2]},
+             {type:"disp_hdr", params:["Port1", 2]},
+             {type:"disp_hdr", params:["Port2", 2]},
+             {type:"disp_hdr", params:["Recovery Profile", 1, 2]},
+             {type:"disp_hdr", params:["VLAN", 1, 2]},
+             {type:"disp_hdr", params:["Role", 1, 2]},
+             {type:"disp_hdr", params:["Name", 1, 2]},
+             {type:"disp_hdr", params:["Port", 1, 2]},
+             {type:"disp_hdr", params:["SF", 1, 2]},
+             {type:"disp_hdr", params:["Recovery Profile", 1, 2]},
+             {type:"disp_hdr", params:["VLAN", 1, 2]}
+            ]
+          };
+    table_rows.push(row);
+
+    // 3rd row
+    row = {fields:[
+             {type:"disp_hdr", params:["Name"]},
+             {type:"disp_hdr", params:["Id"]},
+             {type:"disp_hdr", params:["Port"]},
+             {type:"disp_hdr", params:["SF"]},
+             {type:"disp_hdr", params:["Port"]},
+             {type:"disp_hdr", params:["SF"]}
+            ]
+          };
+
+    table_rows.push(row);
+}
+
+
+function addConfigRow(key, val)
+{
+    var row = {
+        "key":key,
+        fields:[
+            {type:"text",   params:[key, "c"]},
+            {type:"text",   params:[oTRole[oVRole.indexOf(val.Role)], "c"]},
+            {type:"text",   params:[val.DomainName, "c"]},
+            {type:"text",   params:[val.DomainId, "c"]},
+            {type:"text",   params:[val.RingPort1Interface === "NONE" ? "none" : oTPort[oVPort.indexOf(val.RingPort1Interface)], "c"]},
+            {type:"text",   params:[oTSfTrigger[oVSfTrigger.indexOf(val.RingPort1SfTrigger)], "c"]},
+            {type:"text",   params:[val.RingPort2Interface === "NONE" ? "none" : oTPort[oVPort.indexOf(val.RingPort2Interface)], "c"]},
+            {type:"text",   params:[oTSfTrigger[oVSfTrigger.indexOf(val.RingPort2SfTrigger)], "c"]},
+            {type:"text",   params:[oTRecoveryProfile[oVRecoveryProfile.indexOf(val.RecoveryProfile)], "c"]},
+            {type:"text",   params:[val.Vid, "c"]},
+            {type:"text",   params:[oTInRole[oVInRole.indexOf(val.InRole)], "c"]},
+            {type:"text",   params:[val.InName, "c"]},
+            {type:"text",   params:[val.InPortInterface === "NONE" ? "none" : oTPort[oVPort.indexOf(val.InPortInterface)], "c"]},
+            {type:"text",   params:[oTSfTrigger[oVSfTrigger.indexOf(val.InPortSfTrigger)], "c"]},
+            {type:"text",   params:[oTInRecoveryProfile[oVInRecoveryProfile.indexOf(val.InRecoveryProfile)], "c"]},
+            {type:"text",   params:[val.InVid, "c"]},
+            {type:"image",  params:["c", val.AdminActive ? "images/yes.gif" : "images/no.gif"]}
+           ]
+    };
+    return row;
+}
+
+function addStatisHeader(table_rows)
+{
+    var row;
+    row = {fields:[
+        {type:"disp_hdr",  params:["Counter"]},
+        {type:"disp_hdr",  params:["Port 1"]},
+        {type:"disp_hdr",  params:["Port 2"]},
+        {type:"disp_hdr",  params:["Interconnection"]}
+    ]
+    };
+    table_rows.push(row);
+}
+
+function addStatisRowsBuild(key, val, table_rows)
+{
+
+    var inDisable = val.InRingState == "enabled" ? false : true;
+
+    var row = {fields:[
+    {type:"conf_hdr",   params:["Rx Test"]},
+    {type:"text",       params:[val.Port1RxTestCnt, "c"]},
+    {type:"text",       params:[val.Port2RxTestCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxTestCnt , "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx TopologyChange"]},
+    {type:"text",       params:[val.Port1RxTopologyChangeCnt, "c"]},
+    {type:"text",       params:[val.Port2RxTopologyChangeCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxTopologyChangeCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx LinkDown"]},
+    {type:"text",       params:[val.Port1RxLinkDownCnt, "c"]},
+    {type:"text",       params:[val.Port2RxLinkDownCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxLinkDownCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx LinkUp"]},
+    {type:"text",       params:[val.Port1RxLinkUpCnt, "c"]},
+    {type:"text",       params:[val.Port2RxLinkUpCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxLinkUpCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx TestMgrNAck"]},
+    {type:"text",       params:[val.Port1RxTestMgrNAckCnt, "c"]},
+    {type:"text",       params:[val.Port2RxTestMgrNAckCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxTestMgrNAckCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx TestPropagate"]},
+    {type:"text",       params:[val.Port1RxTestPropagateCnt, "c"]},
+    {type:"text",       params:[val.Port2RxTestPropagateCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxTestPropagateCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx Option"]},
+    {type:"text",       params:[val.Port1RxOptionCnt, "c"]},
+    {type:"text",       params:[val.Port2RxOptionCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxOptionCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx InTest"]},
+    {type:"text",       params:[val.Port1RxInTestCnt, "c"]},
+    {type:"text",       params:[val.Port2RxInTestCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxInTestCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx InTopologyChange"]},
+    {type:"text",       params:[val.Port1RxInTopologyChangeCnt, "c"]},
+    {type:"text",       params:[val.Port2RxInTopologyChangeCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxInTopologyChangeCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx InLinkDown"]},
+    {type:"text",       params:[val.Port1RxInLinkDownCnt, "c"]},
+    {type:"text",       params:[val.Port2RxInLinkDownCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxInLinkDownCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx InLinkUp"]},
+    {type:"text",       params:[val.Port1RxInLinkUpCnt, "c"]},
+    {type:"text",       params:[val.Port2RxInLinkUpCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxInLinkUpCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx InLinkStatusPoll"]},
+    {type:"text",       params:[val.Port1RxInLinkStatusPollCnt, "c"]},
+    {type:"text",       params:[val.Port2RxInLinkStatusPollCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxInLinkStatusPollCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx Unknown"]},
+    {type:"text",       params:[val.Port1RxUnknownCnt, "c"]},
+    {type:"text",       params:[val.Port2RxUnknownCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxUnknownCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx Errors"]},
+    {type:"text",       params:[val.Port1RxErrCnt, "c"]},
+    {type:"text",       params:[val.Port2RxErrCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxErrCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx Unhandled"]},
+    {type:"text",       params:[val.Port1RxUnhandledCnt, "c"]},
+    {type:"text",       params:[val.Port2RxUnhandledCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxUnhandledCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Rx Own"]},
+    {type:"text",       params:[val.Port1RxOwnCnt, "c"]},
+    {type:"text",       params:[val.Port2RxOwnCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InRxOwnCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx Test"]},
+    {type:"text",       params:[val.Port1TxTestCnt, "c"]},
+    {type:"text",       params:[val.Port2TxTestCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxTestCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx TopologyChange"]},
+    {type:"text",       params:[val.Port1TxTopologyChangeCnt, "c"]},
+    {type:"text",       params:[val.Port2TxTopologyChangeCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxTopologyChangeCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx LinkDown"]},
+    {type:"text",       params:[val.Port1TxLinkDownCnt, "c"]},
+    {type:"text",       params:[val.Port2TxLinkDownCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxLinkDownCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx LinkUp"]},
+    {type:"text",       params:[val.Port1TxLinkUpCnt, "c"]},
+    {type:"text",       params:[val.Port2TxLinkUpCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxLinkUpCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx TestMgrNAck"]},
+    {type:"text",       params:[val.Port1TxTestMgrNAckCnt, "c"]},
+    {type:"text",       params:[val.Port2TxTestMgrNAckCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxTestMgrNAckCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx TestPropagate"]},
+    {type:"text",       params:[val.Port1TxTestPropagateCnt, "c"]},
+    {type:"text",       params:[val.Port2TxTestPropagateCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxTestPropagateCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx Option"]},
+    {type:"text",       params:[val.Port1TxOptionCnt, "c"]},
+    {type:"text",       params:[val.Port2TxOptionCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxOptionCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx InTest"]},
+    {type:"text",       params:[val.Port1TxInTestCnt, "c"]},
+    {type:"text",       params:[val.Port2TxInTestCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxInTestCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx InTopologyChange"]},
+    {type:"text",       params:[val.Port1TxInTopologyChangeCnt, "c"]},
+    {type:"text",       params:[val.Port2TxInTopologyChangeCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxInTopologyChangeCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx InLinkDown"]},
+    {type:"text",       params:[val.Port1TxInLinkDownCnt, "c"]},
+    {type:"text",       params:[val.Port2TxInLinkDownCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxInLinkDownCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx InLinkUp"]},
+    {type:"text",       params:[val.Port1TxInLinkUpCnt, "c"]},
+    {type:"text",       params:[val.Port2TxInLinkUpCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxInLinkUpCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Tx InLinkStatusPoll"]},
+    {type:"text",       params:[val.Port1TxInLinkStatusPollCnt, "c"]},
+    {type:"text",       params:[val.Port2TxInLinkStatusPollCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InTxInLinkStatusPollCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    row = {fields:[
+    {type:"conf_hdr",   params:["Signal Fails"]},
+    {type:"text",       params:[val.Port1SfCnt, "c"]},
+    {type:"text",       params:[val.Port2SfCnt, "c"]},
+    {type:"text",       params:[inDisable ? "-" : val.InSfCnt, "c"]}
+    ]
+    };
+    table_rows.push(row);
+
+    return row;
+}
+
+function addConfigRows(recv_json)
+{
+    var table_rows = new Array();
+    addConfigHeader(table_rows);
+    table_rows.push(addConfigRow(recv_json.key, recv_json.val));
+    return table_rows;
+}
+
+function addStatusRows(recv_json)
+{
+    var table_rows = new Array();
+    addStatusHeader(table_rows);
+    table_rows.push(addStatusRow(recv_json.key, recv_json.val));
+    return table_rows;
+}
+
+function addStatisRows(recv_json)
+{
+    var table_rows = new Array();
+    addStatisHeader(table_rows);
+    addStatisRowsBuild(recv_json.key, recv_json.val, table_rows);
+    return table_rows;
+}
+
+function processUpdate(recv_json, name)
+{
+    var record = null;
+    var i;
+    var table_rows;
+
+    if (pageMrpId) {
+        for (i = 0; i < recv_json.length; i++) {
+            if (pageMrpId == recv_json[i].key) {
+                record = recv_json[i];
+                break;
+            }
+        }
+        // Redirect page if this ID doesn't exist.
+        if (!record) {
+            alert("Inst #" + pageMrpId + " no data found");
+            redirectPage();
+            return;
+        }
+    } else {
+        // Redirect page if this ID doesn't exist.
+        alert("Inst #" + pageMrpId + " does not exist.");
+        redirectPage();
+        return;
+    }
+
+    if (name == "config") {
+        table_rows = addConfigRows(record);
+        configDynamicTable.addRows(table_rows);
+        configDynamicTable.saveRecvJson(name, record); // Save values, so they can be checked by the status page
+        configDynamicTable.update();
+    } else {
+        table_rows = addStatusRows(record);
+        statusDynamicTable.addRows(table_rows);
+        statusDynamicTable.update();
+        table_rows = addStatisRows(record);
+        statisDynamicTable.addRows(table_rows);
+        statisDynamicTable.update();
+    }
+
+    var autorefresh = $('autorefresh');
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdateStatus()', settingsRefreshInterval());
+    }
+}
+
+function requestUpdateStatus(recv_json, name)
+{
+    // Restore status table content 
+    statusDynamicTable.restore();
+
+    requestJsonDoc("iecMrp.status.get", null, processUpdate, "status");
+}
+
+function requestUpdate(recv_json, name)
+{
+    // Restore table content 
+    configDynamicTable.restore();
+    statusDynamicTable.restore();
+    statisDynamicTable.restore();
+
+    // This table requires one JSON data.
+    requestJsonDoc("iecMrp.config.get", null, processUpdate, "config");
+    requestJsonDoc("iecMrp.status.get", null, processUpdate, "status");
+}
+
+function chkRefresh(fld)
+{
+  if (!fld.checked) {
+    if (timerID) {
+      clearTimeout(timerID);
+    }
+    timerID = null;
+  } else {
+    requestUpdate(null, "refresh");
+  }
+}
+
+function resetCounters()
+{
+    var val = true;
+    var submit_json = [pageMrpId, val ];
+    requestJsonDoc("iecMrp.control.statisticsClear.set", submit_json, requestUpdateStatus);
+}
+
+function clickBack()
+{
+    document.location.href = sourceLink;
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = configDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            oTPort.push("none");
+            oVPort.push("NONE");
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    }
+     // This table requires two JSON data.
+    if (myCapabilities && myPortInfo) {
+        requestUpdate();
+    }
+}
+
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    configDynamicTable = new DynamicTable("configTableContent", "display");
+    statusDynamicTable = new DynamicTable("statusTableContent", "display");
+    statisDynamicTable = new DynamicTable("statisTableContent", "display");
+
+    // This table requires two JSON data(capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requrested only one time.
+    requestJsonDoc("iecMrp.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>Media Redundancy Protocol Status</h1>
+
+<form id="myTablesForm" action="">
+
+<h2>Configuration</h2>
+<div id="configTableContent"></div>
+    
+<h2>Status</h2>
+<div class="refreshbar">
+    <label for="autorefresh">Auto-refresh</label>
+    <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+    <input type="button" value="Refresh" onClick='requestUpdate(); this.blur();'>
+    <img id="update" alt="" src="images/updating.gif">
+</div>
+<div id="statusTableContent"></div>
+
+
+<h2>Counters</h2>
+<div id="statisTableContent"></div>
+
+<p>
+  <input type="button" value="Reset Counters" onclick="resetCounters();">
+</p>
+
+</form>
+
+
+</body>
+</html>

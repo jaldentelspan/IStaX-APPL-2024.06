@@ -1,0 +1,2586 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include <vtss/appl/erps.h>         /* For vtss_appl_erps_XXX()                  */
+#include "erps_api.h"               /* For erps_util_XXX()                       */
+#include "cfm_api.h"                /* For cfm_util_XXX()                        */
+#include "mac_utils.hxx"            /* For operator== on mesa_mac_t              */
+#include "misc_api.h"               /* For iport2uport()                         */
+#include "vlan_api.h"               /* For vlan_mgmt_XXX()                       */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include ERPS' trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "erps_trace.h"
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define ERPS_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// ERPS_ICFG_ring_type_conf_print()
+/******************************************************************************/
+static mesa_rc ERPS_ICFG_ring_type_conf_print(uint32_t inst, vtss_icfg_conf_print_t &conf_print, vtss_appl_erps_conf_t *conf, vtss_appl_erps_conf_t *default_conf)
+{
+    char buf1[30], buf2[30], buf3[30];
+
+    // ring-type {major | sub-ring [virtual-channel] | interconnected-sub-ring connected-ring <uint> [virtual-channel] [propagate-topology-change]}
+    buf1[0] = '\0';
+    buf2[0] = '\0';
+    buf3[0] = '\0';
+
+    if (conf->ring_type == VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB) {
+        sprintf(buf1, " connected-ring %u", conf->interconnect_conf.connected_ring_inst);
+
+        if (conf->interconnect_conf.tc_propagate) {
+            strcpy(buf3, " propagate-topology-change");
+        }
+    }
+
+    if (conf->ring_type == VTSS_APPL_ERPS_RING_TYPE_SUB || conf->ring_type == VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB) {
+        if (conf->virtual_channel) {
+            strcpy(buf2, " virtual-channel");
+        }
+    }
+
+    conf_print.is_default = conf->ring_type == default_conf->ring_type;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "ring-type", "%s%s%s%s", erps_util_ring_type_to_str(conf->ring_type), buf1, buf2, buf3));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// ERPS_ICFG_ring_port_conf_print()
+/******************************************************************************/
+static mesa_rc ERPS_ICFG_ring_port_conf_print(uint32_t inst, vtss_icfg_conf_print_t &conf_print, vtss_appl_erps_conf_t *conf, vtss_appl_erps_conf_t *default_conf, vtss_appl_erps_ring_port_t ring_port, int what)
+{
+    vtss_appl_erps_ring_port_conf_t *ring_port_conf         = &conf->ring_port_conf[ring_port];
+    vtss_appl_erps_ring_port_conf_t *default_ring_port_conf = &default_conf->ring_port_conf[ring_port];
+    vtss_ifindex_elm_t              ife;
+    char                            buf[100], cmd[50];
+    bool                            empty;
+    mesa_rc                         rc;
+
+    if (!erps_util_using_ring_port_conf(conf, ring_port)) {
+        // We are not using port1, except if this is an interconnected sub-ring
+        // with virtual channel, where the SMAC may be overridden.
+        if (!conf->virtual_channel || what != 2) {
+            // Nothing to print
+            return VTSS_RC_OK;
+        }
+    }
+
+    switch (what) {
+    case 0:
+        // Print interface
+        sprintf(cmd, "%s interface", erps_util_ring_port_to_str(ring_port));
+        if ((rc = vtss_appl_ifindex_port_configurable(ring_port_conf->ifindex, &ife)) != VTSS_RC_OK) {
+            T_EG(ERPS_TRACE_GRP_ICLI, "%u: Unable to decompose %s ifindex %u", inst, erps_util_ring_port_to_str(ring_port), VTSS_IFINDEX_PRINTF_ARG(ring_port_conf->ifindex));
+            return rc;
+        }
+
+        conf_print.is_default = false;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), buf)));
+        break;
+
+    case 1:
+        // Print sf-trigger
+        sprintf(cmd, "%s sf-trigger", erps_util_ring_port_to_str(ring_port));
+
+        switch (ring_port_conf->sf_trigger) {
+        case VTSS_APPL_ERPS_SF_TRIGGER_LINK:
+            conf_print.is_default = ring_port_conf->sf_trigger == default_ring_port_conf->sf_trigger;
+            VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", erps_util_sf_trigger_to_str(ring_port_conf->sf_trigger)));
+            break;
+
+        case VTSS_APPL_ERPS_SF_TRIGGER_MEP:
+            VTSS_RC(cfm_util_key_check(ring_port_conf->mep, &empty));
+            if (empty) {
+                T_EG(ERPS_TRACE_GRP_ICLI, "%u: Internal error: %s: SF trigger is %s, but MEP config is empty (%s)", inst, erps_util_ring_port_to_str(ring_port), erps_util_sf_trigger_to_str(ring_port_conf->sf_trigger), ring_port_conf->mep);
+                return VTSS_APPL_ERPS_RC_INTERNAL_ERROR;
+            }
+
+            VTSS_RC(vtss_icfg_printf(conf_print.result, " %s mep domain %s service %s mep-id %d\n", cmd, ring_port_conf->mep.md.c_str(), ring_port_conf->mep.ma.c_str(), ring_port_conf->mep.mepid));
+            break;
+
+        default:
+            T_EG(ERPS_TRACE_GRP_ICLI, "%u: Invalid sf-trigger for %s (%d)", inst, erps_util_ring_port_to_str(ring_port), ring_port_conf->sf_trigger);
+            return VTSS_APPL_ERPS_RC_INTERNAL_ERROR;
+        }
+
+        break;
+
+    case 2:
+        // Print SMAC
+        sprintf(cmd, "%s smac", erps_util_ring_port_to_str(ring_port));
+
+        // Using operator== from ip_utils.hxx
+        conf_print.is_default = ring_port_conf->smac == default_ring_port_conf->smac;
+        conf_print.force_no_keyword = true;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", misc_mac_txt(ring_port_conf->smac.addr, buf)));
+        conf_print.force_no_keyword = false;
+        break;
+
+    default:
+        T_EG(ERPS_TRACE_GRP_ICLI, "%u: Internal error: No support for what = %d on %s", inst, what, erps_util_ring_port_to_str(ring_port));
+        return VTSS_APPL_ERPS_RC_INTERNAL_ERROR;
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// ERPS_ICFG_conf_print()
+/******************************************************************************/
+static mesa_rc ERPS_ICFG_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    uint32_t                   inst;
+    vtss_icfg_conf_print_t     conf_print;
+    vtss_appl_erps_conf_t      conf, default_conf;
+    vtss_appl_erps_ring_port_t ring_port;
+    char                       buf[100], vid_str[VLAN_VID_LIST_AS_STRING_LEN_BYTES];
+    int                        what;
+
+    // Format:
+    // erps <1-max>
+    //  version {v1 | v2}
+    //  ring-type {major | sub-ring [virtual-channel] | interconnected-sub-ring connected-ring <uint> [virtual-channel] [propagate-topology-change]}
+    //  ring-id <1-239>
+    //  node-id <mac_ucast>
+    //  [no] rpl {owner | neighbor} {port0 | port1}
+    //  port0 interface <port_type_id>
+    //  port1 interface <port_type_id>
+    //  port0 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    //  port1 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+    //  [no] port0 smac <mac_ucast>
+    //  [no] port1 smac <mac_ucast>
+    //  control-vlan <vlan_id> [pcp <0-7>]
+    //  level <0-7>
+    //  [no] protected-vlans <vlan_list>
+    //  [no] revertive
+    //  wait-to-restore <uint>
+    //  guard-time <uint>
+    //  hold-off-time <uint>
+    //  admin-state {enable | disable}
+
+    if (req->cmd_mode != ICLI_CMD_MODE_ERPS) {
+        T_EG(ERPS_TRACE_GRP_ICLI, "Invalid cmd_mode (%d). Expected %d", req->cmd_mode, ICLI_CMD_MODE_ERPS);
+        return VTSS_RC_OK;
+    }
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+
+    inst = req->instance_id.generic_u32;
+
+    VTSS_RC(vtss_appl_erps_conf_default_get(&default_conf));
+    VTSS_RC(vtss_appl_erps_conf_get(inst, &conf));
+
+    conf_print.is_default = conf.version == default_conf.version;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "version", "%s", erps_util_version_to_str(conf.version)));
+
+    VTSS_RC(ERPS_ICFG_ring_type_conf_print(inst, conf_print, &conf, &default_conf));
+
+    conf_print.is_default = conf.ring_id == default_conf.ring_id;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "ring-id", "%u", conf.ring_id));
+
+    // Using operator== from ip_utils.hxx
+    conf_print.is_default = conf.node_id == default_conf.node_id;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "node-id", "%s", misc_mac_txt(conf.node_id.addr, buf)));
+    conf_print.force_no_keyword = false;
+
+    if (conf.rpl_mode == VTSS_APPL_ERPS_RPL_MODE_NONE) {
+        // No particular port in this mode
+        buf[0] = '\0';
+    } else {
+        sprintf(buf, " %s", erps_util_ring_port_to_str(conf.rpl_port));
+    }
+
+    conf_print.force_no_keyword = true;
+    conf_print.is_default = conf.rpl_mode == default_conf.rpl_mode;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "rpl", "%s%s", erps_util_rpl_mode_to_str(conf.rpl_mode), buf));
+    conf_print.force_no_keyword = false;
+
+    for (what = 0; what < 3; what++) {
+        for (ring_port = VTSS_APPL_ERPS_RING_PORT0; ring_port <= VTSS_APPL_ERPS_RING_PORT1; ring_port++) {
+            VTSS_RC(ERPS_ICFG_ring_port_conf_print(inst, conf_print, &conf, &default_conf, ring_port, what));
+        }
+    }
+
+    conf_print.is_default = conf.control_vlan == default_conf.control_vlan && conf.pcp == default_conf.pcp;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "control-vlan", "%u pcp %u", conf.control_vlan, conf.pcp));
+
+    conf_print.is_default = conf.level == default_conf.level;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "level", "%u", conf.level));
+
+    conf_print.force_no_keyword = true;
+    conf_print.is_default = vlan_mgmt_bitmasks_identical(conf.protected_vlans, default_conf.protected_vlans);
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "protected-vlans", "%s", vlan_mgmt_vid_bitmask_to_txt(conf.protected_vlans, vid_str)));
+    conf_print.force_no_keyword = false;
+
+    // The "no" keyword cannot be printed with vtss_icfg_conf_print() unless
+    // it's the default and "all-defaults" keyword is specified on the
+    // "show runnning-config" line, so if "no revertive" is not the default, we
+    // cannot use vtss_icfg_conf_print() to do the printing.
+    if (req->all_defaults || conf.revertive != default_conf.revertive) {
+        VTSS_RC(vtss_icfg_printf(result, " %srevertive\n", conf.revertive ? "" : "no "));
+    }
+
+    conf_print.is_default = conf.wtr_secs == default_conf.wtr_secs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "wait-to-restore", "%u", conf.wtr_secs));
+
+    conf_print.is_default = conf.guard_time_msecs == default_conf.guard_time_msecs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "guard-time", "%u", conf.guard_time_msecs));
+
+    conf_print.is_default = conf.hold_off_msecs == default_conf.hold_off_msecs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "hold-off-time", "%u", conf.hold_off_msecs));
+
+    conf_print.is_default = conf.admin_active == default_conf.admin_active;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "admin-state", "%s", conf.admin_active ? "enable" : "disable"));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// erps_icfg_init()
+/******************************************************************************/
+mesa_rc erps_icfg_init(void)
+{
+    return vtss_icfg_query_register(VTSS_ICFG_ERPS, "erps", ERPS_ICFG_conf_print);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+/******************************************************************************/
+// ERPS_ICLI_do_instance_range()
+/******************************************************************************/
+static BOOL ERPS_ICLI_do_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing)
+{
+    vtss_appl_erps_capabilities_t cap;
+    uint32_t                      prev_inst, inst, cnt;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_erps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_erps_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 64;
+    }
+
+    // Add the default range first.
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    if (!include_existing) {
+        return TRUE;
+    }
+
+    prev_inst = 0;
+    while (vtss_appl_erps_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_instance_range()
+/******************************************************************************/
+static BOOL ERPS_ICLI_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return ERPS_ICLI_do_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// ERPS_ICLI_existing_instance_range()
+/******************************************************************************/
+static BOOL ERPS_ICLI_existing_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return ERPS_ICLI_do_instance_range(session_id, ask, runtime, true);
+}
+
+/******************************************************************************/
+// ERPS_ICLI_wait_to_restore_range()
+/******************************************************************************/
+static BOOL ERPS_ICLI_wait_to_restore_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_erps_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_erps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_erps_capabilities_get() failed: %s", error_txt(rc));
+        cap.wtr_secs_max = 720;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1;
+    runtime->range.u.sr.range[0].min = 1;
+    runtime->range.u.sr.range[0].max = cap.wtr_secs_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_guard_time_range()
+/******************************************************************************/
+static BOOL ERPS_ICLI_guard_time_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_erps_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_erps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_erps_capabilities_get() failed: %s", error_txt(rc));
+        cap.guard_time_msecs_max = 2000;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1;
+    runtime->range.u.sr.range[0].min = 0;
+    runtime->range.u.sr.range[0].max = cap.guard_time_msecs_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_hold_off_time_range()
+/******************************************************************************/
+static BOOL ERPS_ICLI_hold_off_time_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_erps_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_erps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_erps_capabilities_get() failed: %s", error_txt(rc));
+        cap.hold_off_msecs_max = 10000;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1;
+    runtime->range.u.sr.range[0].min = 0;
+    runtime->range.u.sr.range[0].max = cap.hold_off_msecs_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_is_not_interconnected_sub_ring()
+/******************************************************************************/
+static BOOL ERPS_ICLI_is_not_interconnected_sub_ring(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_erps_conf_t conf;
+    uint32_t              inst;
+    icli_cmd_mode_t       cmd_mode;
+    icli_variable_value_t v;
+    icli_rc_t             icli_rc;
+    mesa_rc               rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // Get the ERPS instance number we are currently configuring.
+    if ((icli_rc = (icli_rc_t)vtss_icli_session_mode_para_get(session_id, &cmd_mode, &v)) != ICLI_RC_OK) {
+        T_EG(ERPS_TRACE_GRP_ICLI, "Unable to get current command mode");
+        return FALSE;
+    }
+
+    if (cmd_mode != ICLI_CMD_MODE_ERPS) {
+        T_EG(ERPS_TRACE_GRP_ICLI, "Expected command mode to be ERPS (%d), but got %d", ICLI_CMD_MODE_ERPS, cmd_mode);
+        return FALSE;
+    }
+
+    inst = v.u.u_range_uint;
+
+    if ((rc = vtss_appl_erps_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_EG(ERPS_TRACE_GRP_ICLI, "vtss_appl_erps_conf_get(%u) failed", inst);
+        return FALSE;
+    }
+
+    runtime->present = conf.ring_type != VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB;
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_is_not_interconnected_sub_ring_or_has_virtual_channel()
+/******************************************************************************/
+static BOOL ERPS_ICLI_is_not_interconnected_sub_ring_or_has_virtual_channel(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_erps_conf_t conf;
+    uint32_t              inst;
+    icli_cmd_mode_t       cmd_mode;
+    icli_variable_value_t v;
+    icli_rc_t             icli_rc;
+    mesa_rc               rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // Get the ERPS instance number we are currently configuring.
+    if ((icli_rc = (icli_rc_t)vtss_icli_session_mode_para_get(session_id, &cmd_mode, &v)) != ICLI_RC_OK) {
+        T_EG(ERPS_TRACE_GRP_ICLI, "Unable to get current command mode");
+        return FALSE;
+    }
+
+    if (cmd_mode != ICLI_CMD_MODE_ERPS) {
+        T_EG(ERPS_TRACE_GRP_ICLI, "Expected command mode to be ERPS (%d), but got %d", ICLI_CMD_MODE_ERPS, cmd_mode);
+        return FALSE;
+    }
+
+    inst = v.u.u_range_uint;
+
+    if ((rc = vtss_appl_erps_conf_get(inst, &conf)) != VTSS_RC_OK) {
+        T_EG(ERPS_TRACE_GRP_ICLI, "vtss_appl_erps_conf_get(%u) failed", inst);
+        return FALSE;
+    }
+
+    runtime->present = conf.ring_type != VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB || conf.virtual_channel;
+
+    return TRUE;
+}
+
+
+/******************************************************************************/
+// ERPS_ICLI_bool_to_yes_no()
+/******************************************************************************/
+static const char *ERPS_ICLI_bool_to_yes_no(bool val)
+{
+    return val ? "Yes" : "No";
+}
+
+/******************************************************************************/
+// ERPS_ICLI_bool_to_yes_no_dash()
+/******************************************************************************/
+static const char *ERPS_ICLI_bool_to_yes_no_dash(vtss_appl_erps_conf_t &conf, bool val)
+{
+    return conf.ring_type == VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB  && !conf.virtual_channel ? "-" : val ? "Yes" : "No";
+}
+
+/******************************************************************************/
+// ERPS_ICLI_secs_ago()
+/******************************************************************************/
+static char *ERPS_ICLI_secs_ago(vtss_appl_erps_raps_info_t &raps_info, uint64_t now_secs, char *str)
+{
+    if (raps_info.update_time_secs == 0) {
+        // Never been updated
+        strcpy(str, "-");
+    } else {
+        sprintf(str, VPRI64u, now_secs - raps_info.update_time_secs);
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_version_to_str()
+/******************************************************************************/
+static char *ERPS_ICLI_version_to_str(vtss_appl_erps_raps_info_t &raps_info, char *str)
+{
+    if (raps_info.update_time_secs == 0) {
+        // Never been updated
+        strcpy(str, "-");
+    } else {
+        sprintf(str, "%u (G.8032v%u)", raps_info.version, raps_info.version + 1);
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_bpr_to_str()
+/******************************************************************************/
+static char *ERPS_ICLI_bpr_to_str(vtss_appl_erps_raps_info_t &raps_info, char *str, bool active = true)
+{
+    if (!active || raps_info.update_time_secs == 0) {
+        // Should not be displayed or never been updated
+        strcpy(str, "-");
+    } else {
+        sprintf(str, "%s", erps_util_ring_port_to_str(raps_info.bpr));
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_mac_to_str()
+/******************************************************************************/
+static char *ERPS_ICLI_mac_to_str(vtss_appl_erps_raps_info_t &raps_info, mesa_mac_t *mac, char *str)
+{
+    if (raps_info.update_time_secs == 0) {
+        // Never been updated
+        strcpy(str, "-");
+    } else {
+        return misc_mac_txt(mac->addr, str);
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_node_id_to_str()
+/******************************************************************************/
+static char *ERPS_ICLI_node_id_to_str(vtss_appl_erps_raps_info_t &raps_info, char *str)
+{
+    return ERPS_ICLI_mac_to_str(raps_info, &raps_info.node_id, str);
+}
+
+/******************************************************************************/
+// ERPS_ICLI_smac_to_str()
+/******************************************************************************/
+static char *ERPS_ICLI_smac_to_str(vtss_appl_erps_raps_info_t &raps_info, char *str)
+{
+    return ERPS_ICLI_mac_to_str(raps_info, &raps_info.smac, str);
+}
+
+/******************************************************************************/
+// ERPS_ICLI_show_erps_status()
+/******************************************************************************/
+static void ERPS_ICLI_show_erps_status(u32 session_id, uint32_t inst, vtss_appl_erps_conf_t &conf, vtss_appl_erps_status_t &status, vtss_appl_erps_control_t &ctrl, bool first_print, bool has_details)
+{
+    vtss_appl_erps_ring_port_t        ring_port;
+    vtss_appl_erps_ring_port_status_t &s0  = status.ring_port_status[VTSS_APPL_ERPS_RING_PORT0];
+    vtss_appl_erps_ring_port_status_t &s1  = status.ring_port_status[VTSS_APPL_ERPS_RING_PORT1];
+    vtss_appl_erps_raps_info_t        &rx0 = s0.rx_raps_info;
+    vtss_appl_erps_raps_info_t        &rx1 = s1.rx_raps_info;
+    vtss_appl_erps_raps_info_t        &tx  = status.tx_raps_info;
+    vtss_ifindex_elm_t                ife;
+    uint64_t                          now_secs;
+    char                              defect_buf[10];
+    char                              interface_str[2][ICLI_PORTING_STR_BUF_SIZE];
+    char                              on_port_x_str[12];
+    char                              connected_ring_inst_str[50];
+    char                              virtual_channel_str[10];
+    char                              vid_str[VLAN_VID_LIST_AS_STRING_LEN_BYTES];
+    char                              tx_str[26], rx0_str[26], rx1_str[26];
+    bool                              tx_act;
+    const int                         width = 25, c_width = 25, p_width = 17;
+
+    if (has_details) {
+        ICLI_PRINTF("\n--------------------------------------------------------------------------------------\n");
+
+        for (ring_port = VTSS_APPL_ERPS_RING_PORT0; ring_port <= VTSS_APPL_ERPS_RING_PORT1; ring_port++) {
+            if (erps_util_using_ring_port_conf(&conf, ring_port)) {
+                // Convert ifindex to something that ICLI can understand.
+                if (vtss_appl_ifindex_port_configurable(conf.ring_port_conf[ring_port].ifindex, &ife) != VTSS_RC_OK) {
+                    T_EG(ERPS_TRACE_GRP_ICLI, "%u: Unable to decompose ifindex %u", inst, VTSS_IFINDEX_PRINTF_ARG(conf.ring_port_conf[ring_port].ifindex));
+                    return;
+                }
+
+                (void)icli_port_info_txt_short(ife.usid, iport2uport(ife.ordinal), interface_str[ring_port]);
+            } else {
+                strcpy(interface_str[ring_port], "N/A");
+            }
+        }
+
+        switch (conf.rpl_mode) {
+        case VTSS_APPL_ERPS_RPL_MODE_OWNER:
+        case VTSS_APPL_ERPS_RPL_MODE_NEIGHBOR:
+            sprintf(on_port_x_str, " on %s", erps_util_ring_port_to_str(conf.rpl_port));
+            break;
+
+        default:
+            on_port_x_str[0] = '\0';
+            break;
+        }
+
+        if (conf.ring_type == VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB) {
+            sprintf(connected_ring_inst_str, "%u %s topology change propagation", conf.interconnect_conf.connected_ring_inst, conf.interconnect_conf.tc_propagate ? "with" : "without");
+        } else {
+            strcpy(connected_ring_inst_str, "N/A");
+        }
+
+        if (conf.ring_type == VTSS_APPL_ERPS_RING_TYPE_MAJOR) {
+            strcpy(virtual_channel_str, "N/A");
+        } else {
+            sprintf(virtual_channel_str, "%s", conf.virtual_channel ? "Enabled" : "Disabled");
+        }
+
+        ICLI_PRINTF("%-*s %u\n",   width, "Instance:",                inst);
+        ICLI_PRINTF("%-*s %s\n",   width, "Operational state:",       erps_util_oper_state_to_str(status.oper_state));
+        ICLI_PRINTF("%-*s %s\n",   width, "Operational warning:",     erps_util_oper_warning_to_str(status.oper_warning));
+        ICLI_PRINTF("%-*s %s\n",   width, "Node state:",              erps_util_node_state_to_str(status.node_state));
+        ICLI_PRINTF("%-*s %s\n",   width, "Ring type:",               erps_util_ring_type_to_str(conf.ring_type, true));
+        ICLI_PRINTF("%-*s %u\n",   width, "Ring ID:",                 conf.ring_id);
+        ICLI_PRINTF("%-*s %u\n",   width, "Level:",                   conf.level);
+        ICLI_PRINTF("%-*s %u\n",   width, "Control VLAN:",            conf.control_vlan);
+        ICLI_PRINTF("%-*s %s\n",   width, "Protected VLANs:",         vlan_mgmt_vid_bitmask_to_txt(conf.protected_vlans, vid_str));
+        ICLI_PRINTF("%-*s %s%s\n", width, "RPL role:",                erps_util_rpl_mode_to_str(conf.rpl_mode, true), on_port_x_str);
+        ICLI_PRINTF("%-*s %s\n",   width, "Connected ring instance:", connected_ring_inst_str);
+        ICLI_PRINTF("%-*s %s\n",   width, "Virtual channel:",         virtual_channel_str);
+        ICLI_PRINTF("%-*s %s\n",   width, "Revertive:",               ERPS_ICLI_bool_to_yes_no(conf.revertive));
+        ICLI_PRINTF("%-*s %s\n",   width, "Command:",                 erps_util_command_to_str(ctrl.command));
+        ICLI_PRINTF("%-*s %s\n",   width, "FOP-TO:",                  ERPS_ICLI_bool_to_yes_no(status.cFOP_TO));
+
+        now_secs = vtss::uptime_seconds();
+
+        tx_act = status.tx_raps_active;
+
+        // Per ring port Rx status and Tx configuration/status
+        ICLI_PRINTF("                          | Tx                | Port0 Rx          | Port1 Rx\n");
+        ICLI_PRINTF("--------------------------|-------------------|-------------------|-------------------\n");
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Interface",                 p_width, "-",                                                   p_width, interface_str[VTSS_APPL_ERPS_RING_PORT0],              interface_str[VTSS_APPL_ERPS_RING_PORT1]);
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "SF",                        p_width, "-",                                                   p_width, ERPS_ICLI_bool_to_yes_no(s0.sf),                       ERPS_ICLI_bool_to_yes_no_dash(conf, s1.sf));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Blocked",                   p_width, "-",                                                   p_width, ERPS_ICLI_bool_to_yes_no(s0.blocked),                  ERPS_ICLI_bool_to_yes_no_dash(conf, s1.blocked));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "FOP-PM",                    p_width, "-",                                                   p_width, ERPS_ICLI_bool_to_yes_no(s0.cFOP_PM),                  ERPS_ICLI_bool_to_yes_no_dash(conf, s1.cFOP_PM));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Last R-APS PDU (secs ago)", p_width, ERPS_ICLI_secs_ago(tx, now_secs, tx_str),              p_width, ERPS_ICLI_secs_ago(rx0, now_secs, rx0_str),            ERPS_ICLI_secs_ago(rx1, now_secs, rx1_str));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Version",                   p_width, ERPS_ICLI_version_to_str(tx, tx_str),                  p_width, ERPS_ICLI_version_to_str(rx0, rx0_str),                ERPS_ICLI_version_to_str(rx1, rx1_str));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "R-APS PDU",                 p_width, erps_util_raps_info_to_str(tx, tx_str, tx_act, false), p_width, erps_util_raps_info_to_str(rx0, rx0_str, true, false), erps_util_raps_info_to_str(rx1, rx1_str, true, false));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "R-APS BPR",                 p_width, ERPS_ICLI_bpr_to_str(tx, tx_str, tx_act),              p_width, ERPS_ICLI_bpr_to_str(rx0, rx0_str),                    ERPS_ICLI_bpr_to_str(rx1, rx1_str));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Node ID",                   p_width, ERPS_ICLI_node_id_to_str(tx, tx_str),                  p_width, ERPS_ICLI_node_id_to_str(rx0, rx0_str),                ERPS_ICLI_node_id_to_str(rx1, rx1_str));
+        ICLI_PRINTF("%-*s | %-*s | %-*s | %s\n", c_width, "Source MAC",                p_width, "Varies",                                              p_width, ERPS_ICLI_smac_to_str(rx0, rx0_str),                   ERPS_ICLI_smac_to_str(rx1, rx1_str));
+        ICLI_PRINTF("--------------------------------------------------------------------------------------\n");
+    } else {
+        if (first_print) {
+            ICLI_PRINTF("Failure of Protocol defect abbreviations:\n");
+            ICLI_PRINTF("  T: FOP-TO, Time Out: R-APS PDU expected, but none received within last 17.5 seconds\n");
+            ICLI_PRINTF("  0: FOP-PM, Provisioning Mismatch on port0 (RPL owner, only)\n");
+            ICLI_PRINTF("  1: FOP-PM, Provisioning Mismatch on port1 (RPL owner, only)\n\n");
+
+            ICLI_PRINTF("                                  Port0 Port1 Port0   Port1\n");
+            ICLI_PRINTF("Inst Operational State Node State SF    SF    Blocked Blocked Tx R-APS PDU           Dfcts Command\n");
+            ICLI_PRINTF("---- ----------------- ---------- ---- ------ ------- ------- ---------------------- ----- -----------------\n");
+        }
+
+        ICLI_PRINTF("%4u %-17s", inst, erps_util_oper_state_to_str(status.oper_state, status.oper_warning));
+
+        if (status.oper_state != VTSS_APPL_ERPS_OPER_STATE_ACTIVE) {
+            ICLI_PRINTF("\n");
+            return;
+        }
+
+        sprintf(defect_buf, "%c%c%c",
+                status.cFOP_TO ? 'T' : '-',
+                s0.cFOP_PM     ? '0' : '-',
+                s1.cFOP_PM     ? '1' : '-');
+
+        ICLI_PRINTF(" %-10s %-5s %-5s %-7s %-7s %-22s %-5s %s\n",
+                    erps_util_node_state_to_str(status.node_state),
+                    ERPS_ICLI_bool_to_yes_no(s0.sf),
+                    ERPS_ICLI_bool_to_yes_no_dash(conf, s1.sf),
+                    ERPS_ICLI_bool_to_yes_no(s0.blocked),
+                    ERPS_ICLI_bool_to_yes_no_dash(conf, s1.blocked),
+                    erps_util_raps_info_to_str(status.tx_raps_info, tx_str, status.tx_raps_active, true /* include BPR info */),
+                    defect_buf,
+                    erps_util_command_to_str(ctrl.command));
+    }
+}
+
+/******************************************************************************/
+// ERPS_ICLI_cnt_to_str_dash()
+/******************************************************************************/
+static char *ERPS_ICLI_cnt_to_str_dash(vtss_appl_erps_conf_t &conf, uint64_t cnt, char *str)
+{
+    if (conf.ring_type == VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB && !conf.virtual_channel) {
+        strcpy(str, "-");
+    } else {
+        sprintf(str, VPRI64u, cnt);
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_show_erps_statistics()
+/******************************************************************************/
+static void ERPS_ICLI_show_erps_statistics(u32 session_id, uint32_t inst, vtss_appl_erps_conf_t &conf, vtss_appl_erps_status_t &status, bool first_print, bool has_details)
+{
+    vtss_appl_erps_ring_port_t  ring_port;
+    vtss_appl_erps_statistics_t &s0 = status.ring_port_status[VTSS_APPL_ERPS_RING_PORT0].statistics;
+    vtss_appl_erps_statistics_t &s1 = status.ring_port_status[VTSS_APPL_ERPS_RING_PORT1].statistics, *s;
+    char                        str[20], str2[20], str3[20];
+    uint64_t                    rx_cnt[2], tx_cnt[2];
+    const int                   width = 9, c_width = 14;
+
+    if (has_details) {
+        if (!first_print) {
+            // Not first print, but separate from previous detailed instance
+            ICLI_PRINTF("\n--------------------------------------------------------------------------------\n\n");
+        }
+
+        ICLI_PRINTF("%-*s %u\n",            width, "Instance:", inst);
+        ICLI_PRINTF("%-*s " VPRI64u "\n\n", width, "Flushes:",  s0.flush_cnt);
+
+        ICLI_PRINTF("Counter        | Port0          | Port1\n");
+        ICLI_PRINTF("---------------|----------------|----------------\n");
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx R-APS NR",     s0.rx_nr_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_nr_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx R-APS NR-RB",  s0.rx_nr_rb_cnt,  ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_nr_rb_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx R-APS SF",     s0.rx_sf_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_sf_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx R-APS FS",     s0.rx_fs_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_fs_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx R-APS MS",     s0.rx_ms_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_ms_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx R-APS Event",  s0.rx_event_cnt,  ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_event_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx Drop Guard",   s0.rx_guard_cnt,  ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_guard_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx Drop Error",   s0.rx_error_cnt,  ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_error_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx Own Node ID",  s0.rx_own_cnt,    ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_own_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Rx FOP-PM",       s0.rx_fop_pm_cnt, ERPS_ICLI_cnt_to_str_dash(conf, s1.rx_fop_pm_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Local SF",        s0.sf_cnt,        ERPS_ICLI_cnt_to_str_dash(conf, s1.sf_cnt, str));
+
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Tx R-APS NR",     s0.tx_nr_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.tx_nr_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Tx R-APS NR-RB",  s0.tx_nr_rb_cnt,  ERPS_ICLI_cnt_to_str_dash(conf, s1.tx_nr_rb_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Tx R-APS SF",     s0.tx_sf_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.tx_sf_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Tx R-APS FS",     s0.tx_fs_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.tx_fs_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Tx R-APS MS",     s0.tx_ms_cnt,     ERPS_ICLI_cnt_to_str_dash(conf, s1.tx_ms_cnt, str));
+        ICLI_PRINTF("%-*s | " VPRI64Fu("14") " | %14s\n", c_width, "Tx R-APS Event",  s0.tx_event_cnt,  ERPS_ICLI_cnt_to_str_dash(conf, s1.tx_event_cnt, str));
+     } else {
+        if (first_print) {
+            ICLI_PRINTF("                  Port0                                  Port1\n");
+            ICLI_PRINTF("Inst Flushes      Rx R-APS     Tx R-APS     Local SF     Rx R-APS     Tx R-APS     Local SF\n");
+            ICLI_PRINTF("---- ------------ ------------ ------------ ------------ ------------ ------------ ------------\n");
+        }
+
+        // Compress it all to a oneliner, so summarize all Rx counters into one
+        // and all Tx counters into one.
+        for (ring_port = VTSS_APPL_ERPS_RING_PORT0; ring_port <= VTSS_APPL_ERPS_RING_PORT1; ring_port++) {
+            s = &status.ring_port_status[ring_port].statistics;
+            rx_cnt[ring_port]  = s->rx_nr_cnt;
+            rx_cnt[ring_port] += s->rx_nr_rb_cnt;
+            rx_cnt[ring_port] += s->rx_sf_cnt;
+            rx_cnt[ring_port] += s->rx_fs_cnt;
+            rx_cnt[ring_port] += s->rx_ms_cnt;
+            rx_cnt[ring_port] += s->rx_event_cnt;
+            rx_cnt[ring_port] += s->rx_guard_cnt;
+            rx_cnt[ring_port] += s->rx_error_cnt;
+            rx_cnt[ring_port] += s->rx_own_cnt;
+            rx_cnt[ring_port] += s->rx_fop_pm_cnt;
+
+            tx_cnt[ring_port]  = s->tx_nr_cnt;
+            tx_cnt[ring_port] += s->tx_nr_rb_cnt;
+            tx_cnt[ring_port] += s->tx_sf_cnt;
+            tx_cnt[ring_port] += s->tx_fs_cnt;
+            tx_cnt[ring_port] += s->tx_ms_cnt;
+            tx_cnt[ring_port] += s->tx_event_cnt;
+        }
+
+        ICLI_PRINTF("%4u " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") " %12s %12s %12s\n",
+                    inst,
+                    s0.flush_cnt,
+                    rx_cnt[VTSS_APPL_ERPS_RING_PORT0],
+                    tx_cnt[VTSS_APPL_ERPS_RING_PORT0],
+                    s0.sf_cnt,
+                    ERPS_ICLI_cnt_to_str_dash(conf, rx_cnt[VTSS_APPL_ERPS_RING_PORT1], str),
+                    ERPS_ICLI_cnt_to_str_dash(conf, tx_cnt[VTSS_APPL_ERPS_RING_PORT1], str2),
+                    ERPS_ICLI_cnt_to_str_dash(conf, s1.sf_cnt, str3));
+     }
+}
+
+/******************************************************************************/
+// ERPS_ICLI_show_erps()
+/******************************************************************************/
+static icli_rc_t ERPS_ICLI_show_erps(u32 session_id, icli_range_t *inst_list, bool has_statistics, bool has_details)
+{
+    vtss_appl_erps_conf_t    conf;
+    vtss_appl_erps_status_t  status;
+    vtss_appl_erps_control_t ctrl;
+    uint32_t                 prev_inst, inst, i;
+    bool                     first = true, first_print = true, show;
+    mesa_rc                  rc;
+
+    while (vtss_appl_erps_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            show = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    show = true;
+                    break;
+                }
+            }
+        } else {
+            show = true;
+        }
+
+        if (!show) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_erps_conf_get(inst, &conf)) != VTSS_RC_OK) {
+            T_EG(ERPS_TRACE_GRP_ICLI, "vtss_appl_erps_conf_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if ((rc = vtss_appl_erps_status_get(inst, &status)) != VTSS_RC_OK) {
+            T_EG(ERPS_TRACE_GRP_ICLI, "vtss_appl_erps_status_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if (has_statistics) {
+            ERPS_ICLI_show_erps_statistics(session_id, inst, conf, status, first_print, has_details);
+        } else {
+            if ((rc = vtss_appl_erps_control_get(inst, &ctrl)) != VTSS_RC_OK) {
+                T_EG(ERPS_TRACE_GRP_ICLI, "vtss_appl_erps_control_get() failed: %s", error_txt(rc));
+                continue;
+            }
+
+            ERPS_ICLI_show_erps_status(session_id, inst, conf, status, ctrl, first_print, has_details);
+        }
+
+        first_print = false;
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_statistics_clear())
+/******************************************************************************/
+static icli_rc_t ERPS_ICLI_statistics_clear(u32 session_id, icli_range_t *inst_list)
+{
+    uint32_t prev_inst, inst, i;
+    bool     first = true, clear;
+    mesa_rc  rc;
+
+    while (vtss_appl_erps_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            clear = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    clear = true;
+                    break;
+                }
+            }
+        } else {
+            clear = true;
+        }
+
+        if (!clear) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_erps_statistics_clear(inst)) != VTSS_RC_OK) {
+            T_EG(ERPS_TRACE_GRP_ICLI, "vtss_appl_erps_statistics_clear() failed: %s", error_txt(rc));
+            continue;
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// ERPS_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t ERPS_ICLI_show_capabilities(u32 session_id)
+{
+    vtss_appl_erps_capabilities_t cap;
+    const int                     cap_width = 24;
+
+    ERPS_PRINT_RC(vtss_appl_erps_capabilities_get(&cap));
+
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Instance count:",     cap.inst_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. WTR (secs):",         cap.wtr_secs_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Guard time (msecs):", cap.guard_time_msecs_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Hold-Off (msecs):",   cap.hold_off_msecs_max);
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+HELP_ERPS  = Ethernet Ring Protection Switching
+HELP_ERPS_PORT0 = Set configuration for ring port0 (East)
+HELP_ERPS_PORT1 = Set configuration for ring port1 (West)
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = version {v1 | v2}
+HELP_ERPS_VERSION = Specify whether to use G.8032v1 or G.8032v2 of the R-APS protocol
+DOC_CMD_DESC    = ##HELP_ERPS_VERSION
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_VERSION
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! version
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_VERSION
+
+! v1
+CMD_VAR = has_v1
+RUNTIME =
+HELP    = Use version 1 of the R-APS protocol
+
+! v2
+CMD_VAR =
+RUNTIME =
+HELP    = Use version 2 of the R-APS protocol
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.version = has_v1 ? VTSS_APPL_ERPS_VERSION_V1 : VTSS_APPL_ERPS_VERSION_V2;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = ring-type {major | sub-ring [virtual-channel] | interconnected-sub-ring {connected-ring <uint> [virtual-channel] [propagate-topology-change]}}
+HELP_ERPS_RING_TYPE = Controls whether this is a major ring or a sub-ring. Only major rings are supported if using G.8032v1.
+DOC_CMD_DESC    = ##HELP_ERPS_RING_TYPE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_RING_TYPE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! ring-type
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_RING_TYPE
+
+! major
+CMD_VAR = has_major
+RUNTIME =
+HELP    = Make this a major ring, which always has two ring ports
+
+! sub-ring
+CMD_VAR = has_sub
+RUNTIME =
+HELP    = Make this a non-interconnected sub-ring, which has two ring ports
+
+! virtual-channel
+CMD_VAR = has_virtual_channel
+RUNTIME =
+HELP    = Configure this sub-ring with a R-APS virtual channel, that is, R-APS PDUs are not forwarded between ring-port links if one end is blocked
+
+! interconnected-sub-ring
+CMD_VAR =
+RUNTIME =
+HELP    = Make this an interconnected sub-ring, which has only one ring port (port0), but connects to a major ring
+
+! connected-ring
+CMD_VAR =
+RUNTIME =
+HELP    = An interconnected sub-ring points to another ring with two ring ports (that is, that other ring cannot itself be an interconnected sub-ring), which receives flush notifications and may carry R-APS PDUs for the sub-ring
+
+! <uint>
+CMD_VAR = connected_ring_inst
+RUNTIME = ERPS_ICLI_existing_instance_range
+HELP    = The ERPS instance number of the connected ring that this interconnected sub-ring connects to
+
+! virtual-channel
+CMD_VAR = has_interconnected_virtual_channel
+RUNTIME =
+HELP    = Configure this interconnected sub-ring with a R-APS virtual channel, that is, R-APS PDUs are transmitted on the connected ring that this sub-ring connects to
+
+! propagate-topology-change
+CMD_VAR = has_tc_propagate
+RUNTIME =
+HELP    = If a topology-change occurs on this interconnected sub-ring, the connected ring also flushes its FDB. If this keyword is specified, the connected ring will also send Flush R-APS Event PDU onto its ring ports
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+
+    if (has_major) {
+        conf.ring_type = VTSS_APPL_ERPS_RING_TYPE_MAJOR;
+    } else if (has_sub) {
+        conf.ring_type       = VTSS_APPL_ERPS_RING_TYPE_SUB;
+        conf.virtual_channel = has_virtual_channel;
+    } else {
+        conf.ring_type = VTSS_APPL_ERPS_RING_TYPE_INTERCONNECTED_SUB;
+        conf.virtual_channel                       = has_interconnected_virtual_channel;
+        conf.interconnect_conf.connected_ring_inst = connected_ring_inst;
+        conf.interconnect_conf.tc_propagate        = has_tc_propagate;
+    }
+
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = ring-id <1-239>
+HELP_ERPS_RING_ID = Controls the Ring ID, which is used in the last byte of the DMAC of R-APS PDUs. Ring IDs of received R-APS PDUs must match the configured Ring ID.
+DOC_CMD_DESC    = ##HELP_ERPS_RING_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_RING_ID
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! ring-id
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_RING_ID
+
+! <1-239>
+CMD_VAR = ring_id
+RUNTIME =
+HELP    = Ring ID. If using G.8032 version 1, this must be 1.
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.ring_id = ring_id;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = node-id <mac_ucast>
+HELP_ERPS_NODE_ID = Controls the Node ID used inside the R-APS PDUs to uniquely identify this node (switch). Defaults to using the switch's.
+DOC_CMD_DESC    = ##HELP_ERPS_NODE_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_NODE_ID
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! node-id
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_NODE_ID
+
+! <mac_ucast>
+CMD_VAR = node_id
+RUNTIME =
+HELP    = Node ID, which goes into the R-APS PDUs' Node ID field.
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.node_id = node_id;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no node-id
+HELP_ERPS_NO_NODE_ID = Set Node ID used inside R-APS PDUs to the switch's MAC address.
+
+DOC_CMD_DESC    = ##HELP_ERPS_NO_NODE_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_NO_NODE_ID
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! node-id
+HELP    = ##HELP_ERPS_NO_NODE_ID
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_default_get(&default_conf));
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.node_id = default_conf.node_id;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = rpl {owner | neighbor} {port0 | port1}
+HELP_ERPS_RPL = Controls whether this node holds the Ring Protection Link (RPL), and what role it has in that case. Use the no-form if this node doesn't hold the RPL.
+DOC_CMD_DESC    = ##HELP_ERPS_RPL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_RPL
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! rpl
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_RPL
+
+! owner
+CMD_VAR = has_owner
+RUNTIME =
+HELP    = This node is RPL owner
+
+! neighbor
+CMD_VAR =
+RUNTIME =
+HELP    = This node is RPL neighbor
+
+! port0
+CMD_VAR = has_port0
+RUNTIME =
+HELP    = This node's RPL is on ring port 0
+
+! port1
+CMD_VAR =
+RUNTIME = ERPS_ICLI_is_not_interconnected_sub_ring
+HELP    = This node's RPL is on ring port 1
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.rpl_mode = has_owner ? VTSS_APPL_ERPS_RPL_MODE_OWNER : VTSS_APPL_ERPS_RPL_MODE_NEIGHBOR;
+    conf.rpl_port = has_port0 ? VTSS_APPL_ERPS_RING_PORT0     : VTSS_APPL_ERPS_RING_PORT1;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no rpl
+HELP_ERPS_NO_RPL = Configure instance to be normal ring node, that is, neither RPL owner or neighbor
+DOC_CMD_DESC    = ##HELP_ERPS_NO_RPL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_NO_RPL
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! rpl
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_NO_RPL
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.rpl_mode = VTSS_APPL_ERPS_RPL_MODE_NONE;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port0 interface <port_type_id>
+HELP_ERPS_PORT0_INTERFACE = Assign an interface to ring port0
+DOC_CMD_DESC    = ##HELP_ERPS_PORT0_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT0_INTERFACE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! port0
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT0
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT0_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT0_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT0].ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port1 interface <port_type_id>
+HELP_ERPS_PORT1_INTERFACE = Assign an interface to ring port1
+DOC_CMD_DESC    = ##HELP_ERPS_PORT1_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT1_INTERFACE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! port1
+CMD_VAR =
+RUNTIME = ERPS_ICLI_is_not_interconnected_sub_ring
+HELP    = ##HELP_ERPS_PORT1
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT1_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT1_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT1].ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port0 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+HELP_ERPS_PORT0_SF_TRIGGER = Choose whether port0's interface link state or a MEP installed on port0's interface is used as signal-fail trigger
+DOC_CMD_DESC    = ##HELP_ERPS_PORT0_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT0_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! port0
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT0
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT0_SF_TRIGGER
+
+! link
+CMD_VAR = has_link
+RUNTIME =
+HELP    = Port0's interface link state is used as signal-fail trigger
+
+! mep
+CMD_VAR =
+RUNTIME =
+HELP    = A MEP installed on port0 is used as signal-fail trigger
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t           conf;
+    vtss_appl_erps_ring_port_conf_t *ring_port_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    ring_port_conf = &conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT0];
+
+    if (has_link) {
+        ring_port_conf->sf_trigger = VTSS_APPL_ERPS_SF_TRIGGER_LINK;
+    } else {
+        ring_port_conf->sf_trigger = VTSS_APPL_ERPS_SF_TRIGGER_MEP;
+        ring_port_conf->mep.md     = md_name;
+        ring_port_conf->mep.ma     = ma_name;
+        ring_port_conf->mep.mepid  = mepid;
+    }
+
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port1 sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+HELP_ERPS_PORT1_SF_TRIGGER = Choose whether port1's interface link state or a MEP installed on port1's interface is used as signal-fail trigger
+DOC_CMD_DESC    = ##HELP_ERPS_PORT1_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT1_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! port1
+CMD_VAR =
+RUNTIME = ERPS_ICLI_is_not_interconnected_sub_ring
+HELP    = ##HELP_ERPS_PORT1_SF_TRIGGER
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT1
+
+! link
+CMD_VAR = has_link
+RUNTIME =
+HELP    = Port1's interface link state is used as signal-fail trigger
+
+! mep
+CMD_VAR =
+RUNTIME =
+HELP    = A MEP installed on port1 is used as signal-fail trigger
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t           conf;
+    vtss_appl_erps_ring_port_conf_t *ring_port_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    ring_port_conf = &conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT1];
+
+    if (has_link) {
+        ring_port_conf->sf_trigger = VTSS_APPL_ERPS_SF_TRIGGER_LINK;
+    } else {
+        ring_port_conf->sf_trigger = VTSS_APPL_ERPS_SF_TRIGGER_MEP;
+        ring_port_conf->mep.md     = md_name;
+        ring_port_conf->mep.ma     = ma_name;
+        ring_port_conf->mep.mepid  = mepid;
+    }
+
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port0 smac <mac_ucast>
+HELP_ERPS_PORT0_SMAC = Set a source MAC address to be used in R-APS PDUs transmitted on port0. Default to use interface's.
+DOC_CMD_DESC    = ##HELP_ERPS_PORT0_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT0_SMAC
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! port0
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT0
+
+! smac
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT0_SMAC
+
+! <mac_ucast>
+CMD_VAR = mac
+RUNTIME =
+HELP    = Select a unicast MAC address to be used as source MAC address in R-APS PDUs transmitted on port0.
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT0].smac = mac;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no port0 smac
+HELP_ERPS_PORT0_NO_SMAC = Set source MAC address used in R-APS PDUs to ring port0's interface's MAC address.
+
+DOC_CMD_DESC    = ##HELP_ERPS_PORT0_NO_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT0_NO_SMAC
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! port0
+HELP    = ##HELP_ERPS_PORT0
+CMD_VAR =
+RUNTIME =
+
+! smac
+HELP    = ##HELP_ERPS_PORT0_NO_SMAC
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_default_get(&default_conf));
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT0].smac = default_conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT0].smac;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = port1 smac <mac_ucast>
+HELP_ERPS_PORT1_SMAC = Set a source MAC address to be used in R-APS PDUs transmitted on port1. Default is to use interface's or if interconnected sub-ring with virtual channel - the chassis MAC address.
+DOC_CMD_DESC    = ##HELP_ERPS_PORT1_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT1_SMAC
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! port1
+CMD_VAR =
+RUNTIME = ERPS_ICLI_is_not_interconnected_sub_ring_or_has_virtual_channel
+HELP    = ##HELP_ERPS_PORT1
+
+! smac
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_PORT1_SMAC
+
+! <mac_ucast>
+CMD_VAR = mac
+RUNTIME =
+HELP    = Select a unicast MAC address to be used as source MAC address in R-APS PDUs transmitted on port1.
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT1].smac = mac;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no port1 smac
+HELP_ERPS_PORT1_NO_SMAC = Set source MAC address used in R-APS PDUs to ring port1's interface's MAC address or if interconnected sub-ring with virtual channel - the chassis MAC address.
+
+DOC_CMD_DESC    = ##HELP_ERPS_PORT1_NO_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PORT1_NO_SMAC
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! port1
+HELP    = ##HELP_ERPS_PORT1
+CMD_VAR =
+RUNTIME = ERPS_ICLI_is_not_interconnected_sub_ring_or_has_virtual_channel
+
+! smac
+HELP    = ##HELP_ERPS_PORT1_NO_SMAC
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_default_get(&default_conf));
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT1].smac = default_conf.ring_port_conf[VTSS_APPL_ERPS_RING_PORT1].smac;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = control-vlan <vlan_id> [pcp <0-7>]
+HELP_ERPS_CONTROL_VLAN = Set the ERPS instance's control VLAN and PCP used in R-APS PDUs transmitted on both ring ports (if applicable).
+
+DOC_CMD_DESC    = ##HELP_ERPS_CONTROL_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_CONTROL_VLAN
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! control-vlan
+HELP    = ##HELP_ERPS_CONTROL_VLAN
+CMD_VAR =
+RUNTIME =
+
+! <vlan_id>
+HELP    = The VLAN ID used in R-APS PDUs
+CMD_VAR = vid
+RUNTIME =
+
+! pcp
+HELP    = Choose a PCP to be used in the 802.1Q tag.
+CMD_VAR = has_pcp
+RUNTIME =
+
+! <0-7>
+HELP    = PCP value
+CMD_VAR = pcp
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.control_vlan = vid;
+
+    if (has_pcp) {
+        conf.pcp = pcp;
+     }
+
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = protected-vlans <vlan_list>
+HELP_ERPS_PROTECTED_VLANS = Set the list of VLANs protected by this ERPS instance.
+
+DOC_CMD_DESC    = ##HELP_ERPS_PROTECTED_VLANS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_PROTECTED_VLANS
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! protected-vlans
+HELP    = ##HELP_ERPS_PROTECTED_VLANS
+CMD_VAR =
+RUNTIME =
+
+! <vlan_list>
+HELP    = List of VLANs, e.g. 2-10,123-456,4044
+CMD_VAR = vlan_list
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+    mesa_vid_t            vid;
+    uint32_t              idx;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+
+    memset(conf.protected_vlans, 0, sizeof(conf.protected_vlans));
+
+    for (idx = 0; idx < vlan_list->cnt; idx++) {
+        for (vid = vlan_list->range[idx].min; vid <= vlan_list->range[idx].max; vid++) {
+            VTSS_BF_SET(conf.protected_vlans, vid, 1);
+        }
+    }
+
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no protected-vlans
+HELP_ERPS_NO_PROTECTED_VLANS = Clear the list of VLANs protected by this ERPS instance (not a valid command if instance is administratively enabled)
+
+DOC_CMD_DESC    = ##HELP_ERPS_NO_PROTECTED_VLANS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_NO_PROTECTED_VLANS
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! protected-vlans
+HELP    = ##HELP_ERPS_NO_PROTECTED_VLANS
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    memset(conf.protected_vlans, 0, sizeof(conf.protected_vlans));
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = level <0-7>
+HELP_ERPS_LEVEL = Set the MD/MEG level used in R-APS PDUs. Default is 7.
+
+DOC_CMD_DESC    = ##HELP_ERPS_LEVEL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_LEVEL
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! level
+HELP    = ##HELP_ERPS_LEVEL
+CMD_VAR =
+RUNTIME =
+
+! <0-7>
+HELP    = MD/MEG level.
+CMD_VAR = level
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.level = level;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = revertive
+HELP_ERPS_REVERTIVE = Set this instance to be revertive, that is, restore to default after the wait-to-restore timer has expired.
+
+DOC_CMD_DESC    = ##HELP_ERPS_REVERTIVE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_REVERTIVE
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! revertive
+HELP    = ##HELP_ERPS_REVERTIVE
+CMD_VAR =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.revertive = true;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no revertive
+HELP_ERPS_NO_REVERTIVE = Set this instance to be non-revertive, that is, stay at the current protection after a signal fail. Wait-to-restore timer is not used in this mode.
+
+DOC_CMD_DESC    = ##HELP_ERPS_NO_REVERTIVE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_NO_REVERTIVE
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! revertive
+HELP    = ##HELP_ERPS_NO_REVERTIVE
+CMD_VAR =
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.revertive = false;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = wait-to-restore <uint>
+HELP_ERPS_WAIT_TO_RESTORE = Only used in revertive mode. Indicates the number of seconds after a defect has cleared until operation is switched back to the normal condition.
+DOC_CMD_DESC    = ##HELP_ERPS_WAIT_TO_RESTORE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_WAIT_TO_RESTORE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! wait-to-restore
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_WAIT_TO_RESTORE
+
+! <uint>
+CMD_VAR = wtr
+RUNTIME = ERPS_ICLI_wait_to_restore_range
+HELP    = Wait-to-restore measured in seconds.
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.wtr_secs = wtr;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf, default_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_default_get(&default_conf));
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.wtr_secs = default_conf.wtr_secs;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = guard-time <uint>
+HELP_ERPS_GUARD_TIME = The guard timer is used to prevent ring nodes from acting upon outdated R-APS PDUs upon topology changes.
+DOC_CMD_DESC    = ##HELP_ERPS_GUARD_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_GUARD_TIME
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! guard-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_GUARD_TIME
+
+! <uint>
+CMD_VAR = guard_time
+RUNTIME = ERPS_ICLI_guard_time_range
+HELP    = Guard-time value measured in milliseconds. Must be in multiples of 10 ms.
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.guard_time_msecs = guard_time;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf, default_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_default_get(&default_conf));
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.guard_time_msecs = default_conf.guard_time_msecs;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = hold-off-time <uint>
+HELP_ERPS_HOLD_OFF_TIME = When a new (or more severe) defect occurs, the hold-off timer will be started and the event will be reported after the timer expires.
+DOC_CMD_DESC    = ##HELP_ERPS_HOLD_OFF_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_HOLD_OFF_TIME
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! hold-off-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_HOLD_OFF_TIME
+
+! <uint>
+CMD_VAR = hold_off
+RUNTIME = ERPS_ICLI_hold_off_time_range
+HELP    = Hold-off timer value measured in milliseconds. Must be in multiples of 100 ms.
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.hold_off_msecs = hold_off;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf, default_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_default_get(&default_conf));
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.hold_off_msecs = default_conf.hold_off_msecs;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = admin-state {enable | disable}
+HELP_ERPS_ADMIN_STATE = Enable or disable this ERPS instance
+DOC_CMD_DESC    = ##HELP_ERPS_ADMIN_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_ADMIN_STATE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_ERPS
+MODE_VAR = inst
+
+! admin-state
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_ADMIN_STATE
+
+! enable
+CMD_VAR = has_enable
+RUNTIME =
+HELP    = Enable this ERPS instance
+
+CMD_VAR =
+RUNTIME =
+HELP    = Disable this ERPS instance
+
+VARIABLE_BEGIN
+    vtss_appl_erps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    ERPS_PRINT_RC(vtss_appl_erps_conf_get(inst, &conf));
+    conf.admin_active = has_enable;
+    ERPS_PRINT_RC(vtss_appl_erps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = no erps {<uint> | all}
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME =
+HELP_ERPS_NO_ERPS = Delete a particular or all ERPS instances
+DOC_CMD_DESC    = ##HELP_ERPS_NO_ERPS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_NO_ERPS
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = ERPS_ICLI_existing_instance_range
+RUNTIME   =
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_ERPS_NO_ERPS
+HELP      = Delete a particular ERPS instance
+HELP      = Delete all ERPS instances
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = inst
+CMD_VAR   = has_all
+
+VARIABLE_BEGIN
+    uint32_t next_inst;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        while (vtss_appl_erps_itr(&inst, &next_inst) == VTSS_RC_OK) {
+            // Delete this ERPS instance
+            inst = next_inst;
+            ERPS_PRINT_RC(vtss_appl_erps_conf_del(inst));
+        }
+    } else {
+       // Delete this ERPS instance
+       ERPS_PRINT_RC(vtss_appl_erps_conf_del(inst));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = erps <uint> switch {force | manual } {port0-to-port1 | port1-to-port0}
+
+HELP_ERPS_SWITCH = Request a switchover from port0 to port1 or vice versa. Use 'erps <inst> clear' to clear the request.
+DOC_CMD_DESC    = ##HELP_ERPS_SWITCH
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_SWITCH
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! erps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = ERPS_ICLI_existing_instance_range
+HELP    = ERPS instance number
+
+! switch
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_SWITCH
+
+! force
+CMD_VAR = has_force
+RUNTIME =
+HELP    = Causes a forced switchover
+
+! manual
+CMD_VAR =
+RUNTIME =
+HELP    = Causes a switchover if the signal is good and no forced switch is in effect
+
+! port0-to-port1
+CMD_VAR = has_0_to_1
+RUNTIME =
+HELP    = Blocks port0 and unblocks port1
+
+! port1-to-port0
+CMD_VAR =
+RUNTIME =
+HELP    = Blocks port1 and unblocks port0
+
+VARIABLE_BEGIN
+    vtss_appl_erps_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+
+    if (has_force) {
+        ctrl.command = has_0_to_1 ? VTSS_APPL_ERPS_COMMAND_FS_TO_PORT1 : VTSS_APPL_ERPS_COMMAND_FS_TO_PORT0;
+    } else {
+        ctrl.command = has_0_to_1 ? VTSS_APPL_ERPS_COMMAND_MS_TO_PORT1 : VTSS_APPL_ERPS_COMMAND_MS_TO_PORT0;
+    }
+
+    ERPS_PRINT_RC(vtss_appl_erps_control_set(inst, &ctrl));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = erps <uint> clear
+
+HELP_ERPS_CLEAR = Clear a switchover (FS or MS) request and a WTB/WTR condition and force reversion even if not revertive
+DOC_CMD_DESC    = ##HELP_ERPS_CLEAR
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_CLEAR
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! erps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = ERPS_ICLI_existing_instance_range
+HELP    = ERPS instance number
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS_CLEAR
+
+VARIABLE_BEGIN
+    vtss_appl_erps_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.command = VTSS_APPL_ERPS_COMMAND_CLEAR;
+    ERPS_PRINT_RC(vtss_appl_erps_control_set(inst, &ctrl));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show erps [<range_list>] [statistics] [details]
+HELP_SHOW_ERPS = Show the state or counters of one or more ERPS instances
+
+DOC_CMD_DESC    = ##HELP_SHOW_ERPS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_SHOW_ERPS
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = show_erps
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_SHOW_ERPS
+
+! erps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = ERPS_ICLI_instance_range
+HELP    = List of ERPS instances to show
+
+! statistics
+CMD_VAR = has_statistics
+RUNTIME =
+HELP    = Show statistics
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed status or statistics
+
+CODE_BEGIN
+    ICLI_RC(ERPS_ICLI_show_erps(session_id, inst_list, has_statistics, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear erps [<range_list>] statistics
+HELP_CLEAR_ERPS = Clear the counters of one or more ERPS instances
+
+DOC_CMD_DESC    = ##HELP_CLEAR_ERPS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CLEAR_ERPS
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = clear_erps
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_CLEAR_ERPS
+
+! erps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_ERPS
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = ERPS_ICLI_instance_range
+HELP    = The range of ERPS instances.
+
+! statistics
+CMD_VAR =
+RUNTIME =
+HELP    = Clear R-APS counters
+
+CODE_BEGIN
+    ICLI_RC(ERPS_ICLI_statistics_clear(session_id, inst_list));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_ERPS_DEBUG_TIMERS = Show current ERPS timers
+COMMAND         = debug show erps timers
+DOC_CMD_DESC    = ##HELP_ERPS_DEBUG_TIMERS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_DEBUG_TIMERS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_ERPS
+HELP            = ##HELP_ERPS_DEBUG_TIMERS
+
+CODE_BEGIN
+    void erps_timer_debug_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    erps_timer_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_ERPS_SHOW_CAPABILITIES = Show ERPS capabilities
+COMMAND         = debug show erps capabilities
+DOC_CMD_DESC    = ##HELP_ERPS_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! erps
+HELP    = ##HELP_ERPS
+CMD_VAR =
+RUNTIME =
+
+! capabilities
+HELP    = ##HELP_ERPS_SHOW_CAPABILITIES
+CMD_VAR =
+RUNTIME =
+
+CODE_BEGIN
+    ICLI_RC(ERPS_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_ERPS_DEBUG_SHOW_HISTORY = Show ERPS state change history
+COMMAND         = debug show erps history [relative-to {first | last | <1-1000>}]
+DOC_CMD_DESC    = ##HELP_ERPS_DEBUG_SHOW_HISTORY
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_DEBUG_SHOW_HISTORY
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = has_relative_to
+CMD_VAR         = has_first
+CMD_VAR         = has_last
+CMD_VAR         = particular
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_ERPS
+HELP            = ##HELP_ERPS_DEBUG_SHOW_HISTORY
+HELP            = Show times relative to a particular entry
+HELP            = Show times relative to first entry
+HELP            = Show times relative to last entry
+HELP            = Show times relative to this particular entry (1 == first)
+
+VARIABLE_BEGIN
+    uint32_t relative_to;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_relative_to) {
+        // Show relative times.
+        if (has_first) {
+            relative_to = 1;
+        } else if (has_last) {
+            relative_to = -1;
+        } else {
+            relative_to = particular;
+        }
+    } else {
+        // Show absolute times
+        relative_to = 0;
+    }
+
+    void erps_history_dump(uint32_t relative_to, uint32_t session_id, i32 (*pr)(uint32_t session_id, const char *fmt, ...));
+    erps_history_dump(relative_to, session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_ERPS_DEBUG_CLEAR_HISTORY = Clear ERPS state change history
+COMMAND         = debug clear erps history
+DOC_CMD_DESC    = ##HELP_ERPS_DEBUG_CLEAR_HISTORY
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_DEBUG_CLEAR_HISTORY
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_CLEAR
+HELP            = ##HELP_ERPS
+HELP            = ##HELP_ERPS_DEBUG_CLEAR_HISTORY
+
+CODE_BEGIN
+    void erps_history_clear(void);
+    erps_history_clear();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_ERPS_DEBUG_RULES = Show current ERPS-installed rules
+COMMAND         = debug show erps rules
+DOC_CMD_DESC    = ##HELP_ERPS_DEBUG_RULES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_ERPS_DEBUG_RULES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_ERPS
+HELP            = ##HELP_ERPS_DEBUG_RULES
+
+CODE_BEGIN
+    void erps_rules_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    erps_rules_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+

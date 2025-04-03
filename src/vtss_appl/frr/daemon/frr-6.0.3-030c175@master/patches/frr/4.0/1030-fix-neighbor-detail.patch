@@ -1,0 +1,258 @@
+commit f2cc2aaa91713423e7c49a1aba5f05fbb6af069e
+Author: Rene Nielsen <rene.nielsen@microchip.com>
+Date:   Tue Oct 6 13:02:06 2020 +0200
+
+    4.0-1030
+
+diff --git a/ospfd/ospf_vty.c b/ospfd/ospf_vty.c
+index 20af32f75..7f49a957f 100644
+--- a/ospfd/ospf_vty.c
++++ b/ospfd/ospf_vty.c
+@@ -5106,11 +5106,7 @@ static void show_ip_ospf_neighbor_detail_sub(struct vty *vty,
+ 			nbr->t_ls_upd != NULL ? "on" : "off");
+ 
+ 	if (use_json) {
+-		if (nbr->state == NSM_Attempt && nbr->router_id.s_addr == 0)
+-			json_object_object_add(json, "noNbrId", json_sub);
+-		else
+-			json_object_object_add(json, inet_ntoa(nbr->router_id),
+-					       json_sub);
++			json_object_array_add(json, json_sub);
+ 	}
+ 
+ 	ospf_bfd_show_info(vty, nbr->bfd_info, json, use_json, 0);
+@@ -5123,11 +5119,11 @@ static int show_ip_ospf_neighbor_id_common(struct vty *vty, struct ospf *ospf,
+ 					   u_char use_vrf)
+ {
+ 	struct listnode *node;
+-	struct ospf_neighbor *nbr;
++	struct ospf_neighbor *nbr, *prev_nbr = NULL;
+ 	struct ospf_interface *oi;
+ 	struct in_addr router_id;
+ 	int ret;
+-	json_object *json = NULL;
++	json_object *json = NULL, *json_neigh_array = NULL;
+ 
+ 	if (use_json)
+ 		json = json_object_new_object();
+@@ -5155,9 +5151,40 @@ static int show_ip_ospf_neighbor_id_common(struct vty *vty, struct ospf *ospf,
+ 
+ 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
+ 		if ((nbr = ospf_nbr_lookup_by_routerid(oi->nbrs, &router_id))) {
+-			show_ip_ospf_neighbor_detail_sub(vty, oi, nbr, json,
++		    if (use_json) {
++                char neigh_str[INET_ADDRSTRLEN];
++
++				if (prev_nbr &&
++				    !IPV4_ADDR_SAME(&prev_nbr->src, &nbr->src)) {
++				    /* Start new neigh list */
++				    json_neigh_array = NULL;
++				}
++
++				if (nbr->state == NSM_Attempt &&
++				    nbr->router_id.s_addr == 0)
++				    strlcpy(neigh_str, "neighbor",
++				        sizeof(neigh_str));
++				else
++				    strlcpy(neigh_str,
++				        inet_ntoa(nbr->router_id),
++				        sizeof(neigh_str));
++
++				json_object_object_get_ex(json, neigh_str,
++					          &json_neigh_array);
++
++				if (!json_neigh_array) {
++				    json_neigh_array = json_object_new_array();
++		            if (nbr->state == NSM_Attempt && nbr->router_id.s_addr == 0)
++			            json_object_object_add(json, "noNbrId", json_neigh_array);
++		            else
++				        json_object_object_add(json, inet_ntoa(nbr->router_id),
++					            json_neigh_array);
++				}
++		    }
++			show_ip_ospf_neighbor_detail_sub(vty, oi, nbr, json_neigh_array,
+ 							 use_json);
+ 		}
++        prev_nbr = nbr;
+ 	}
+ 
+ 	if (use_json) {
+@@ -5188,7 +5215,7 @@ DEFUN (show_ip_ospf_neighbor_id,
+ 	for (ALL_LIST_ELEMENTS_RO(om->ospf, node, ospf)) {
+ 		if (!ospf->oi_running)
+ 			continue;
+-		ret = show_ip_ospf_neighbor_id_common(vty, ospf, 0,
++		ret = show_ip_ospf_neighbor_id_common(vty, ospf, 4,
+ 						      argv, uj, 0);
+ 	}
+ 
+@@ -5252,17 +5279,50 @@ static int show_ip_ospf_neighbor_detail_common(struct vty *vty,
+ 
+ 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
+ 		struct route_node *rn;
+-		struct ospf_neighbor *nbr;
++		struct ospf_neighbor *nbr, *prev_nbr = NULL;
++        json_object *json_neigh_array = NULL;
+ 
+ 		for (rn = route_top(oi->nbrs); rn; rn = route_next(rn)) {
+ 			if ((nbr = rn->info)) {
+ 				if (nbr != oi->nbr_self) {
+ 					if (nbr->state != NSM_Down) {
++					    if (use_json) {
++                            char neigh_str[INET_ADDRSTRLEN];
++
++				            if (prev_nbr &&
++				                !IPV4_ADDR_SAME(&prev_nbr->src, &nbr->src)) {
++					            /* Start new neigh list */
++					            json_neigh_array = NULL;
++				            }
++
++				            if (nbr->state == NSM_Attempt &&
++				                nbr->router_id.s_addr == 0)
++					            strlcpy(neigh_str, "neighbor",
++						            sizeof(neigh_str));
++				            else
++					            strlcpy(neigh_str,
++						            inet_ntoa(nbr->router_id),
++						            sizeof(neigh_str));
++
++				            json_object_object_get_ex(json_vrf, neigh_str,
++						    	          &json_neigh_array);
++
++				            if (!json_neigh_array) {
++					            json_neigh_array = json_object_new_array();
++		                        if (nbr->state == NSM_Attempt && nbr->router_id.s_addr == 0)
++			                        json_object_object_add(json_vrf, "noNbrId", json_neigh_array);
++		                        else
++					                json_object_object_add(json_vrf, inet_ntoa(nbr->router_id),
++						    	            json_neigh_array);
++				            }
++                        }
++
+ 						show_ip_ospf_neighbor_detail_sub(
+-							vty, oi, nbr, json_vrf,
++							vty, oi, nbr, json_neigh_array,
+ 							use_json);
+ 					}
+ 				}
++                prev_nbr = nbr;
+ 			}
+ 		}
+ 	}
+@@ -5433,16 +5493,51 @@ static int show_ip_ospf_neighbor_detail_all_common(struct vty *vty,
+ 
+ 	for (ALL_LIST_ELEMENTS_RO(ospf->oiflist, node, oi)) {
+ 		struct route_node *rn;
+-		struct ospf_neighbor *nbr;
++		struct ospf_neighbor *nbr, *prev_nbr = NULL;
+ 		struct ospf_nbr_nbma *nbr_nbma;
++        json_object *json_neigh_array = NULL;
+ 
+ 		for (rn = route_top(oi->nbrs); rn; rn = route_next(rn))
+-			if ((nbr = rn->info))
++			if ((nbr = rn->info)) {
+ 				if (nbr != oi->nbr_self)
+-					if (nbr->state != NSM_Down)
++					if (nbr->state != NSM_Down) {
++					    if (use_json) {
++                            char neigh_str[INET_ADDRSTRLEN];
++
++				            if (prev_nbr &&
++				                !IPV4_ADDR_SAME(&prev_nbr->src, &nbr->src)) {
++					            /* Start new neigh list */
++					            json_neigh_array = NULL;
++				            }
++
++				            if (nbr->state == NSM_Attempt &&
++				                nbr->router_id.s_addr == 0)
++					            strlcpy(neigh_str, "neighbor",
++						            sizeof(neigh_str));
++				            else
++					            strlcpy(neigh_str,
++						            inet_ntoa(nbr->router_id),
++						            sizeof(neigh_str));
++
++				            json_object_object_get_ex(json_vrf, neigh_str,
++						    	          &json_neigh_array);
++
++				            if (!json_neigh_array) {
++					            json_neigh_array = json_object_new_array();
++		                        if (nbr->state == NSM_Attempt && nbr->router_id.s_addr == 0)
++			                        json_object_object_add(json_vrf, "noNbrId", json_neigh_array);
++		                        else
++					                json_object_object_add(json_vrf, inet_ntoa(nbr->router_id),
++						    	            json_neigh_array);
++				            }
++                        }
++
+ 						show_ip_ospf_neighbor_detail_sub(
+ 							vty, oi, rn->info,
+-							json_vrf, use_json);
++							json_neigh_array, use_json);
++                    }
++                prev_nbr = nbr;
++            }
+ 
+ 		if (oi->type == OSPF_IFTYPE_NBMA) {
+ 			struct listnode *nd;
+@@ -5607,8 +5702,8 @@ static int show_ip_ospf_neighbor_int_detail_common(struct vty *vty,
+ 	struct ospf_interface *oi;
+ 	struct interface *ifp;
+ 	struct route_node *rn, *nrn;
+-	struct ospf_neighbor *nbr;
+-	json_object *json = NULL;
++	struct ospf_neighbor *nbr, *prev_nbr = NULL;
++	json_object *json = NULL, *json_neigh_array = NULL;
+ 
+ 	if (use_json)
+ 		json = json_object_new_object();
+@@ -5636,13 +5731,46 @@ static int show_ip_ospf_neighbor_int_detail_common(struct vty *vty,
+ 		if ((oi = rn->info)) {
+ 			for (nrn = route_top(oi->nbrs); nrn;
+ 			     nrn = route_next(nrn)) {
+-				if ((nbr = nrn->info)) {
++			    if ((nbr = nrn->info)) {
+ 					if (nbr != oi->nbr_self) {
+-						if (nbr->state != NSM_Down)
++						if (nbr->state != NSM_Down) {
++						    if (use_json) {
++                                char neigh_str[INET_ADDRSTRLEN];
++
++				                if (prev_nbr &&
++				                    !IPV4_ADDR_SAME(&prev_nbr->src, &nbr->src)) {
++					                /* Start new neigh list */
++					                json_neigh_array = NULL;
++				                }
++
++				                if (nbr->state == NSM_Attempt &&
++				                    nbr->router_id.s_addr == 0)
++					                strlcpy(neigh_str, "neighbor",
++						                sizeof(neigh_str));
++				                else
++					                strlcpy(neigh_str,
++						                inet_ntoa(nbr->router_id),
++						                sizeof(neigh_str));
++
++				                json_object_object_get_ex(json, neigh_str,
++						        	          &json_neigh_array);
++
++				                if (!json_neigh_array) {
++					                json_neigh_array = json_object_new_array();
++		                            if (nbr->state == NSM_Attempt && nbr->router_id.s_addr == 0)
++			                            json_object_object_add(json, "noNbrId", json_neigh_array);
++		                            else
++					                    json_object_object_add(json, inet_ntoa(nbr->router_id),
++						        	            json_neigh_array);
++				                }
++                            }
++
+ 							show_ip_ospf_neighbor_detail_sub(
+ 								vty, oi, nbr,
+-								json, use_json);
++								json_neigh_array, use_json);
++				        }
+ 					}
++		            prev_nbr = nbr;
+ 				}
+ 			}
+ 		}

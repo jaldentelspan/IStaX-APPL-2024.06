@@ -1,0 +1,245 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Mapping Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_vlan_trans_mapping_edit.htm";
+
+var pageMapEditFlag = 4;
+var pageSelectGroupId = 0;
+var pageSelectDir = 0;
+var pageSelectVlanId = 0;
+var pageArgs = searchArgs(window.location.search);
+var pageArgsName = 'mapEditFlag';
+if (pageArgs[pageArgsName]) {
+    pageMapEditFlag = parseInt(pageArgs[pageArgsName], 10);
+}
+pageArgsName = 'selectGroupId';
+if (pageArgs[pageArgsName]) {
+    pageSelectGroupId = parseInt(pageArgs[pageArgsName], 10);
+}
+pageArgsName = 'selectDir';
+if (pageArgs[pageArgsName]) {
+    pageSelectDir = parseInt(pageArgs[pageArgsName], 10);
+}
+pageArgsName = 'selectVlanId';
+if (pageArgs[pageArgsName]) {
+    pageSelectVlanId = parseInt(pageArgs[pageArgsName], 10);
+}
+
+var mapEditReq;
+var singleMapConfigDate;
+
+var style_width = "100%";
+var mapDataTable = Array("mapData_Parameters");
+
+var idx      = 0;
+var idx_gid  = idx++;
+var idx_dir  = idx++;
+var idx_vid  = idx++;
+var idx_tvid = idx++;
+
+var oTDir = Array(" Both ", " Ingress ", " Egress ");
+var oVDir = genArrayInt(0, 2);
+
+function checkForm()
+{
+    //gid
+    fld1 = document.getElementById("gid_");
+    if (fld1 && !isWithinRange("gid_", configPortMin, configNormalPortMax, "'Group ID'")) {
+        return false;
+    }
+
+    //vid
+    fld2 = document.getElementById("vid_");
+    if (fld2 && !isWithinRange("vid_", configVlanIdMin, configVlanIdMax, "'VID'")) {
+        return false;
+    }    
+
+    //tvid
+    fld3 = document.getElementById("tvid_");
+    if (fld3 && !isWithinRange("tvid_", configVlanIdMin, configVlanIdMax, "'TVID'")) {
+        return false;
+    }
+    //check if VID and Trans_vid are same.
+    if (parseInt(fld2.value, 10) == parseInt(fld3.value, 10)) {
+        GiveAlert("VLAN ID and Translated VLAN ID cannot be same.");
+        return false;
+    }
+    return true;
+}
+
+function mapSubmit()
+{
+    if (!checkForm()) {
+        return;
+    }
+    document.getElementById("buttons").style.visibility = "hidden";
+    document.getElementById("gid_").disabled = false;
+    document.getElementById("dir_").disabled = false;
+    document.getElementById("vid_").disabled = false;
+    document.mapConfigForm.submit();
+}
+
+function mapCancel()
+{
+    document.location.href="map.htm";
+}
+
+function addRow(frag, values, ref)
+{
+    var tr, td, i;
+
+    switch (ref) {
+       case "mapData_Parameters":
+            // gid
+            tr = document.createElement("tr");
+            addLabelTextCell(tr, "Group ID", "param_label", "gid");
+            td = addInputCell(tr, values[idx_gid], "cl", "gid_", 4, 4, style_width);
+            if (parseInt(values[idx_gid], 10)) {
+                td.disabled = true;
+            }
+            frag.appendChild(tr);
+
+            // dir
+            tr = document.createElement("tr");
+            addLabelTextCell(tr, "DIR", "param_label", "dir");
+            td = addSelectCell(tr, oTDir, oVDir, parseInt(values[idx_dir], 10), "cl", "dir_", style_width);
+            if (parseInt(values[idx_dir], 10)) {
+                td.disabled = true;
+            }
+            frag.appendChild(tr);
+
+            // vid
+            tr = document.createElement("tr");
+            addLabelTextCell(tr, "VID", "param_label", "vid");
+            td = addInputCell(tr, values[idx_vid], "cl", "vid_", 4, 4, style_width);
+            if (parseInt(values[idx_vid], 10)) {
+                td.disabled = true;
+            }
+            frag.appendChild(tr);
+
+            // tvid
+            tr = document.createElement("tr");
+            addLabelTextCell(tr, "TVID", "param_label", "tvid");
+            addInputCell(tr, values[idx_tvid], "cl", "tvid_", 4, 4, style_width);
+            frag.appendChild(tr);
+            break;
+
+        default:
+            return;
+    }
+}
+
+function processUpdate(req, ref)
+{
+    //Format: <gid>/<vid>/<tvid>|...
+    if (req.responseText) {
+        mapEditReq = req;
+
+        singleMapConfigDate = req.responseText;
+        var mapConfig = singleMapConfigDate.split("/");
+
+        for (var i = 0; i < mapDataTable.length; i++) {
+            var frag = document.createDocumentFragment();
+            ref = mapDataTable[i];
+            addRow(frag, mapConfig, ref);
+            var tbody = document.getElementById(ref);
+            clearChildNodes(tbody);
+            if (!tbody.appendChild(frag)) { // Add Frag to table body
+                alert("This browser doesn't support dynamic tables.");
+            }
+        }
+    } else {
+        document.location.href = "map.htm";
+    }
+}
+
+function mapReset()
+{
+    processUpdate(mapEditReq, null);
+}
+
+function requestUpdate()
+{
+    if (pageMapEditFlag == 1) {
+        loadXMLDoc("/config/mapping_conf_edit?mapEditFlag=" + pageMapEditFlag + "&selectGroupId=" + pageSelectGroupId + "&selectDir=" + pageSelectDir + "&selectVlanId=" + pageSelectVlanId, processUpdate, null);
+    } else {
+        loadXMLDoc("/config/mapping_conf_edit?mapEditFlag=" + pageMapEditFlag, processUpdate, null);
+    }
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+<form name="mapConfigForm" method="POST" action="/config/mapping_conf_edit">
+
+<h1>Mapping Configuration</h1>
+
+<table summary="Mapping Configuration">
+<tr>
+<td valign="top" width="320">
+<h1>Mapping Parameters</h1>
+<table summary="Mapping Configuration - Mapping Parameters" class="config">
+    <tbody id="mapData_Parameters">
+    </tbody>
+</table>
+</td>
+</tr>
+</table>
+
+<p id="buttons">
+<input type="button" value="Save" onclick="mapSubmit();">
+<input type="button" value="Reset" onclick="mapReset();">
+<input type="button" value="Cancel" onclick="mapCancel();">
+</p>
+
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

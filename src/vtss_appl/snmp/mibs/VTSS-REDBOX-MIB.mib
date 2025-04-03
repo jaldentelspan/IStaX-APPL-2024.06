@@ -1,0 +1,2325 @@
+-- *****************************************************************
+-- REDBOX-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-REDBOX-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    MacAddress FROM SNMPv2-TC
+    TruthValue FROM SNMPv2-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSPortList FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    VTSSUnsigned64 FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    VTSSVlan FROM VTSS-TC
+    ;
+
+vtssRedboxMib MODULE-IDENTITY
+    LAST-UPDATED "202309150000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "Private MIB for IEC 62439-3 PRP/HSR RedBox."
+    REVISION    "202309150000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 165 }
+
+
+VTSSRedBoxLanId ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines whether the RedBox connects to LanA or LanB."
+    SYNTAX      INTEGER { lanA(0), lanB(1) }
+
+VTSSRedBoxMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the RedBox' mode of operation."
+    SYNTAX      INTEGER { prpSan(0), hsrSan(1), hsrPrp(2), hsrHsr(3) }
+
+VTSSRedBoxNodeType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Node type"
+    SYNTAX      INTEGER { danP(0), danPRedBox(1), vDanP(2), danH(3),
+                          danHRedBox(4), vDanH(5), san(6) }
+
+VTSSRedBoxOperState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Operational state of a RedBox instance"
+    SYNTAX      INTEGER { disabled(0), active(1), internalError(2) }
+
+VTSSRedBoxSvType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Supervision frame type"
+    SYNTAX      INTEGER { prpDd(0), prpDa(1), hsr(2) }
+
+vtssRedboxMibObjects OBJECT IDENTIFIER
+    ::= { vtssRedboxMib 1 }
+
+vtssRedboxCapabilities OBJECT IDENTIFIER
+    ::= { vtssRedboxMibObjects 1 }
+
+vtssRedboxCapabilitiesList OBJECT IDENTIFIER
+    ::= { vtssRedboxCapabilities 1 }
+
+vtssRedboxCapabilitiesListInstCntMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of configurable RedBox instances."
+    ::= { vtssRedboxCapabilitiesList 1 }
+
+vtssRedboxCapabilitiesListNtPntSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of entries in the combined NodesTable/ProxyNodeTable."
+    ::= { vtssRedboxCapabilitiesList 2 }
+
+vtssRedboxCapabilitiesListNtAgeTimeMin OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum allowed NodesTable age time in seconds."
+    ::= { vtssRedboxCapabilitiesList 3 }
+
+vtssRedboxCapabilitiesListNtAgeTimeMax OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum allowed NodesTable age time in seconds."
+    ::= { vtssRedboxCapabilitiesList 4 }
+
+vtssRedboxCapabilitiesListPntAgeTimeMin OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum allowed ProxyNodeTable age time in seconds."
+    ::= { vtssRedboxCapabilitiesList 5 }
+
+vtssRedboxCapabilitiesListPntAgeTimeMax OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum allowed ProxyNodeTable age time in seconds."
+    ::= { vtssRedboxCapabilitiesList 6 }
+
+vtssRedboxCapabilitiesListDdAgeTimeMin OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum allowed Duplicate Discard age time in milliseconds."
+    ::= { vtssRedboxCapabilitiesList 7 }
+
+vtssRedboxCapabilitiesListDdAgeTimeMax OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum allowed Duplicate Discard age time in milliseconds."
+    ::= { vtssRedboxCapabilitiesList 8 }
+
+vtssRedboxCapabilitiesListSvFrameIntervalMin OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum allowed supervision frame interval in seconds."
+    ::= { vtssRedboxCapabilitiesList 9 }
+
+vtssRedboxCapabilitiesListSvFrameIntervalMax OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum allowed supervision frame interval in seconds."
+    ::= { vtssRedboxCapabilitiesList 10 }
+
+vtssRedboxCapabilitiesListStatisticsPollInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds between statistics polling."
+    ::= { vtssRedboxCapabilitiesList 11 }
+
+vtssRedboxCapabilitiesListAlarmRaisedTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds after a frame error condition is no longer detected
+         until the notification/alarm disappears."
+    ::= { vtssRedboxCapabilitiesList 12 }
+
+vtssRedboxCapabilitiesInterfacesTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxCapabilitiesInterfacesEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This table shows - per RedBox instance number - which interfaces can be
+         configured on that instance"
+    ::= { vtssRedboxCapabilities 2 }
+
+vtssRedboxCapabilitiesInterfacesEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxCapabilitiesInterfacesEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each RedBox has a list of valid interfaces that can be used along with
+         that instance"
+    INDEX       { vtssRedboxCapabilitiesInterfacesInstance }
+    ::= { vtssRedboxCapabilitiesInterfacesTable 1 }
+
+VTSSRedboxCapabilitiesInterfacesEntry ::= SEQUENCE {
+    vtssRedboxCapabilitiesInterfacesInstance    Unsigned32,
+    vtssRedboxCapabilitiesInterfacesInterfaces  VTSSPortList
+}
+
+vtssRedboxCapabilitiesInterfacesInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxCapabilitiesInterfacesEntry 1 }
+
+vtssRedboxCapabilitiesInterfacesInterfaces OBJECT-TYPE
+    SYNTAX      VTSSPortList
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "List of valid ports for this RedBox instance."
+    ::= { vtssRedboxCapabilitiesInterfacesEntry 2 }
+
+vtssRedboxConfig OBJECT IDENTIFIER
+    ::= { vtssRedboxMibObjects 2 }
+
+vtssRedboxConfigTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance configuration table."
+    ::= { vtssRedboxConfig 1 }
+
+vtssRedboxConfigEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a RedBox instance's configuration."
+    INDEX       { vtssRedboxConfigInstance }
+    ::= { vtssRedboxConfigTable 1 }
+
+VTSSRedboxConfigEntry ::= SEQUENCE {
+    vtssRedboxConfigInstance         Unsigned32,
+    vtssRedboxConfigMode             VTSSRedBoxMode,
+    vtssRedboxConfigPortA            VTSSInterfaceIndex,
+    vtssRedboxConfigPortB            VTSSInterfaceIndex,
+    vtssRedboxConfigNetId            VTSSUnsigned8,
+    vtssRedboxConfigLanId            VTSSRedBoxLanId,
+    vtssRedboxConfigNtAgeTime        VTSSUnsigned16,
+    vtssRedboxConfigPntAgeTime       VTSSUnsigned16,
+    vtssRedboxConfigDdAgeTime        VTSSUnsigned16,
+    vtssRedboxConfigSvVlan           VTSSVlan,
+    vtssRedboxConfigSvPcp            VTSSUnsigned8,
+    vtssRedboxConfigSvDmacLsb        VTSSUnsigned8,
+    vtssRedboxConfigSvFrameInterval  VTSSUnsigned16,
+    vtssRedboxConfigSvXlatPrpToHsr   TruthValue,
+    vtssRedboxConfigSvXlatHsrToPrp   TruthValue,
+    vtssRedboxConfigAdminActive      TruthValue,
+    vtssRedboxConfigAction           VTSSRowEditorState
+}
+
+vtssRedboxConfigInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxConfigEntry 1 }
+
+vtssRedboxConfigMode OBJECT-TYPE
+    SYNTAX      VTSSRedBoxMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Mode that this instance is running in."
+    ::= { vtssRedboxConfigEntry 2 }
+
+vtssRedboxConfigPortA OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of port A."
+    ::= { vtssRedboxConfigEntry 3 }
+
+vtssRedboxConfigPortB OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of port B."
+    ::= { vtssRedboxConfigEntry 4 }
+
+vtssRedboxConfigNetId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "NetId used to filter frames in HSR-PRP and HSR-HSR modes."
+    ::= { vtssRedboxConfigEntry 7 }
+
+vtssRedboxConfigLanId OBJECT-TYPE
+    SYNTAX      VTSSRedBoxLanId
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "LanId used to filter frames in HSR-PRP mode."
+    ::= { vtssRedboxConfigEntry 8 }
+
+vtssRedboxConfigNtAgeTime OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds without activity before a remote node is removed from
+         the NodesTable."
+    ::= { vtssRedboxConfigEntry 9 }
+
+vtssRedboxConfigPntAgeTime OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds without activity before a proxy node is removed from
+         the ProxyNodeTable."
+    ::= { vtssRedboxConfigEntry 10 }
+
+vtssRedboxConfigDdAgeTime OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of milliseconds that an entry is considered a duplicate."
+    ::= { vtssRedboxConfigEntry 11 }
+
+vtssRedboxConfigSvVlan OBJECT-TYPE
+    SYNTAX      VTSSVlan
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "VLAN ID on which supervision PDUs are transmitted on port A and port B.
+         Use 0 to indicate the interlink port's native VLAN (Port VLAN ID)"
+    ::= { vtssRedboxConfigEntry 12 }
+
+vtssRedboxConfigSvPcp OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "PCP value used in the VLAN tag of supervision PDUs transmitted on port
+         A and port B."
+    ::= { vtssRedboxConfigEntry 13 }
+
+vtssRedboxConfigSvDmacLsb OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Least significant byte of destination MAC address used in supervision
+         frames transmitted on port A and port B."
+    ::= { vtssRedboxConfigEntry 14 }
+
+vtssRedboxConfigSvFrameInterval OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds between transmission of supervision frames."
+    ::= { vtssRedboxConfigEntry 15 }
+
+vtssRedboxConfigSvXlatPrpToHsr OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Enable proxy-translation of supervision frames from HSR ring to PRP
+         network (HSR-PRP mode only)."
+    ::= { vtssRedboxConfigEntry 16 }
+
+vtssRedboxConfigSvXlatHsrToPrp OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Enable proxy-translation of supervision frames from PRP network to HSR
+         ring (HSR-PRP mode only)."
+    ::= { vtssRedboxConfigEntry 17 }
+
+vtssRedboxConfigAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether this instance is active or not."
+    ::= { vtssRedboxConfigEntry 18 }
+
+vtssRedboxConfigAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssRedboxConfigEntry 100 }
+
+vtssRedboxConfigRowEditor OBJECT IDENTIFIER
+    ::= { vtssRedboxConfig 2 }
+
+vtssRedboxConfigRowEditorInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxConfigRowEditor 1 }
+
+vtssRedboxConfigRowEditorMode OBJECT-TYPE
+    SYNTAX      VTSSRedBoxMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Mode that this instance is running in."
+    ::= { vtssRedboxConfigRowEditor 2 }
+
+vtssRedboxConfigRowEditorPortA OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of port A."
+    ::= { vtssRedboxConfigRowEditor 3 }
+
+vtssRedboxConfigRowEditorPortB OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of port B."
+    ::= { vtssRedboxConfigRowEditor 4 }
+
+vtssRedboxConfigRowEditorNetId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "NetId used to filter frames in HSR-PRP and HSR-HSR modes."
+    ::= { vtssRedboxConfigRowEditor 7 }
+
+vtssRedboxConfigRowEditorLanId OBJECT-TYPE
+    SYNTAX      VTSSRedBoxLanId
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "LanId used to filter frames in HSR-PRP mode."
+    ::= { vtssRedboxConfigRowEditor 8 }
+
+vtssRedboxConfigRowEditorNtAgeTime OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds without activity before a remote node is removed from
+         the NodesTable."
+    ::= { vtssRedboxConfigRowEditor 9 }
+
+vtssRedboxConfigRowEditorPntAgeTime OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds without activity before a proxy node is removed from
+         the ProxyNodeTable."
+    ::= { vtssRedboxConfigRowEditor 10 }
+
+vtssRedboxConfigRowEditorDdAgeTime OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of milliseconds that an entry is considered a duplicate."
+    ::= { vtssRedboxConfigRowEditor 11 }
+
+vtssRedboxConfigRowEditorSvVlan OBJECT-TYPE
+    SYNTAX      VTSSVlan
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "VLAN ID on which supervision PDUs are transmitted on port A and port B.
+         Use 0 to indicate the interlink port's native VLAN (Port VLAN ID)"
+    ::= { vtssRedboxConfigRowEditor 12 }
+
+vtssRedboxConfigRowEditorSvPcp OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "PCP value used in the VLAN tag of supervision PDUs transmitted on port
+         A and port B."
+    ::= { vtssRedboxConfigRowEditor 13 }
+
+vtssRedboxConfigRowEditorSvDmacLsb OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Least significant byte of destination MAC address used in supervision
+         frames transmitted on port A and port B."
+    ::= { vtssRedboxConfigRowEditor 14 }
+
+vtssRedboxConfigRowEditorSvFrameInterval OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds between transmission of supervision frames."
+    ::= { vtssRedboxConfigRowEditor 15 }
+
+vtssRedboxConfigRowEditorSvXlatPrpToHsr OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Enable proxy-translation of supervision frames from HSR ring to PRP
+         network (HSR-PRP mode only)."
+    ::= { vtssRedboxConfigRowEditor 16 }
+
+vtssRedboxConfigRowEditorSvXlatHsrToPrp OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Enable proxy-translation of supervision frames from PRP network to HSR
+         ring (HSR-PRP mode only)."
+    ::= { vtssRedboxConfigRowEditor 17 }
+
+vtssRedboxConfigRowEditorAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether this instance is active or not."
+    ::= { vtssRedboxConfigRowEditor 18 }
+
+vtssRedboxConfigRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssRedboxConfigRowEditor 100 }
+
+vtssRedboxStatus OBJECT IDENTIFIER
+    ::= { vtssRedboxMibObjects 3 }
+
+vtssRedboxStatusTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Redbox status table."
+    ::= { vtssRedboxStatus 1 }
+
+vtssRedboxStatusEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a RedBox instance's status."
+    INDEX       { vtssRedboxStatusInstance }
+    ::= { vtssRedboxStatusTable 1 }
+
+VTSSRedboxStatusEntry ::= SEQUENCE {
+    vtssRedboxStatusInstance                                    Unsigned32,
+    vtssRedboxStatusOperState                                   VTSSRedBoxOperState,
+    vtssRedboxStatusPortC                                       VTSSInterfaceIndex,
+    vtssRedboxStatusNtPntFull                                   TruthValue,
+    vtssRedboxStatusPortAWrongLan                               TruthValue,
+    vtssRedboxStatusPortAHsrUntaggedRx                          TruthValue,
+    vtssRedboxStatusPortADown                                   TruthValue,
+    vtssRedboxStatusPortBWrongLan                               TruthValue,
+    vtssRedboxStatusPortBHsrUntaggedRx                          TruthValue,
+    vtssRedboxStatusPortBDown                                   TruthValue,
+    vtssRedboxStatusPortCWrongLan                               TruthValue,
+    vtssRedboxStatusPortCHsrUntaggedRx                          TruthValue,
+    vtssRedboxStatusWarningNone                                 TruthValue,
+    vtssRedboxStatusWarningMtuTooHighLrePorts                   TruthValue,
+    vtssRedboxStatusWarningMtuTooHighNonLrePorts                TruthValue,
+    vtssRedboxStatusWarningInterlinkNotCTagged                  TruthValue,
+    vtssRedboxStatusWarningInterlinkNotMemberOfVlan             TruthValue,
+    vtssRedboxStatusWarningNeighborRedBoxNotConfigured          TruthValue,
+    vtssRedboxStatusWarningNeighborRedBoxNotActive              TruthValue,
+    vtssRedboxStatusWarningNeighborRedBoxPortANotSetToNeighbor  TruthValue,
+    vtssRedboxStatusWarningNeighborRedBoxPortBNotSetToNeighbor  TruthValue,
+    vtssRedboxStatusWarningNeighborRedBoxOverlappingVlans       TruthValue,
+    vtssRedboxStatusWarningStpEnabledInterlink                  TruthValue
+}
+
+vtssRedboxStatusInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxStatusEntry 1 }
+
+vtssRedboxStatusOperState OBJECT-TYPE
+    SYNTAX      VTSSRedBoxOperState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Operational state of this RedBox instance."
+    ::= { vtssRedboxStatusEntry 2 }
+
+vtssRedboxStatusPortC OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Interface index of port C (the interlink port)."
+    ::= { vtssRedboxStatusEntry 3 }
+
+vtssRedboxStatusNtPntFull OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The combined NodesTable/ProxyNodeTable is full"
+    ::= { vtssRedboxStatusEntry 4 }
+
+vtssRedboxStatusPortAWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port A has received traffic with wrong Lan ID"
+    ::= { vtssRedboxStatusEntry 15 }
+
+vtssRedboxStatusPortAHsrUntaggedRx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port A has received traffic without HSR-tag from HSR ring"
+    ::= { vtssRedboxStatusEntry 16 }
+
+vtssRedboxStatusPortADown OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port A has link down"
+    ::= { vtssRedboxStatusEntry 17 }
+
+vtssRedboxStatusPortBWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port B has received traffic with wrong Lan ID"
+    ::= { vtssRedboxStatusEntry 28 }
+
+vtssRedboxStatusPortBHsrUntaggedRx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port B has received traffic without HSR-tag from HSR ring"
+    ::= { vtssRedboxStatusEntry 29 }
+
+vtssRedboxStatusPortBDown OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port B has link down"
+    ::= { vtssRedboxStatusEntry 30 }
+
+vtssRedboxStatusPortCWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port C has received traffic with wrong Lan ID"
+    ::= { vtssRedboxStatusEntry 41 }
+
+vtssRedboxStatusPortCHsrUntaggedRx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port C has received traffic without HSR-tag from HSR ring"
+    ::= { vtssRedboxStatusEntry 42 }
+
+vtssRedboxStatusWarningNone OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "No configurational warnings found."
+    ::= { vtssRedboxStatusEntry 54 }
+
+vtssRedboxStatusWarningMtuTooHighLrePorts OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The MTU is too high on at least one of the LRE ports (max is 2000)"
+    ::= { vtssRedboxStatusEntry 55 }
+
+vtssRedboxStatusWarningMtuTooHighNonLrePorts OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The MTU is too high on at least one non-LRE port. Frames larger than
+         1994 cannot traverse the HSR/PRP network"
+    ::= { vtssRedboxStatusEntry 56 }
+
+vtssRedboxStatusWarningInterlinkNotCTagged OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Interlink port must use C-tags"
+    ::= { vtssRedboxStatusEntry 57 }
+
+vtssRedboxStatusWarningInterlinkNotMemberOfVlan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Interlink port is not member of the supervision frame VLAN ID"
+    ::= { vtssRedboxStatusEntry 58 }
+
+vtssRedboxStatusWarningNeighborRedBoxNotConfigured OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The neighbor RedBox is not configured"
+    ::= { vtssRedboxStatusEntry 59 }
+
+vtssRedboxStatusWarningNeighborRedBoxNotActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The neighbor RedBox is not active"
+    ::= { vtssRedboxStatusEntry 60 }
+
+vtssRedboxStatusWarningNeighborRedBoxPortANotSetToNeighbor OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The neighbor's port A is not configured as a RedBox neighbor"
+    ::= { vtssRedboxStatusEntry 61 }
+
+vtssRedboxStatusWarningNeighborRedBoxPortBNotSetToNeighbor OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The neighbor's port B is not configured as a RedBox neighbor"
+    ::= { vtssRedboxStatusEntry 62 }
+
+vtssRedboxStatusWarningNeighborRedBoxOverlappingVlans OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The neighbor's interlink port has coinciding VLAN memberships with this
+         RedBox's interlink port"
+    ::= { vtssRedboxStatusEntry 63 }
+
+vtssRedboxStatusWarningStpEnabledInterlink OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Interlink port has spanning tree enabled"
+    ::= { vtssRedboxStatusEntry 64 }
+
+vtssRedboxStatusNtTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxStatusNtEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Redbox NodesTable status."
+    ::= { vtssRedboxStatus 2 }
+
+vtssRedboxStatusNtEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxStatusNtEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents the status of the NodesTable for a
+         given RedBox instance."
+    INDEX       { vtssRedboxStatusNtInstance }
+    ::= { vtssRedboxStatusNtTable 1 }
+
+VTSSRedboxStatusNtEntry ::= SEQUENCE {
+    vtssRedboxStatusNtInstance  Unsigned32,
+    vtssRedboxStatusNtMacCnt    Unsigned32,
+    vtssRedboxStatusNtWrongLan  TruthValue
+}
+
+vtssRedboxStatusNtInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxStatusNtEntry 1 }
+
+vtssRedboxStatusNtMacCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of MAC addresses in NodesTable"
+    ::= { vtssRedboxStatusNtEntry 2 }
+
+vtssRedboxStatusNtWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "True if at least one MAC address in the NodesTable has a non-zero Rx
+         Wrong LAN count (PRP-SAN mode only)"
+    ::= { vtssRedboxStatusNtEntry 3 }
+
+vtssRedboxStatusNtMacTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxStatusNtMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Redbox NodesTable MAC status."
+    ::= { vtssRedboxStatus 3 }
+
+vtssRedboxStatusNtMacEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxStatusNtMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a MAC address in the NodesTable for
+         a given RedBox instance."
+    INDEX       { vtssRedboxStatusNtMacInstance,
+                  vtssRedboxStatusNtMacMacAddress }
+    ::= { vtssRedboxStatusNtMacTable 1 }
+
+VTSSRedboxStatusNtMacEntry ::= SEQUENCE {
+    vtssRedboxStatusNtMacInstance            Unsigned32,
+    vtssRedboxStatusNtMacMacAddress          MacAddress,
+    vtssRedboxStatusNtMacNodeType            VTSSRedBoxNodeType,
+    vtssRedboxStatusNtMacPortARxCnt          Unsigned32,
+    vtssRedboxStatusNtMacPortALastSeen       Unsigned32,
+    vtssRedboxStatusNtMacPortASvRxCnt        Unsigned32,
+    vtssRedboxStatusNtMacPortASvLastSeen     Unsigned32,
+    vtssRedboxStatusNtMacPortASvLastType     VTSSRedBoxSvType,
+    vtssRedboxStatusNtMacPortARxWrongLanCnt  Unsigned32,
+    vtssRedboxStatusNtMacPortAFwd            TruthValue,
+    vtssRedboxStatusNtMacPortBRxCnt          Unsigned32,
+    vtssRedboxStatusNtMacPortBLastSeen       Unsigned32,
+    vtssRedboxStatusNtMacPortBSvRxCnt        Unsigned32,
+    vtssRedboxStatusNtMacPortBSvLastSeen     Unsigned32,
+    vtssRedboxStatusNtMacPortBSvLastType     VTSSRedBoxSvType,
+    vtssRedboxStatusNtMacPortBRxWrongLanCnt  Unsigned32,
+    vtssRedboxStatusNtMacPortBFwd            TruthValue
+}
+
+vtssRedboxStatusNtMacInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxStatusNtMacEntry 1 }
+
+vtssRedboxStatusNtMacMacAddress OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "MAC address in NodesTable or ProxyNodeTable."
+    ::= { vtssRedboxStatusNtMacEntry 2 }
+
+vtssRedboxStatusNtMacNodeType OBJECT-TYPE
+    SYNTAX      VTSSRedBoxNodeType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Type of node"
+    ::= { vtssRedboxStatusNtMacEntry 3 }
+
+vtssRedboxStatusNtMacPortARxCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port A"
+    ::= { vtssRedboxStatusNtMacEntry 14 }
+
+vtssRedboxStatusNtMacPortALastSeen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds since this MAC address was last seen on Port A"
+    ::= { vtssRedboxStatusNtMacEntry 15 }
+
+vtssRedboxStatusNtMacPortASvRxCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of valid supervision frames received on Port A"
+    ::= { vtssRedboxStatusNtMacEntry 16 }
+
+vtssRedboxStatusNtMacPortASvLastSeen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds since a supervision frame was last seen on Port A"
+    ::= { vtssRedboxStatusNtMacEntry 17 }
+
+vtssRedboxStatusNtMacPortASvLastType OBJECT-TYPE
+    SYNTAX      VTSSRedBoxSvType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The supervision frame type last received on Port A"
+    ::= { vtssRedboxStatusNtMacEntry 18 }
+
+vtssRedboxStatusNtMacPortARxWrongLanCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The number of frames received with wrong LanId on Port A in PRP-SAN
+         mode"
+    ::= { vtssRedboxStatusNtMacEntry 19 }
+
+vtssRedboxStatusNtMacPortAFwd OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether the a frame from switch core will be forwarded on
+         Port A (PRP-SAN mode only)"
+    ::= { vtssRedboxStatusNtMacEntry 20 }
+
+vtssRedboxStatusNtMacPortBRxCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port B"
+    ::= { vtssRedboxStatusNtMacEntry 31 }
+
+vtssRedboxStatusNtMacPortBLastSeen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds since this MAC address was last seen on Port B"
+    ::= { vtssRedboxStatusNtMacEntry 32 }
+
+vtssRedboxStatusNtMacPortBSvRxCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of valid supervision frames received on Port B"
+    ::= { vtssRedboxStatusNtMacEntry 33 }
+
+vtssRedboxStatusNtMacPortBSvLastSeen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds since a supervision frame was last seen on Port B"
+    ::= { vtssRedboxStatusNtMacEntry 34 }
+
+vtssRedboxStatusNtMacPortBSvLastType OBJECT-TYPE
+    SYNTAX      VTSSRedBoxSvType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The supervision frame type last received on Port B"
+    ::= { vtssRedboxStatusNtMacEntry 35 }
+
+vtssRedboxStatusNtMacPortBRxWrongLanCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The number of frames received with wrong LanId on Port B in PRP-SAN
+         mode"
+    ::= { vtssRedboxStatusNtMacEntry 36 }
+
+vtssRedboxStatusNtMacPortBFwd OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether the a frame from switch core will be forwarded on
+         Port B (PRP-SAN mode only)"
+    ::= { vtssRedboxStatusNtMacEntry 37 }
+
+vtssRedboxStatusPntTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxStatusPntEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Redbox ProxyNodeTable status."
+    ::= { vtssRedboxStatus 4 }
+
+vtssRedboxStatusPntEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxStatusPntEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents the status of the ProxyNodeTable
+         for a given RedBox instance."
+    INDEX       { vtssRedboxStatusPntInstance }
+    ::= { vtssRedboxStatusPntTable 1 }
+
+VTSSRedboxStatusPntEntry ::= SEQUENCE {
+    vtssRedboxStatusPntInstance  Unsigned32,
+    vtssRedboxStatusPntMacCnt    Unsigned32,
+    vtssRedboxStatusPntWrongLan  TruthValue
+}
+
+vtssRedboxStatusPntInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxStatusPntEntry 1 }
+
+vtssRedboxStatusPntMacCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of MAC addresses in ProxyNodeTable"
+    ::= { vtssRedboxStatusPntEntry 2 }
+
+vtssRedboxStatusPntWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "True if at least one MAC address in the ProxyNodeTable has a non-zero
+         Rx Wrong LAN count (HSR-PRP mode only)"
+    ::= { vtssRedboxStatusPntEntry 3 }
+
+vtssRedboxStatusPntMacTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxStatusPntMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Redbox ProxyNodeTable MAC status."
+    ::= { vtssRedboxStatus 5 }
+
+vtssRedboxStatusPntMacEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxStatusPntMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a MAC address in the ProxyNodeTable
+         for a given RedBox instance."
+    INDEX       { vtssRedboxStatusPntMacInstance,
+                  vtssRedboxStatusPntMacMacAddress }
+    ::= { vtssRedboxStatusPntMacTable 1 }
+
+VTSSRedboxStatusPntMacEntry ::= SEQUENCE {
+    vtssRedboxStatusPntMacInstance            Unsigned32,
+    vtssRedboxStatusPntMacMacAddress          MacAddress,
+    vtssRedboxStatusPntMacNodeType            VTSSRedBoxNodeType,
+    vtssRedboxStatusPntMacPortCRxCnt          Unsigned32,
+    vtssRedboxStatusPntMacPortCLastSeen       Unsigned32,
+    vtssRedboxStatusPntMacPortCSvRxCnt        Unsigned32,
+    vtssRedboxStatusPntMacPortCSvLastSeen     Unsigned32,
+    vtssRedboxStatusPntMacPortCSvLastType     VTSSRedBoxSvType,
+    vtssRedboxStatusPntMacPortCRxWrongLanCnt  Unsigned32,
+    vtssRedboxStatusPntMacSvTxCnt             Unsigned32,
+    vtssRedboxStatusPntMacLocked              TruthValue
+}
+
+vtssRedboxStatusPntMacInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxStatusPntMacEntry 1 }
+
+vtssRedboxStatusPntMacMacAddress OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "MAC address in NodesTable or ProxyNodeTable."
+    ::= { vtssRedboxStatusPntMacEntry 2 }
+
+vtssRedboxStatusPntMacNodeType OBJECT-TYPE
+    SYNTAX      VTSSRedBoxNodeType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Type of node"
+    ::= { vtssRedboxStatusPntMacEntry 3 }
+
+vtssRedboxStatusPntMacPortCRxCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port C"
+    ::= { vtssRedboxStatusPntMacEntry 4 }
+
+vtssRedboxStatusPntMacPortCLastSeen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds since this MAC address was last seen on Port C"
+    ::= { vtssRedboxStatusPntMacEntry 5 }
+
+vtssRedboxStatusPntMacPortCSvRxCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of valid supervision frames received on Port C"
+    ::= { vtssRedboxStatusPntMacEntry 6 }
+
+vtssRedboxStatusPntMacPortCSvLastSeen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of seconds since a supervision frame was last seen on Port C"
+    ::= { vtssRedboxStatusPntMacEntry 7 }
+
+vtssRedboxStatusPntMacPortCSvLastType OBJECT-TYPE
+    SYNTAX      VTSSRedBoxSvType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The supervision frame type last received on Port C"
+    ::= { vtssRedboxStatusPntMacEntry 8 }
+
+vtssRedboxStatusPntMacPortCRxWrongLanCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The number of frames received with wrong LanId on Port C in HSR-PRP
+         mode"
+    ::= { vtssRedboxStatusPntMacEntry 9 }
+
+vtssRedboxStatusPntMacSvTxCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of proxied supervision frames transmitted towards LRE ports on
+         behalf of this VDAN."
+    ::= { vtssRedboxStatusPntMacEntry 20 }
+
+vtssRedboxStatusPntMacLocked OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether the node is locked in the ProxyNodeTable. Only
+         entries added by the RedBox itself are locked."
+    ::= { vtssRedboxStatusPntMacEntry 21 }
+
+vtssRedboxStatusNotificationTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxStatusNotificationEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "RedBox notification status table."
+    ::= { vtssRedboxStatus 6 }
+
+vtssRedboxStatusNotificationEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxStatusNotificationEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a RedBox instance's notification
+         status."
+    INDEX       { vtssRedboxStatusNotificationInstance }
+    ::= { vtssRedboxStatusNotificationTable 1 }
+
+VTSSRedboxStatusNotificationEntry ::= SEQUENCE {
+    vtssRedboxStatusNotificationInstance            Unsigned32,
+    vtssRedboxStatusNotificationNtPntFull           TruthValue,
+    vtssRedboxStatusNotificationPortAWrongLan       TruthValue,
+    vtssRedboxStatusNotificationPortAHsrUntaggedRx  TruthValue,
+    vtssRedboxStatusNotificationPortADown           TruthValue,
+    vtssRedboxStatusNotificationPortBWrongLan       TruthValue,
+    vtssRedboxStatusNotificationPortBHsrUntaggedRx  TruthValue,
+    vtssRedboxStatusNotificationPortBDown           TruthValue,
+    vtssRedboxStatusNotificationPortCWrongLan       TruthValue,
+    vtssRedboxStatusNotificationPortCHsrUntaggedRx  TruthValue
+}
+
+vtssRedboxStatusNotificationInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxStatusNotificationEntry 1 }
+
+vtssRedboxStatusNotificationNtPntFull OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The combined NodesTable/ProxyNodeTable is full"
+    ::= { vtssRedboxStatusNotificationEntry 2 }
+
+vtssRedboxStatusNotificationPortAWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port A has received traffic with wrong Lan ID"
+    ::= { vtssRedboxStatusNotificationEntry 13 }
+
+vtssRedboxStatusNotificationPortAHsrUntaggedRx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port A has received traffic without HSR-tag from HSR ring"
+    ::= { vtssRedboxStatusNotificationEntry 14 }
+
+vtssRedboxStatusNotificationPortADown OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port A has link down"
+    ::= { vtssRedboxStatusNotificationEntry 15 }
+
+vtssRedboxStatusNotificationPortBWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port B has received traffic with wrong Lan ID"
+    ::= { vtssRedboxStatusNotificationEntry 26 }
+
+vtssRedboxStatusNotificationPortBHsrUntaggedRx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port B has received traffic without HSR-tag from HSR ring"
+    ::= { vtssRedboxStatusNotificationEntry 27 }
+
+vtssRedboxStatusNotificationPortBDown OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port B has link down"
+    ::= { vtssRedboxStatusNotificationEntry 28 }
+
+vtssRedboxStatusNotificationPortCWrongLan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port C has received traffic with wrong Lan ID"
+    ::= { vtssRedboxStatusNotificationEntry 39 }
+
+vtssRedboxStatusNotificationPortCHsrUntaggedRx OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port C has received traffic without HSR-tag from HSR ring"
+    ::= { vtssRedboxStatusNotificationEntry 40 }
+
+vtssRedboxControl OBJECT IDENTIFIER
+    ::= { vtssRedboxMibObjects 4 }
+
+vtssRedboxControlNtClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxControlNtClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Clear RedBox' NodesTable."
+    ::= { vtssRedboxControl 1 }
+
+vtssRedboxControlNtClearEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxControlNtClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a RedBox whose NodesTable may be
+         cleared."
+    INDEX       { vtssRedboxControlNtClearInstance }
+    ::= { vtssRedboxControlNtClearTable 1 }
+
+VTSSRedboxControlNtClearEntry ::= SEQUENCE {
+    vtssRedboxControlNtClearInstance  Unsigned32,
+    vtssRedboxControlNtClearClear     TruthValue
+}
+
+vtssRedboxControlNtClearInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxControlNtClearEntry 1 }
+
+vtssRedboxControlNtClearClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to clear the NodesTable of a RedBox instance."
+    ::= { vtssRedboxControlNtClearEntry 2 }
+
+vtssRedboxControlPntClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxControlPntClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Clear RedBox' ProxyNodeTable."
+    ::= { vtssRedboxControl 2 }
+
+vtssRedboxControlPntClearEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxControlPntClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a RedBox whose ProxyNodeTable may
+         be cleared."
+    INDEX       { vtssRedboxControlPntClearInstance }
+    ::= { vtssRedboxControlPntClearTable 1 }
+
+VTSSRedboxControlPntClearEntry ::= SEQUENCE {
+    vtssRedboxControlPntClearInstance  Unsigned32,
+    vtssRedboxControlPntClearClear     TruthValue
+}
+
+vtssRedboxControlPntClearInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxControlPntClearEntry 1 }
+
+vtssRedboxControlPntClearClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to clear the ProxyNodeTable of a RedBox instance."
+    ::= { vtssRedboxControlPntClearEntry 2 }
+
+vtssRedboxControlStatisticsClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Clear RedBox statistics table."
+    ::= { vtssRedboxControl 3 }
+
+vtssRedboxControlStatisticsClearEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a RedBox whose statistics may be
+         cleared."
+    INDEX       { vtssRedboxControlStatisticsClearInstance }
+    ::= { vtssRedboxControlStatisticsClearTable 1 }
+
+VTSSRedboxControlStatisticsClearEntry ::= SEQUENCE {
+    vtssRedboxControlStatisticsClearInstance  Unsigned32,
+    vtssRedboxControlStatisticsClearClear     TruthValue
+}
+
+vtssRedboxControlStatisticsClearInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxControlStatisticsClearEntry 1 }
+
+vtssRedboxControlStatisticsClearClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to clear the counters of a RedBox instance."
+    ::= { vtssRedboxControlStatisticsClearEntry 2 }
+
+vtssRedboxStatistics OBJECT IDENTIFIER
+    ::= { vtssRedboxMibObjects 5 }
+
+vtssRedboxStatisticsTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSRedboxStatisticsEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Redbox statistics table."
+    ::= { vtssRedboxStatistics 1 }
+
+vtssRedboxStatisticsEntry OBJECT-TYPE
+    SYNTAX      VTSSRedboxStatisticsEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents a RedBox instance's statistics."
+    INDEX       { vtssRedboxStatisticsInstance }
+    ::= { vtssRedboxStatisticsTable 1 }
+
+VTSSRedboxStatisticsEntry ::= SEQUENCE {
+    vtssRedboxStatisticsInstance              Unsigned32,
+    vtssRedboxStatisticsPortARxTaggedCnt      VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxTaggedCnt      VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxUntaggedCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxUntaggedCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxLinkLocalCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxLinkLocalCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxOwnCnt         VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxWrongLanCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxDuplZeroCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxDuplOneCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxDuplMultiCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxSvErrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxSvFilteredCnt  VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxSvPrpDdCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxSvPrpDaCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortARxSvHsrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxSvPrpDdCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxSvPrpDaCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortATxSvHsrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxTaggedCnt      VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxTaggedCnt      VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxUntaggedCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxUntaggedCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxLinkLocalCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxLinkLocalCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxOwnCnt         VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxWrongLanCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxDuplZeroCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxDuplOneCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxDuplMultiCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxSvErrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxSvFilteredCnt  VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxSvPrpDdCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxSvPrpDaCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortBRxSvHsrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxSvPrpDdCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxSvPrpDaCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortBTxSvHsrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxTaggedCnt      VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxTaggedCnt      VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxUntaggedCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxUntaggedCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxLinkLocalCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxLinkLocalCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxOwnCnt         VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxWrongLanCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxDuplZeroCnt    VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxDuplOneCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxDuplMultiCnt   VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxSvErrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxSvFilteredCnt  VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxSvPrpDdCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxSvPrpDaCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortCRxSvHsrCnt       VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxSvPrpDdCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxSvPrpDaCnt     VTSSUnsigned64,
+    vtssRedboxStatisticsPortCTxSvHsrCnt       VTSSUnsigned64
+}
+
+vtssRedboxStatisticsInstance OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "RedBox instance number."
+    ::= { vtssRedboxStatisticsEntry 1 }
+
+vtssRedboxStatisticsPortARxTaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR- and/or PRP-tagged frames received on Port A"
+    ::= { vtssRedboxStatisticsEntry 2 }
+
+vtssRedboxStatisticsPortATxTaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR- and/or PRP-tagged frames received on Port A"
+    ::= { vtssRedboxStatisticsEntry 3 }
+
+vtssRedboxStatisticsPortARxUntaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port A that are neither HSR- nor
+         PRP-tagged"
+    ::= { vtssRedboxStatisticsEntry 4 }
+
+vtssRedboxStatisticsPortATxUntaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port A that are neither HSR- nor
+         PRP-tagged"
+    ::= { vtssRedboxStatisticsEntry 5 }
+
+vtssRedboxStatisticsPortARxLinkLocalCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of link-local (BPDUs) received on Port A"
+    ::= { vtssRedboxStatisticsEntry 6 }
+
+vtssRedboxStatisticsPortATxLinkLocalCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of link-local (BPDUs) transmitted on Port A"
+    ::= { vtssRedboxStatisticsEntry 7 }
+
+vtssRedboxStatisticsPortARxOwnCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR-tagged frames received on Port A whose SMAC appears in
+         the ProxyNodeTable)"
+    ::= { vtssRedboxStatisticsEntry 8 }
+
+vtssRedboxStatisticsPortARxWrongLanCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port A with wrong LanId"
+    ::= { vtssRedboxStatisticsEntry 9 }
+
+vtssRedboxStatisticsPortATxDuplZeroCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port A without any duplicates seen."
+    ::= { vtssRedboxStatisticsEntry 10 }
+
+vtssRedboxStatisticsPortATxDuplOneCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port A with one duplicate discarded."
+    ::= { vtssRedboxStatisticsEntry 11 }
+
+vtssRedboxStatisticsPortATxDuplMultiCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port A with two or more duplicates
+         discarded."
+    ::= { vtssRedboxStatisticsEntry 12 }
+
+vtssRedboxStatisticsPortARxSvErrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of erroneous supervision frames received on Port A."
+    ::= { vtssRedboxStatisticsEntry 13 }
+
+vtssRedboxStatisticsPortARxSvFilteredCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of filtered supervision frames received on Port A."
+    ::= { vtssRedboxStatisticsEntry 14 }
+
+vtssRedboxStatisticsPortARxSvPrpDdCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DD supervision frames received on Port A"
+    ::= { vtssRedboxStatisticsEntry 15 }
+
+vtssRedboxStatisticsPortARxSvPrpDaCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DA supervision frames received on Port A"
+    ::= { vtssRedboxStatisticsEntry 18 }
+
+vtssRedboxStatisticsPortARxSvHsrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR supervision frames received on Port A"
+    ::= { vtssRedboxStatisticsEntry 21 }
+
+vtssRedboxStatisticsPortATxSvPrpDdCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DD supervision frames transmitted on Port A"
+    ::= { vtssRedboxStatisticsEntry 24 }
+
+vtssRedboxStatisticsPortATxSvPrpDaCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DA supervision frames transmitted on Port A"
+    ::= { vtssRedboxStatisticsEntry 27 }
+
+vtssRedboxStatisticsPortATxSvHsrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR supervision frames transmitted on Port A"
+    ::= { vtssRedboxStatisticsEntry 30 }
+
+vtssRedboxStatisticsPortBRxTaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR- and/or PRP-tagged frames received on Port B"
+    ::= { vtssRedboxStatisticsEntry 43 }
+
+vtssRedboxStatisticsPortBTxTaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR- and/or PRP-tagged frames received on Port B"
+    ::= { vtssRedboxStatisticsEntry 44 }
+
+vtssRedboxStatisticsPortBRxUntaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port B that are neither HSR- nor
+         PRP-tagged"
+    ::= { vtssRedboxStatisticsEntry 45 }
+
+vtssRedboxStatisticsPortBTxUntaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port B that are neither HSR- nor
+         PRP-tagged"
+    ::= { vtssRedboxStatisticsEntry 46 }
+
+vtssRedboxStatisticsPortBRxLinkLocalCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of link-local (BPDUs) received on Port B"
+    ::= { vtssRedboxStatisticsEntry 47 }
+
+vtssRedboxStatisticsPortBTxLinkLocalCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of link-local (BPDUs) transmitted on Port B"
+    ::= { vtssRedboxStatisticsEntry 48 }
+
+vtssRedboxStatisticsPortBRxOwnCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR-tagged frames received on Port B whose SMAC appears in
+         the ProxyNodeTable)"
+    ::= { vtssRedboxStatisticsEntry 49 }
+
+vtssRedboxStatisticsPortBRxWrongLanCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port B with wrong LanId"
+    ::= { vtssRedboxStatisticsEntry 50 }
+
+vtssRedboxStatisticsPortBTxDuplZeroCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port B without any duplicates seen."
+    ::= { vtssRedboxStatisticsEntry 51 }
+
+vtssRedboxStatisticsPortBTxDuplOneCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port B with one duplicate discarded."
+    ::= { vtssRedboxStatisticsEntry 52 }
+
+vtssRedboxStatisticsPortBTxDuplMultiCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port B with two or more duplicates
+         discarded."
+    ::= { vtssRedboxStatisticsEntry 53 }
+
+vtssRedboxStatisticsPortBRxSvErrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of erroneous supervision frames received on Port B."
+    ::= { vtssRedboxStatisticsEntry 54 }
+
+vtssRedboxStatisticsPortBRxSvFilteredCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of filtered supervision frames received on Port B."
+    ::= { vtssRedboxStatisticsEntry 55 }
+
+vtssRedboxStatisticsPortBRxSvPrpDdCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DD supervision frames received on Port B"
+    ::= { vtssRedboxStatisticsEntry 56 }
+
+vtssRedboxStatisticsPortBRxSvPrpDaCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DA supervision frames received on Port B"
+    ::= { vtssRedboxStatisticsEntry 59 }
+
+vtssRedboxStatisticsPortBRxSvHsrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR supervision frames received on Port B"
+    ::= { vtssRedboxStatisticsEntry 62 }
+
+vtssRedboxStatisticsPortBTxSvPrpDdCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DD supervision frames transmitted on Port B"
+    ::= { vtssRedboxStatisticsEntry 65 }
+
+vtssRedboxStatisticsPortBTxSvPrpDaCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DA supervision frames transmitted on Port B"
+    ::= { vtssRedboxStatisticsEntry 68 }
+
+vtssRedboxStatisticsPortBTxSvHsrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR supervision frames transmitted on Port B"
+    ::= { vtssRedboxStatisticsEntry 71 }
+
+vtssRedboxStatisticsPortCRxTaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR- and/or PRP-tagged frames received on Port C"
+    ::= { vtssRedboxStatisticsEntry 84 }
+
+vtssRedboxStatisticsPortCTxTaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR- and/or PRP-tagged frames received on Port C"
+    ::= { vtssRedboxStatisticsEntry 85 }
+
+vtssRedboxStatisticsPortCRxUntaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port C that are neither HSR- nor
+         PRP-tagged"
+    ::= { vtssRedboxStatisticsEntry 86 }
+
+vtssRedboxStatisticsPortCTxUntaggedCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port C that are neither HSR- nor
+         PRP-tagged"
+    ::= { vtssRedboxStatisticsEntry 87 }
+
+vtssRedboxStatisticsPortCRxLinkLocalCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of link-local (BPDUs) received on Port C"
+    ::= { vtssRedboxStatisticsEntry 88 }
+
+vtssRedboxStatisticsPortCTxLinkLocalCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of link-local (BPDUs) transmitted on Port C"
+    ::= { vtssRedboxStatisticsEntry 89 }
+
+vtssRedboxStatisticsPortCRxOwnCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR-tagged frames received on Port C whose SMAC appears in
+         the ProxyNodeTable)"
+    ::= { vtssRedboxStatisticsEntry 90 }
+
+vtssRedboxStatisticsPortCRxWrongLanCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames received on Port C with wrong LanId"
+    ::= { vtssRedboxStatisticsEntry 91 }
+
+vtssRedboxStatisticsPortCTxDuplZeroCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port C without any duplicates seen."
+    ::= { vtssRedboxStatisticsEntry 92 }
+
+vtssRedboxStatisticsPortCTxDuplOneCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port C with one duplicate discarded."
+    ::= { vtssRedboxStatisticsEntry 93 }
+
+vtssRedboxStatisticsPortCTxDuplMultiCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of frames transmitted on Port C with two or more duplicates
+         discarded."
+    ::= { vtssRedboxStatisticsEntry 94 }
+
+vtssRedboxStatisticsPortCRxSvErrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of erroneous supervision frames received on Port C."
+    ::= { vtssRedboxStatisticsEntry 95 }
+
+vtssRedboxStatisticsPortCRxSvFilteredCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of filtered supervision frames received on Port C."
+    ::= { vtssRedboxStatisticsEntry 96 }
+
+vtssRedboxStatisticsPortCRxSvPrpDdCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DD supervision frames received on Port C"
+    ::= { vtssRedboxStatisticsEntry 97 }
+
+vtssRedboxStatisticsPortCRxSvPrpDaCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DA supervision frames received on Port C"
+    ::= { vtssRedboxStatisticsEntry 100 }
+
+vtssRedboxStatisticsPortCRxSvHsrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR supervision frames received on Port C"
+    ::= { vtssRedboxStatisticsEntry 103 }
+
+vtssRedboxStatisticsPortCTxSvPrpDdCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DD supervision frames transmitted on Port C"
+    ::= { vtssRedboxStatisticsEntry 106 }
+
+vtssRedboxStatisticsPortCTxSvPrpDaCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of PRP-DA supervision frames transmitted on Port C"
+    ::= { vtssRedboxStatisticsEntry 109 }
+
+vtssRedboxStatisticsPortCTxSvHsrCnt OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of HSR supervision frames transmitted on Port C"
+    ::= { vtssRedboxStatisticsEntry 112 }
+
+vtssRedboxTrap OBJECT IDENTIFIER
+    ::= { vtssRedboxMibObjects 6 }
+
+vtssRedboxTrapAdd NOTIFICATION-TYPE
+    OBJECTS     { vtssRedboxStatusNotificationInstance,
+                  vtssRedboxStatusNotificationNtPntFull,
+                  vtssRedboxStatusNotificationPortAWrongLan,
+                  vtssRedboxStatusNotificationPortAHsrUntaggedRx,
+                  vtssRedboxStatusNotificationPortADown,
+                  vtssRedboxStatusNotificationPortBWrongLan,
+                  vtssRedboxStatusNotificationPortBHsrUntaggedRx,
+                  vtssRedboxStatusNotificationPortBDown,
+                  vtssRedboxStatusNotificationPortCWrongLan,
+                  vtssRedboxStatusNotificationPortCHsrUntaggedRx }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that a row has been added. The index(es) and value(s)
+         of the row is included in the trap."
+
+    ::= { vtssRedboxTrap 1 }
+
+vtssRedboxTrapMod NOTIFICATION-TYPE
+    OBJECTS     { vtssRedboxStatusNotificationInstance,
+                  vtssRedboxStatusNotificationNtPntFull,
+                  vtssRedboxStatusNotificationPortAWrongLan,
+                  vtssRedboxStatusNotificationPortAHsrUntaggedRx,
+                  vtssRedboxStatusNotificationPortADown,
+                  vtssRedboxStatusNotificationPortBWrongLan,
+                  vtssRedboxStatusNotificationPortBHsrUntaggedRx,
+                  vtssRedboxStatusNotificationPortBDown,
+                  vtssRedboxStatusNotificationPortCWrongLan,
+                  vtssRedboxStatusNotificationPortCHsrUntaggedRx }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that one or more of the objects included in the trap
+          has been updated."
+
+    ::= { vtssRedboxTrap 2 }
+
+vtssRedboxTrapDel NOTIFICATION-TYPE
+    OBJECTS     { vtssRedboxStatusNotificationInstance }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that a row has been deleted. The index(es) of the
+         row is included in the trap."
+
+    ::= { vtssRedboxTrap 3 }
+
+vtssRedboxMibConformance OBJECT IDENTIFIER
+    ::= { vtssRedboxMib 2 }
+
+vtssRedboxMibCompliances OBJECT IDENTIFIER
+    ::= { vtssRedboxMibConformance 1 }
+
+vtssRedboxMibGroups OBJECT IDENTIFIER
+    ::= { vtssRedboxMibConformance 2 }
+
+vtssRedboxCapabilitiesListInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxCapabilitiesListInstCntMax,
+                  vtssRedboxCapabilitiesListNtPntSize,
+                  vtssRedboxCapabilitiesListNtAgeTimeMin,
+                  vtssRedboxCapabilitiesListNtAgeTimeMax,
+                  vtssRedboxCapabilitiesListPntAgeTimeMin,
+                  vtssRedboxCapabilitiesListPntAgeTimeMax,
+                  vtssRedboxCapabilitiesListDdAgeTimeMin,
+                  vtssRedboxCapabilitiesListDdAgeTimeMax,
+                  vtssRedboxCapabilitiesListSvFrameIntervalMin,
+                  vtssRedboxCapabilitiesListSvFrameIntervalMax,
+                  vtssRedboxCapabilitiesListStatisticsPollInterval,
+                  vtssRedboxCapabilitiesListAlarmRaisedTime }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 1 }
+
+vtssRedboxCapabilitiesInterfacesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxCapabilitiesInterfacesInstance,
+                  vtssRedboxCapabilitiesInterfacesInterfaces }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 2 }
+
+vtssRedboxConfigTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxConfigInstance, vtssRedboxConfigMode,
+                  vtssRedboxConfigPortA, vtssRedboxConfigPortB,
+                  vtssRedboxConfigNetId, vtssRedboxConfigLanId,
+                  vtssRedboxConfigNtAgeTime,
+                  vtssRedboxConfigPntAgeTime,
+                  vtssRedboxConfigDdAgeTime, vtssRedboxConfigSvVlan,
+                  vtssRedboxConfigSvPcp, vtssRedboxConfigSvDmacLsb,
+                  vtssRedboxConfigSvFrameInterval,
+                  vtssRedboxConfigSvXlatPrpToHsr,
+                  vtssRedboxConfigSvXlatHsrToPrp,
+                  vtssRedboxConfigAdminActive, vtssRedboxConfigAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 3 }
+
+vtssRedboxConfigRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxConfigRowEditorInstance,
+                  vtssRedboxConfigRowEditorMode,
+                  vtssRedboxConfigRowEditorPortA,
+                  vtssRedboxConfigRowEditorPortB,
+                  vtssRedboxConfigRowEditorNetId,
+                  vtssRedboxConfigRowEditorLanId,
+                  vtssRedboxConfigRowEditorNtAgeTime,
+                  vtssRedboxConfigRowEditorPntAgeTime,
+                  vtssRedboxConfigRowEditorDdAgeTime,
+                  vtssRedboxConfigRowEditorSvVlan,
+                  vtssRedboxConfigRowEditorSvPcp,
+                  vtssRedboxConfigRowEditorSvDmacLsb,
+                  vtssRedboxConfigRowEditorSvFrameInterval,
+                  vtssRedboxConfigRowEditorSvXlatPrpToHsr,
+                  vtssRedboxConfigRowEditorSvXlatHsrToPrp,
+                  vtssRedboxConfigRowEditorAdminActive,
+                  vtssRedboxConfigRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 4 }
+
+vtssRedboxStatusTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxStatusInstance, vtssRedboxStatusOperState,
+                  vtssRedboxStatusPortC, vtssRedboxStatusNtPntFull,
+                  vtssRedboxStatusPortAWrongLan,
+                  vtssRedboxStatusPortAHsrUntaggedRx,
+                  vtssRedboxStatusPortADown,
+                  vtssRedboxStatusPortBWrongLan,
+                  vtssRedboxStatusPortBHsrUntaggedRx,
+                  vtssRedboxStatusPortBDown,
+                  vtssRedboxStatusPortCWrongLan,
+                  vtssRedboxStatusPortCHsrUntaggedRx,
+                  vtssRedboxStatusWarningNone,
+                  vtssRedboxStatusWarningMtuTooHighLrePorts,
+                  vtssRedboxStatusWarningMtuTooHighNonLrePorts,
+                  vtssRedboxStatusWarningInterlinkNotCTagged,
+                  vtssRedboxStatusWarningInterlinkNotMemberOfVlan,
+                  vtssRedboxStatusWarningNeighborRedBoxNotConfigured,
+                  vtssRedboxStatusWarningNeighborRedBoxNotActive,
+                  vtssRedboxStatusWarningNeighborRedBoxPortANotSetToNeighbor,
+                  vtssRedboxStatusWarningNeighborRedBoxPortBNotSetToNeighbor,
+                  vtssRedboxStatusWarningNeighborRedBoxOverlappingVlans,
+                  vtssRedboxStatusWarningStpEnabledInterlink }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 5 }
+
+vtssRedboxStatusNtTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxStatusNtInstance,
+                  vtssRedboxStatusNtMacCnt,
+                  vtssRedboxStatusNtWrongLan }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 6 }
+
+vtssRedboxStatusNtMacTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxStatusNtMacInstance,
+                  vtssRedboxStatusNtMacMacAddress,
+                  vtssRedboxStatusNtMacNodeType,
+                  vtssRedboxStatusNtMacPortARxCnt,
+                  vtssRedboxStatusNtMacPortALastSeen,
+                  vtssRedboxStatusNtMacPortASvRxCnt,
+                  vtssRedboxStatusNtMacPortASvLastSeen,
+                  vtssRedboxStatusNtMacPortASvLastType,
+                  vtssRedboxStatusNtMacPortARxWrongLanCnt,
+                  vtssRedboxStatusNtMacPortAFwd,
+                  vtssRedboxStatusNtMacPortBRxCnt,
+                  vtssRedboxStatusNtMacPortBLastSeen,
+                  vtssRedboxStatusNtMacPortBSvRxCnt,
+                  vtssRedboxStatusNtMacPortBSvLastSeen,
+                  vtssRedboxStatusNtMacPortBSvLastType,
+                  vtssRedboxStatusNtMacPortBRxWrongLanCnt,
+                  vtssRedboxStatusNtMacPortBFwd }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 7 }
+
+vtssRedboxStatusPntTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxStatusPntInstance,
+                  vtssRedboxStatusPntMacCnt,
+                  vtssRedboxStatusPntWrongLan }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 8 }
+
+vtssRedboxStatusPntMacTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxStatusPntMacInstance,
+                  vtssRedboxStatusPntMacMacAddress,
+                  vtssRedboxStatusPntMacNodeType,
+                  vtssRedboxStatusPntMacPortCRxCnt,
+                  vtssRedboxStatusPntMacPortCLastSeen,
+                  vtssRedboxStatusPntMacPortCSvRxCnt,
+                  vtssRedboxStatusPntMacPortCSvLastSeen,
+                  vtssRedboxStatusPntMacPortCSvLastType,
+                  vtssRedboxStatusPntMacPortCRxWrongLanCnt,
+                  vtssRedboxStatusPntMacSvTxCnt,
+                  vtssRedboxStatusPntMacLocked }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 9 }
+
+vtssRedboxStatusNotificationTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxStatusNotificationInstance,
+                  vtssRedboxStatusNotificationNtPntFull,
+                  vtssRedboxStatusNotificationPortAWrongLan,
+                  vtssRedboxStatusNotificationPortAHsrUntaggedRx,
+                  vtssRedboxStatusNotificationPortADown,
+                  vtssRedboxStatusNotificationPortBWrongLan,
+                  vtssRedboxStatusNotificationPortBHsrUntaggedRx,
+                  vtssRedboxStatusNotificationPortBDown,
+                  vtssRedboxStatusNotificationPortCWrongLan,
+                  vtssRedboxStatusNotificationPortCHsrUntaggedRx }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 10 }
+
+vtssRedboxControlNtClearInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxControlNtClearInstance,
+                  vtssRedboxControlNtClearClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 11 }
+
+vtssRedboxControlPntClearInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxControlPntClearInstance,
+                  vtssRedboxControlPntClearClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 12 }
+
+vtssRedboxControlStatisticsClearInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxControlStatisticsClearInstance,
+                  vtssRedboxControlStatisticsClearClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 13 }
+
+vtssRedboxStatisticsTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssRedboxStatisticsInstance,
+                  vtssRedboxStatisticsPortARxTaggedCnt,
+                  vtssRedboxStatisticsPortATxTaggedCnt,
+                  vtssRedboxStatisticsPortARxUntaggedCnt,
+                  vtssRedboxStatisticsPortATxUntaggedCnt,
+                  vtssRedboxStatisticsPortARxLinkLocalCnt,
+                  vtssRedboxStatisticsPortATxLinkLocalCnt,
+                  vtssRedboxStatisticsPortARxOwnCnt,
+                  vtssRedboxStatisticsPortARxWrongLanCnt,
+                  vtssRedboxStatisticsPortATxDuplZeroCnt,
+                  vtssRedboxStatisticsPortATxDuplOneCnt,
+                  vtssRedboxStatisticsPortATxDuplMultiCnt,
+                  vtssRedboxStatisticsPortARxSvErrCnt,
+                  vtssRedboxStatisticsPortARxSvFilteredCnt,
+                  vtssRedboxStatisticsPortARxSvPrpDdCnt,
+                  vtssRedboxStatisticsPortARxSvPrpDaCnt,
+                  vtssRedboxStatisticsPortARxSvHsrCnt,
+                  vtssRedboxStatisticsPortATxSvPrpDdCnt,
+                  vtssRedboxStatisticsPortATxSvPrpDaCnt,
+                  vtssRedboxStatisticsPortATxSvHsrCnt,
+                  vtssRedboxStatisticsPortBRxTaggedCnt,
+                  vtssRedboxStatisticsPortBTxTaggedCnt,
+                  vtssRedboxStatisticsPortBRxUntaggedCnt,
+                  vtssRedboxStatisticsPortBTxUntaggedCnt,
+                  vtssRedboxStatisticsPortBRxLinkLocalCnt,
+                  vtssRedboxStatisticsPortBTxLinkLocalCnt,
+                  vtssRedboxStatisticsPortBRxOwnCnt,
+                  vtssRedboxStatisticsPortBRxWrongLanCnt,
+                  vtssRedboxStatisticsPortBTxDuplZeroCnt,
+                  vtssRedboxStatisticsPortBTxDuplOneCnt,
+                  vtssRedboxStatisticsPortBTxDuplMultiCnt,
+                  vtssRedboxStatisticsPortBRxSvErrCnt,
+                  vtssRedboxStatisticsPortBRxSvFilteredCnt,
+                  vtssRedboxStatisticsPortBRxSvPrpDdCnt,
+                  vtssRedboxStatisticsPortBRxSvPrpDaCnt,
+                  vtssRedboxStatisticsPortBRxSvHsrCnt,
+                  vtssRedboxStatisticsPortBTxSvPrpDdCnt,
+                  vtssRedboxStatisticsPortBTxSvPrpDaCnt,
+                  vtssRedboxStatisticsPortBTxSvHsrCnt,
+                  vtssRedboxStatisticsPortCRxTaggedCnt,
+                  vtssRedboxStatisticsPortCTxTaggedCnt,
+                  vtssRedboxStatisticsPortCRxUntaggedCnt,
+                  vtssRedboxStatisticsPortCTxUntaggedCnt,
+                  vtssRedboxStatisticsPortCRxLinkLocalCnt,
+                  vtssRedboxStatisticsPortCTxLinkLocalCnt,
+                  vtssRedboxStatisticsPortCRxOwnCnt,
+                  vtssRedboxStatisticsPortCRxWrongLanCnt,
+                  vtssRedboxStatisticsPortCTxDuplZeroCnt,
+                  vtssRedboxStatisticsPortCTxDuplOneCnt,
+                  vtssRedboxStatisticsPortCTxDuplMultiCnt,
+                  vtssRedboxStatisticsPortCRxSvErrCnt,
+                  vtssRedboxStatisticsPortCRxSvFilteredCnt,
+                  vtssRedboxStatisticsPortCRxSvPrpDdCnt,
+                  vtssRedboxStatisticsPortCRxSvPrpDaCnt,
+                  vtssRedboxStatisticsPortCRxSvHsrCnt,
+                  vtssRedboxStatisticsPortCTxSvPrpDdCnt,
+                  vtssRedboxStatisticsPortCTxSvPrpDaCnt,
+                  vtssRedboxStatisticsPortCTxSvHsrCnt }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssRedboxMibGroups 14 }
+
+vtssRedboxTrapAddInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssRedboxTrapAdd }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssRedboxMibGroups 15 }
+
+vtssRedboxTrapModInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssRedboxTrapMod }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssRedboxMibGroups 16 }
+
+vtssRedboxTrapDelInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssRedboxTrapDel }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssRedboxMibGroups 17 }
+
+vtssRedboxMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssRedboxCapabilitiesListInfoGroup,
+                       vtssRedboxCapabilitiesInterfacesInfoGroup,
+                       vtssRedboxConfigTableInfoGroup,
+                       vtssRedboxConfigRowEditorInfoGroup,
+                       vtssRedboxStatusTableInfoGroup,
+                       vtssRedboxStatusNtTableInfoGroup,
+                       vtssRedboxStatusNtMacTableInfoGroup,
+                       vtssRedboxStatusPntTableInfoGroup,
+                       vtssRedboxStatusPntMacTableInfoGroup,
+                       vtssRedboxStatusNotificationTableInfoGroup,
+                       vtssRedboxControlNtClearInfoGroup,
+                       vtssRedboxControlPntClearInfoGroup,
+                       vtssRedboxControlStatisticsClearInfoGroup,
+                       vtssRedboxStatisticsTableInfoGroup,
+                       vtssRedboxTrapAddInfoGroup,
+                       vtssRedboxTrapModInfoGroup,
+                       vtssRedboxTrapDelInfoGroup }
+
+    ::= { vtssRedboxMibCompliances 1 }
+
+END

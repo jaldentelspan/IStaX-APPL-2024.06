@@ -1,0 +1,2978 @@
+//
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+//
+//
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_FRR_OSPF)
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "frr_ospf_api.hxx"
+#include "frr_daemon.hxx"
+#include "misc_api.h"           // For misc_ipv4_txt()
+#include "frr_ospf_expose.hxx"
+#include "frr_ospf_icli_functions.hxx"
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+/* Check RIP daemon on runtime stage */
+static BOOL OSPF_ICLI_runtime_has_ripd(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = frr_has_ripd();
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF priority valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_priority(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_PRIORITY_MIN,
+                     VTSS_APPL_OSPF_PRIORITY_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_PRIORITY_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_PRIORITY_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF general cost valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_general_cost(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_GENERAL_COST_MIN,
+                     VTSS_APPL_OSPF_GENERAL_COST_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_GENERAL_COST_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_GENERAL_COST_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF interface cost valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_intf_cost(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_INTF_COST_MIN,
+                     VTSS_APPL_OSPF_INTF_COST_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_INTF_COST_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_INTF_COST_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF redistribute cost valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_redist_cost(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_REDIST_COST_MIN,
+                     VTSS_APPL_OSPF_REDIST_COST_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_REDIST_COST_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_REDIST_COST_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF hello-interval valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_hello_interval(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_HELLO_INTERVAL_MIN,
+                     VTSS_APPL_OSPF_HELLO_INTERVAL_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_HELLO_INTERVAL_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_HELLO_INTERVAL_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF fast-hello valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_fast_hello(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_FAST_HELLO_MIN,
+                     VTSS_APPL_OSPF_FAST_HELLO_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_FAST_HELLO_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_FAST_HELLO_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF retransmit-interval valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_retransmit_interval(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_RETRANSMIT_INTERVAL_MIN,
+                     VTSS_APPL_OSPF_RETRANSMIT_INTERVAL_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_RETRANSMIT_INTERVAL_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_RETRANSMIT_INTERVAL_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF dead-interval valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_dead_interval(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_DEAD_INTERVAL_MIN,
+                     VTSS_APPL_OSPF_DEAD_INTERVAL_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_DEAD_INTERVAL_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_DEAD_INTERVAL_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF max-metric startup router LSA on runtime stage */
+static BOOL OSPF_ICLI_runtime_router_lsa_startup(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_ROUTER_LSA_STARTUP_MIN,
+                     VTSS_APPL_OSPF_ROUTER_LSA_STARTUP_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_ROUTER_LSA_STARTUP_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_ROUTER_LSA_STARTUP_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF max-metric shutdown router LSA on runtime stage */
+static BOOL OSPF_ICLI_runtime_router_lsa_shutdown(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_ROUTER_LSA_SHUTDOWN_MIN,
+                     VTSS_APPL_OSPF_ROUTER_LSA_SHUTDOWN_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_ROUTER_LSA_SHUTDOWN_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_ROUTER_LSA_SHUTDOWN_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF message digest key ID valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_md_key_id(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_AUTH_DIGEST_KEY_ID_MIN,
+                     VTSS_APPL_OSPF_AUTH_DIGEST_KEY_ID_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_AUTH_DIGEST_KEY_ID_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_AUTH_DIGEST_KEY_ID_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF simple password length valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_unencrypted_simple_pwd_len(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<word%u-%u>",
+                     VTSS_APPL_OSPF_AUTH_SIMPLE_KEY_MIN_LEN,
+                     VTSS_APPL_OSPF_AUTH_SIMPLE_KEY_MAX_LEN);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_AUTH_SIMPLE_KEY_MIN_LEN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_AUTH_SIMPLE_KEY_MAX_LEN;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF message digest password length valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_unencrypted_md_pwd_len(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<word%u-%u>",
+                     VTSS_APPL_OSPF_AUTH_DIGEST_KEY_MIN_LEN,
+                     VTSS_APPL_OSPF_AUTH_DIGEST_KEY_MAX_LEN);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_AUTH_DIGEST_KEY_MIN_LEN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_AUTH_DIGEST_KEY_MAX_LEN;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update OSPF administrative distance valid range on runtime stage */
+static BOOL OSPF_ICLI_runtime_admin_distance(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_OSPF_ADMIN_DISTANCE_MIN,
+                     VTSS_APPL_OSPF_ADMIN_DISTANCE_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_OSPF_ADMIN_DISTANCE_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_OSPF_ADMIN_DISTANCE_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+FUNCTION_END
+
+HELP_NETWORK            = Configure routing on an IPv4 network
+HELP_ROUTER_ID          = Router ID for the OSPF process (Notice that the ID is unique within the entire OSPF domain)
+HELP_IP_ADDR            = IPv4 address
+HELP_IP_ADDR_MASK       = IPv4 address mask
+HELP_IP_WILDCARD_MASK   = The wildcard-mask of the IPv4 address, where 0 is a match, and 1 is a 'do not care' bit.
+HELP_AREA_ID            = OSPF area ID
+HELP_AREA_ID_FORMAT     = The OSPF area ID can be specified as either an IPv4 \
+address format(A.B.C.D) or a decimal value from 0 to 4294967295.
+HELP_AUTH               = Enable authentication
+HELP_AUTH_MD5           = Use message digest(MD5) authentication
+HELP_AUTH_NULL          = Use null authentication
+HELP_AUTH_KEY_SIMPLE    = Configure simple password authentication
+HELP_AUTH_KEY_DIGEST    = Configure message digest key authentication
+HELP_AUTH_KEY_ID        = Configure message digest key ID
+HELP_UNENCRYPTED        = Specifies an UNENCRYPTED password will follow
+HELP_UNENCRYPTED_PWD    = The UNENCRYPTED (Plain Text) user password. \
+Any printable characters including space is accepted. \
+Notice that you have no chance to get the Plain Text password after this \
+command. The system will always display the ENCRYPTED password.
+HELP_ENCRYPTED          = Specifies an ENCRYPTED password will follow
+HELP_ENCRYPTED_PWD      = The ENCRYPTED (hidden) user password. \
+Notice the ENCRYPTED password will be decoded by system internally. \
+You cannot directly use it as same as the Plain Text and it is not \
+human-readable text normally.
+HELP_REDIST             = Redistribute route information from the specific routing protocol.
+HELP_REDIST_STATIC      = The OSPF redistributed metric type for the static routes.
+HELP_REDIST_CONNECTED   = The OSPF redistributed metric type for the connected interfaces.
+HELP_REDIST_RIP         = The OSPF redistributed metric type for the RIP routes.
+HELP_DEF_METRIC         = The OSPF default metric
+HELP_MAX_METRIC         = OSPF maximum metric
+HELP_ROUTER_LSA         = Advertise own Router-LSA with maximum metric
+HELP_STUB_ROUTER_ON_STARTUP  = Configures OSPF to advertise a maximum metric during startup for a configured period of time
+HELP_STUB_ROUTER_ON_SHUTDOWN = Configures OSPF to advertise a maximum metric during shutdown \
+for a configured period of time. The device advertises a maximum metric when the OSPF router \
+mode is disabled and notice that the mechanism also works when the device reboots but not for the \
+'reload default' case.
+HELP_STUB_ROUTER_ADMIN       = Configures OSPF stub router mode administratively applied, for an indefinite period
+HELP_DEFAULT_INFORMATION     = Control distribution of default information
+HELP_ORIGINATE               = Distribute a default route
+HELP_ADMIN_DISTANCE          = Administrative distance
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = clear ip ospf process
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_clear_ospf_process
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_CLEAR
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = OSPF routing process
+
+VARIABLE_BEGIN
+    vtss_appl_ospf_control_globals_t ospf_control;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ospf_control, 0, sizeof(ospf_control));
+    ospf_control.reload_process = true;
+    if (vtss_appl_ospf_control_globals(&ospf_control) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Clear ip ospf process failed.\n");
+         return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no router ospf
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = This command is an invisible command which is used to prevent
+DOC_CMD_DESC    = user deleting the current submode accidentally.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_router_prevent_delete_myself
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_INVISIBLE
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_ROUTER
+HELP = ##ICLI_HELP_OSPF
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    FRR_ICLI_ospf_instance_process_del(req);
+    (void)ICLI_MODE_EXIT();
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no router ospf
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_router_disable
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_ROUTER
+HELP = ##ICLI_HELP_OSPF
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    FRR_ICLI_ospf_instance_process_del(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = router-id <ipv4_addr>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_router_id_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = router_id
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_ROUTER_ID
+HELP = OSPF router-id in IP address format
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    if (router_id < VTSS_APPL_OSPF_ROUTER_ID_MIN ||
+        router_id > VTSS_APPL_OSPF_ROUTER_ID_MAX) {
+        char ip_str_buf1[16], ip_str_buf2[16];
+        ICLI_PRINTF("%% Invalid OSPF router ID: The allowed range is from %s to %s.\n",
+                    misc_ipv4_txt(VTSS_APPL_OSPF_ROUTER_ID_MIN, ip_str_buf1),
+                    misc_ipv4_txt(VTSS_APPL_OSPF_ROUTER_ID_MAX, ip_str_buf2));
+        return ICLI_RC_ERROR;
+    }
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.router_id = router_id;
+    FRR_ICLI_ospf_router_id_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no router-id
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_router_id_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_ROUTER_ID
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    FRR_ICLI_ospf_router_id_del(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = passive-interface { default | vlan <vlan_list> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_passive_interface_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR = has_default
+CMD_VAR = has_vlan
+CMD_VAR = vlan_list
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = Suppress routing updates on an interface
+HELP = all interfaces as passive-interface
+HELP = VLAN interface
+HELP = ##ICLI_HELP_VLAN_LIST
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    if (has_default) {
+        req.passive_enabled = true;
+        FRR_ICLI_ospf_passive_interface_default(req);
+    } else if (has_vlan) {
+        req.passive_enabled = true;
+        req.vlan_list = vlan_list;
+        FRR_ICLI_ospf_passive_interface_set(req);
+    }
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    if (has_default) {
+        req.passive_enabled = false;
+        FRR_ICLI_ospf_passive_interface_default(req);
+    } else if (has_vlan) {
+        req.passive_enabled = false;
+        req.vlan_list = vlan_list;
+        FRR_ICLI_ospf_passive_interface_set(req);
+    }
+NO_FORM_CODE_END
+CMD_END
+
+//------------------------------------------------------------------------------
+//** OSPF route redistribution
+//------------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = redistribute { static | connected | rip } [ metric <0-16777214> ] [ metric-type { 1 | 2 } ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_redist_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = has_static
+CMD_VAR = has_connected
+CMD_VAR =
+CMD_VAR = has_metric
+CMD_VAR = metric_val
+CMD_VAR =
+CMD_VAR = has_metric_type_1
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_has_ripd
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_REDIST
+HELP = ##HELP_REDIST_STATIC
+HELP = ##HELP_REDIST_CONNECTED
+HELP = ##HELP_REDIST_RIP
+HELP = Configure the specified metric for route redistribution.
+HELP = User specified metric value.
+HELP = The OSPF redistributed metric type.
+HELP = External link type 1.
+HELP = External link type 2.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.redist_protocol = has_static ? VTSS_APPL_OSPF_REDIST_PROTOCOL_STATIC :
+                          has_connected ? VTSS_APPL_OSPF_REDIST_PROTOCOL_CONNECTED :
+                          VTSS_APPL_OSPF_REDIST_PROTOCOL_RIP;
+    req.metric_type = VTSS_APPL_OSPF_REDIST_METRIC_TYPE_2; // default type
+    if (has_metric_type_1) {
+        req.metric_type = VTSS_APPL_OSPF_REDIST_METRIC_TYPE_1;
+    }
+    if (has_metric) {
+        req.has_metric = true;
+        req.metric = metric_val;
+    }
+    return FRR_ICLI_ospf_redist_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no redistribute { static | connected | rip }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_redist_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_static
+CMD_VAR = has_connected
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_has_ripd
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_REDIST
+HELP = ##HELP_REDIST_STATIC
+HELP = ##HELP_REDIST_CONNECTED
+HELP = ##HELP_REDIST_RIP
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.redist_protocol = has_static ? VTSS_APPL_OSPF_REDIST_PROTOCOL_STATIC :
+                          has_connected ? VTSS_APPL_OSPF_REDIST_PROTOCOL_CONNECTED :
+                          VTSS_APPL_OSPF_REDIST_PROTOCOL_RIP;
+    req.metric_type = VTSS_APPL_OSPF_REDIST_METRIC_TYPE_NONE;
+    return FRR_ICLI_ospf_redist_set(req);
+CODE_END
+CMD_END
+
+//------------------------------------------------------------------------------
+//** OSPF administrative distance
+//------------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = distance <1-255>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_ospf_admin_distance_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = admin_distance
+
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_admin_distance
+
+HELP = ##HELP_ADMIN_DISTANCE
+HELP = User specified administrative distnace value
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.admin_distance = admin_distance;
+    return FRR_ICLI_ospf_admin_distance_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no distance
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_ospf_admin_distance_restore
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_ADMIN_DISTANCE
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+    vtss_appl_ospf_router_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    if (frr_ospf_router_conf_def(&req.inst_id, &def_conf) != VTSS_RC_OK)  {
+        ICLI_PRINTF("%% Get OSPF router default configuration failed.\n");
+        return ICLI_RC_ERROR;
+    }
+    req.admin_distance = def_conf.admin_distance;
+    return FRR_ICLI_ospf_admin_distance_set(req);
+CODE_END
+CMD_END
+
+//------------------------------------------------------------------------------
+//** OSPF default route redistribution
+//------------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = default-information originate [ always ] [ metric <0-16777214> ] [ metric-type { 1 | 2 } ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_def_info_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_always
+CMD_VAR = has_metric
+CMD_VAR = metric_val
+CMD_VAR =
+CMD_VAR = has_metric_type_1
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_redist_cost
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_DEFAULT_INFORMATION
+HELP = ##HELP_ORIGINATE
+HELP = Always advertise default route
+HELP = Configure the specified metric for a default route redistribution
+HELP = User specified metric value.
+HELP = The OSPF redistributed metric type.
+HELP = External link type 1.
+HELP = External link type 2.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.metric_type = VTSS_APPL_OSPF_REDIST_METRIC_TYPE_2; // default type
+    if (has_always) {
+        req.has_always = true;
+    }
+    if (has_metric_type_1) {
+        req.metric_type = VTSS_APPL_OSPF_REDIST_METRIC_TYPE_1;
+    }
+    if (has_metric) {
+        req.has_metric = true;
+        req.metric = metric_val;
+    }
+    return FRR_ICLI_ospf_def_route_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no default-information originate
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_def_info_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_DEFAULT_INFORMATION
+HELP = ##HELP_ORIGINATE
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.metric_type = VTSS_APPL_OSPF_REDIST_METRIC_TYPE_NONE;
+    return FRR_ICLI_ospf_def_route_set(req);
+CODE_END
+CMD_END
+
+//------------------------------------------------------------------------------
+//** OSPF default metric
+//------------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = default-metric <0-16777214>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_def_metric_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = metric_val
+
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_redist_cost
+
+HELP = ##HELP_DEF_METRIC
+HELP = User specified default metric value for the OSPF routing protocol.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.has_metric = true;
+    req.metric = metric_val;
+    return FRR_ICLI_ospf_def_metric_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no default-metric
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_def_metric_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_DEF_METRIC
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.has_metric = false;
+    return FRR_ICLI_ospf_def_metric_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = network <ipv4_addr> <ipv4_addr> area <area_id>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_network_area_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = ip_address
+CMD_VAR = wildcard_mask
+CMD_VAR =
+CMD_VAR = area_id
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_NETWORK
+HELP = ##HELP_IP_ADDR
+HELP = ##HELP_IP_WILDCARD_MASK
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.ip_address = ip_address;
+    req.wildcard_mask = wildcard_mask;
+    req.area_id = area_id;
+    FRR_ICLI_ospf_network_area_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no network <ipv4_addr> <ipv4_addr> [ area <area_id> ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_network_area_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = ip_address
+CMD_VAR = wildcard_mask
+CMD_VAR = has_area_id
+CMD_VAR = area_id
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_NETWORK
+HELP = ##HELP_IP_ADDR
+HELP = ##HELP_IP_WILDCARD_MASK
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.ip_address = ip_address;
+    req.wildcard_mask = wildcard_mask;
+    req.has_area_id = has_area_id;
+    req.area_id = area_id;
+    FRR_ICLI_ospf_network_area_del(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** OSPF authentication
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = ip ospf authentication [null | message-digest]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_intf_auth_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_null_auth
+CMD_VAR = has_message_digest
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_NULL
+HELP = ##HELP_AUTH_MD5
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.auth_type = has_null_auth ? VTSS_APPL_OSPF_AUTH_TYPE_NULL :
+                    has_message_digest ? VTSS_APPL_OSPF_AUTH_TYPE_MD5 :
+                    VTSS_APPL_OSPF_AUTH_TYPE_SIMPLE_PASSWORD;
+    FRR_ICLI_ospf_intf_auth_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no ip ospf authentication
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_intf_auth_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = ##HELP_AUTH
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.auth_type = VTSS_APPL_OSPF_AUTH_TYPE_AREA_CFG;
+    FRR_ICLI_ospf_intf_auth_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = ip ospf authentication-key { unencrypted <word1-8> | encrypted <word128> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_intf_auth_simple_pwd_key_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = unencrypted_pwd
+CMD_VAR =
+CMD_VAR = encrypted_pwd
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_unencrypted_simple_pwd_len
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = ##HELP_AUTH_KEY_SIMPLE
+HELP = ##HELP_UNENCRYPTED
+HELP = ##HELP_UNENCRYPTED_PWD
+HELP = ##HELP_ENCRYPTED
+HELP = ##HELP_ENCRYPTED_PWD
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    if (unencrypted_pwd) {
+        strncpy(req.password, unencrypted_pwd, VTSS_APPL_OSPF_AUTH_SIMPLE_KEY_MAX_LEN);
+        // Prevent from buffer overflow.
+        req.password[VTSS_APPL_OSPF_AUTH_SIMPLE_KEY_MAX_LEN] = '\0';
+        req.has_encrypted = false;
+    } else {
+        strncpy(req.password, encrypted_pwd, VTSS_APPL_OSPF_AUTH_ENCRYPTED_SIMPLE_KEY_LEN);
+        // Prevent from buffer overflow.
+        req.password[VTSS_APPL_OSPF_AUTH_ENCRYPTED_SIMPLE_KEY_LEN] = '\0';
+        req.has_encrypted = true;
+    }
+    FRR_ICLI_ospf_intf_auth_simple_pwd_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no ip ospf authentication-key
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_intf_auth_simple_pwd_key_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = ##HELP_AUTH_KEY_SIMPLE
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.password[0] = '\0';
+    req.has_encrypted = false;
+    FRR_ICLI_ospf_intf_auth_simple_pwd_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = ip ospf message-digest-key <1-255> md5 { unencrypted <word1-16> | encrypted <word128> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_intf_auth_md_key_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = md_key_id
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = unencrypted_pwd
+CMD_VAR =
+CMD_VAR = encrypted_pwd
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_unencrypted_md_pwd_len
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = ##HELP_AUTH_KEY_DIGEST
+HELP = ##HELP_AUTH_KEY_ID
+HELP = ##HELP_AUTH_MD5
+HELP = ##HELP_UNENCRYPTED
+HELP = ##HELP_UNENCRYPTED_PWD
+HELP = ##HELP_ENCRYPTED
+HELP = ##HELP_ENCRYPTED_PWD
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.md_key_id = md_key_id;
+    if (unencrypted_pwd) {
+        strncpy(req.password, unencrypted_pwd, VTSS_APPL_OSPF_AUTH_DIGEST_KEY_MAX_LEN);
+        // Prevent from buffer overflow.
+        req.password[VTSS_APPL_OSPF_AUTH_DIGEST_KEY_MAX_LEN] = '\0';
+        req.has_encrypted = false;
+    } else {
+        strncpy(req.password, encrypted_pwd, VTSS_APPL_OSPF_AUTH_ENCRYPTED_DIGEST_KEY_LEN);
+        // Prevent from buffer overflow.
+        req.password[VTSS_APPL_OSPF_AUTH_ENCRYPTED_DIGEST_KEY_LEN] = '\0';
+        req.has_encrypted = true;
+    }
+    FRR_ICLI_ospf_intf_auth_md_key_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no ip ospf message-digest-key <1-255>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_intf_auth_md_key_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = md_key_id
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = ##HELP_AUTH_KEY_DIGEST
+HELP = ##HELP_AUTH_KEY_ID
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.md_key_id = md_key_id;
+    FRR_ICLI_ospf_intf_auth_md_key_del(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> authentication [message-digest]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_auth_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = has_message_digest
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_MD5
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.auth_type = has_message_digest ?
+                        VTSS_APPL_OSPF_AUTH_TYPE_MD5 :
+                        VTSS_APPL_OSPF_AUTH_TYPE_SIMPLE_PASSWORD;
+    FRR_ICLI_ospf_area_auth_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no area <area_id> authentication
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_auth_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = has_message_digest
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_MD5
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    FRR_ICLI_ospf_area_auth_del(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> range <ipv4_addr> <ipv4_netmask> [advertise [cost <0-16777215>] | not-advertise | cost <0-16777215>]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_range_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = ip_address
+CMD_VAR = ip_address_mask
+CMD_VAR =
+CMD_VAR = has_advertise_cost
+CMD_VAR = advertise_cost
+CMD_VAR = has_not_advertise
+CMD_VAR = has_cost
+CMD_VAR = cost
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_general_cost
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_general_cost
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Summarize routes matching address range (ABRs only)
+HELP = ##HELP_IP_ADDR
+HELP = ##HELP_IP_ADDR_MASK
+HELP = Summarize intra area paths from the address range in one summary-LSA(Type-3) and advertised to other areas.
+HELP = User specified cost (or metric) for this summary route.
+HELP = Advertised metric for this summary route.
+HELP = The intra area paths from the address range are not advertised to other areas.
+HELP = User specified cost (or metric) for this summary route.
+HELP = Advertised metric for this summary route.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.ip_address = ip_address;
+    req.ip_address_mask = ip_address_mask;
+    req.area_range_advertise = has_not_advertise ? false : true;
+    req.has_cost = (has_cost | has_advertise_cost) ? true: false;
+    if (has_cost) {
+        req.cost = cost;
+    }
+    if (has_advertise_cost) {
+        req.cost = advertise_cost;
+    }
+    FRR_ICLI_ospf_area_range_set(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = no area <area_id> range <ipv4_addr> <ipv4_netmask> [advertise| not-advertise| cost]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_range_del_restore
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = ip_address
+CMD_VAR = ip_address_mask
+CMD_VAR =
+CMD_VAR = has_not_advertise
+CMD_VAR = has_cost
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Summarize routes matching address range (ABRs only)
+HELP = ##HELP_IP_ADDR
+HELP = ##HELP_IP_WILDCARD_MASK
+HELP = Summarize intra area paths from the address range in one summary-LSA(Type-3) and advertised to other areas.
+HELP = The intra area paths from the address range are not advertised to other areas.
+HELP = User specified cost (or metric) for this summary route.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.ip_address = ip_address;
+    req.ip_address_mask = ip_address_mask;
+    req.area_range_advertise = has_not_advertise ? false : true;
+    req.has_cost = has_cost;
+
+    FRR_ICLI_ospf_area_range_del_or_restore(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** OSPF virtual link
+//----------------------------------------------------------------------------
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> virtual-link <ipv4_addr> [hello-interval <1-65535>] [retransmit-interval <3-65535>] [dead-interval <1-65535>]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR =
+CMD_VAR = hello_interval
+CMD_VAR =
+CMD_VAR = retransmit_interval
+CMD_VAR =
+CMD_VAR = dead_interval
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_hello_interval
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_retransmit_interval
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_dead_interval
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = Time between HELLO packets
+HELP = Seconds
+HELP = Time between retransmitting lost link state advertisements
+HELP = Seconds
+HELP = Interval time after which a neighbor is declared down
+HELP = Seconds
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+    req.hello_interval = hello_interval;
+    req.dead_interval = dead_interval;
+    req.retransmit_interval = retransmit_interval;
+
+    FRR_ICLI_ospf_area_vlink_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no area <area_id> virtual-link <ipv4_addr> [hello-interval [<1-65535>]] [retransmit-interval [<1-65535>]] [dead-interval [<1-65535>]]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_conf_restore
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR = has_hello_interval
+CMD_VAR = hello_interval
+CMD_VAR = has_retransmit_interval
+CMD_VAR = retransmit_interval
+CMD_VAR = has_dead_interval
+CMD_VAR = dead_interval
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = Time between HELLO packets
+HELP = Seconds
+HELP = Time between retransmitting lost link state advertisements
+HELP = Seconds
+HELP = Interval time after which a neighbor is declared down
+HELP = Seconds
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+
+    req.has_hello_interval = has_hello_interval;
+    if (has_hello_interval) {
+        req.hello_interval = hello_interval;
+    }
+
+    req.has_dead_interval = has_dead_interval;
+    if (has_dead_interval) {
+        req.dead_interval = dead_interval;
+    }
+
+    req.has_retransmit_interval = has_retransmit_interval;
+    if (has_retransmit_interval) {
+        req.retransmit_interval = retransmit_interval;
+    }
+
+    FRR_ICLI_ospf_vlink_conf_restore(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> virtual-link <ipv4_addr> authentication [null | message-digest]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_auth_type_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR =
+CMD_VAR = has_null_auth
+CMD_VAR = has_message_digest
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_NULL
+HELP = ##HELP_AUTH_MD5
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+    req.auth_type = has_null_auth ? VTSS_APPL_OSPF_AUTH_TYPE_NULL :
+                    has_message_digest ? VTSS_APPL_OSPF_AUTH_TYPE_MD5 :
+                    VTSS_APPL_OSPF_AUTH_TYPE_SIMPLE_PASSWORD;
+    FRR_ICLI_ospf_vlink_auth_type_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no area <area_id> virtual-link <ipv4_addr> authentication
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_auth_type_def
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = ##HELP_AUTH
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+    req.auth_type = VTSS_APPL_OSPF_AUTH_TYPE_AREA_CFG;
+    FRR_ICLI_ospf_vlink_auth_type_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> virtual-link <ipv4_addr> authentication-key { unencrypted <word1-8> | encrypted <word128> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_auth_simple_pwd_key_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = unencrypted_pwd
+CMD_VAR = has_encrypted
+CMD_VAR = encrypted_pwd
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_unencrypted_simple_pwd_len
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = ##HELP_AUTH_KEY_SIMPLE
+HELP = ##HELP_UNENCRYPTED
+HELP = ##HELP_UNENCRYPTED_PWD
+HELP = ##HELP_ENCRYPTED
+HELP = ##HELP_ENCRYPTED_PWD
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+
+    if (has_encrypted) {
+        req.has_encrypted = true;
+        strcpy(req.password, encrypted_pwd);
+    } else {
+        req.has_encrypted = false;
+        strcpy(req.password, unencrypted_pwd);
+    }
+    FRR_ICLI_ospf_vlink_auth_simple_pwd_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no area <area_id> virtual-link <ipv4_addr> authentication-key
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_auth_simple_pwd_key_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = ##HELP_AUTH_KEY_SIMPLE
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+    req.has_encrypted = false;
+    strcpy(req.password, "");
+    FRR_ICLI_ospf_vlink_auth_simple_pwd_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> virtual-link <ipv4_addr> message-digest-key <1-255> md5 { unencrypted <word1-16> | encrypted <word128> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_md_key_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR =
+CMD_VAR = md_key_id
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = unencrypted_pwd
+CMD_VAR = has_encrypted
+CMD_VAR = encrypted_pwd
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_md_key_id
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_unencrypted_md_pwd_len
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = ##HELP_AUTH_KEY_DIGEST
+HELP = ##HELP_AUTH_KEY_ID
+HELP = ##HELP_AUTH_MD5
+HELP = ##HELP_UNENCRYPTED
+HELP = ##HELP_UNENCRYPTED_PWD
+HELP = ##HELP_ENCRYPTED
+HELP = ##HELP_ENCRYPTED_PWD
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+    req.md_key_id = md_key_id;
+    if (has_encrypted) {
+        req.has_encrypted = true;
+        strcpy(req.password, encrypted_pwd);
+    } else {
+        req.has_encrypted = false;
+        strcpy(req.password, unencrypted_pwd);
+    }
+    FRR_ICLI_ospf_vlink_md_key_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no area <area_id> virtual-link <ipv4_addr> message-digest-key <1-255>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_vlink_md_key_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = router_id
+CMD_VAR =
+CMD_VAR = md_key_id
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_md_key_id
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure a virtual link
+HELP = Router ID of the remote ABR
+HELP = ##HELP_AUTH_KEY_DIGEST
+HELP = ##HELP_AUTH_KEY_ID
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.router_id = router_id;
+    req.md_key_id = md_key_id;
+    FRR_ICLI_ospf_vlink_md_key_del(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** OSPF stub area
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> stub [ no-summary ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_stub_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = has_no_summary
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure the area as a stub area.
+HELP = Configure the area as a totally stub area.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.is_nssa = false;
+    req.has_no_summary = has_no_summary ? true : false;
+
+    FRR_ICLI_ospf_area_stub_set(req);
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.is_nssa = false;
+    /* 'has_no_summary' is true means setting the area as a stub area
+     * otherwise deleting the stub configuration.
+     */
+    req.has_no_summary = has_no_summary ? true : false;
+
+    FRR_ICLI_ospf_area_stub_no(req);
+NO_FORM_CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** OSPF NSSA area
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = area <area_id> nssa [ translate type7 {candidate | never | always} | no-summary ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_area_nssa_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+//MODE_VAR  = process_id
+
+CMD_VAR =
+CMD_VAR = area_id
+CMD_VAR =
+CMD_VAR = has_translate
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_translate_never
+CMD_VAR = has_translate_always
+CMD_VAR = has_no_summary
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_AREA_ID
+HELP = ##HELP_AREA_ID_FORMAT
+HELP = Configure the area as a nssa
+HELP = Translate LSA
+HELP = From Type 7 to Type 5
+HELP = Configure NSSA-ABR for translate election (default)
+HELP = Configure NSSA-ABR to never translate
+HELP = Configure NSSA-ABR to always translate
+HELP = Do not inject inter-area routes into nssa
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.is_nssa = true;
+    req.has_nssa_translator_role = has_translate;
+    req.has_no_summary = has_no_summary;
+    if(!has_no_summary) {
+        if (has_translate_never) {
+            req.nssa_translator_role = VTSS_APPL_OSPF_NSSA_TRANSLATOR_ROLE_NEVER;
+        } else if (has_translate_always) {
+            req.nssa_translator_role = VTSS_APPL_OSPF_NSSA_TRANSLATOR_ROLE_ALWAYS;
+        } else {
+            req.nssa_translator_role = VTSS_APPL_OSPF_NSSA_TRANSLATOR_ROLE_CANDIDATE;
+        }
+    }
+
+    FRR_ICLI_ospf_area_stub_set(req);
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.has_no_form = true;
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.area_id = area_id;
+    req.is_nssa = true;
+    if (has_no_summary) {
+        req.has_no_summary = true;
+    }
+
+    // Delete entry or restore default setting of NSSA translato role?
+    if (has_translate) {
+        req.has_nssa_translator_role = true;
+        req.nssa_translator_role = VTSS_APPL_OSPF_NSSA_TRANSLATOR_ROLE_CANDIDATE; // restore default setting
+    }
+
+    FRR_ICLI_ospf_area_stub_no(req);
+NO_FORM_CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** OSPF interface parameter tuning
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = ip ospf { priority <0-255> | cost <1-65535> | mtu-ignore | hello-interval <1-65535> | retransmit-interval <3-65535> | dead-interval { <1-65535> | minimal hello-multiplier <1-10> }}
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_vlan_interface_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_priority
+CMD_VAR = priority
+CMD_VAR = has_cost
+CMD_VAR = cost
+CMD_VAR = has_mtu_ignore
+CMD_VAR = has_hello_interval
+CMD_VAR = hello_interval
+CMD_VAR = has_retransmit_interval
+CMD_VAR = retransmit_interval
+CMD_VAR = has_dead_interval
+CMD_VAR = dead_interval
+CMD_VAR =
+CMD_VAR = has_fast_hello
+CMD_VAR = fast_hello_packets
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_priority
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_intf_cost
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_hello_interval
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_retransmit_interval
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_dead_interval
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_fast_hello
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = Set OSPF router priority for the specific interface.
+HELP = User specified router priority for the interface.
+HELP = Set OSPF link state metric for the interface. It is used for Shortest Path First (SPF) calculation.
+HELP = User specified cost for the interface.
+HELP = Ignore Interface MTU received in Database Description packets.
+HELP = Set the hello-interval value for the specific interface.
+HELP = User hello-interval value for the specific interface.
+HELP = Set the retransmit-interval value for the specific interface. It's the time interval (in seconds) to \
+wait before retransmitting a database description packet or a link-state request when it has not been acknowledged.
+HELP = User retransmit-interval value for the specific interface.
+HELP = Set the dead-interval value (number of seconds) for the specific interface.
+HELP = User dead-interval value for the specific interface.
+HELP =
+HELP = Set the fast hello packet. It specifies how many Hello packets will be sent per second.
+HELP = User value of how many Hello packets will be sent per second.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+
+    // priority
+    req.has_priority = has_priority;
+    if (has_priority) {
+        req.priority = priority;
+    }
+
+    // cost
+    req.has_cost = has_cost;
+    if (has_cost) {
+        req.cost = cost;
+    }
+
+    req.has_mtu_ignore = has_mtu_ignore;
+    req.mtu_ignore = true;
+
+    // hello interval
+    req.has_hello_interval = has_hello_interval;
+    if (has_hello_interval) {
+        req.hello_interval = hello_interval;
+    }
+
+    // retransmit interval
+    req.has_retransmit_interval = has_retransmit_interval;
+    if (has_retransmit_interval) {
+        req.retransmit_interval = retransmit_interval;
+    }
+
+    // dead interval
+    req.has_dead_interval = has_dead_interval;
+    if (has_dead_interval) {
+        req.dead_interval = dead_interval;
+    }
+
+    // minimal hello-multiplier
+    req.has_fast_hello = has_fast_hello;
+    if (has_fast_hello) {
+        req.fast_hello_packets = fast_hello_packets;
+    }
+    FRR_ICLI_ospf_vlan_interface_set(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = no ip ospf { priority | cost | mtu-ignore | dead-interval | hello-interval | retransmit-interval }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ospf_vlan_interface_set_default
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_priority
+CMD_VAR = has_cost
+CMD_VAR = has_mtu_ignore
+CMD_VAR = has_dead_interval
+CMD_VAR = has_hello_interval
+CMD_VAR = has_retransmit_interval
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = Set OSPF router priority for the specific interface to default.
+HELP = Set OSPF link state metric for the interface to default.
+HELP = Discard received database description packets if the packets' interface MTU is greater than our own (default).
+HELP = Set the dead-interval value (number of seconds) for the specific interface to default.
+HELP = Set the hello-interval value for the specific interface to default.
+HELP = Set the retransmit-interval value for the specific interface to default.
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+
+    // priority, cost, dead interval, hello interval, retransmit interval
+    req.has_priority = has_priority;
+    req.has_cost = has_cost;
+    req.has_mtu_ignore = has_mtu_ignore;
+    req.has_dead_interval = has_dead_interval;
+    req.has_hello_interval = has_hello_interval;
+    req.has_retransmit_interval = has_retransmit_interval;
+
+    FRR_ICLI_ospf_vlan_interface_set_default(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = show ip ospf
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_show_ip_ospf
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_ROUTER
+HELP = ##ICLI_HELP_OSPF
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    FRR_ICLI_ospf_show_info(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = show ip ospf interface [ vlan <vlan_list> | vlink <vlink_list> ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_show_ip_ospf_interface
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_vlan
+CMD_VAR = vlan_list
+CMD_VAR = has_vlink
+CMD_VAR = vlink_list
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = ##ICLI_HELP_INTERFACE
+HELP = VLAN interface
+HELP = ##ICLI_HELP_VLAN_LIST
+HELP = Virtual link interface
+HELP = ##ICLI_HELP_VLINK_LIST
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = has_vlan ? vlan_list : NULL;
+    req.vlink_list = has_vlink ? vlink_list : NULL;
+    FRR_ICLI_ospf_show_interface(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = show ip ospf neighbor [ detail ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_show_ip_ospf_neighbor_detail
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_detail
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = Neighbor list
+HELP = Detailed neighbor information
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.has_detail = has_detail;
+    FRR_ICLI_ospf_show_neighbor(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = show ip ospf route
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_show_ip_ospf_route
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = routing information
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    FRR_ICLI_ospf_show_route(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = show ip ospf database [ {router | network | summary | asbr-summary | external | nssa-external} [link-state-id <ipv4_addr>]] [adv-router <ipv4_addr> | self-originate]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_show_ip_ospf_db
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_router
+CMD_VAR = has_network
+CMD_VAR = has_summary
+CMD_VAR = has_asbr_summary
+CMD_VAR = has_external
+CMD_VAR = has_nssa_external
+CMD_VAR =
+CMD_VAR = link_state_id
+CMD_VAR =
+CMD_VAR = adv_router_id
+CMD_VAR = has_self_originate
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_OSPF
+HELP = database summary
+HELP = Router link states
+HELP = Network link states
+HELP = Network summary link states
+HELP = ASBR summary link states
+HELP = External link states
+HELP = NSSA external link states
+HELP = Link state
+HELP = Link state ID (as an IPv4 address format)
+HELP = Advertising router link state
+HELP = Advertising router ID (as an IPv4 address format)
+HELP = Self-originated link states
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.lsdb_type = has_router ? VTSS_APPL_OSPF_LSDB_TYPE_ROUTER :
+                    has_network ? VTSS_APPL_OSPF_LSDB_TYPE_NETWORK :
+                    has_summary ? VTSS_APPL_OSPF_LSDB_TYPE_SUMMARY :
+                    has_asbr_summary ? VTSS_APPL_OSPF_LSDB_TYPE_ASBR_SUMMARY :
+                    has_external ? VTSS_APPL_OSPF_LSDB_TYPE_EXTERNAL :
+                    has_nssa_external ? VTSS_APPL_OSPF_LSDB_TYPE_NSSA_EXTERNAL :
+                    VTSS_APPL_OSPF_LSDB_TYPE_NONE /* default setting */;
+    if (link_state_id) {
+        req.has_link_state_id = true;
+        req.link_state_id = link_state_id;
+    }
+    if (adv_router_id) {
+        req.has_adv_router_id = true;
+        req.adv_router_id = adv_router_id;
+    }
+    req.has_self_originate =  has_self_originate;
+    if (req.lsdb_type != VTSS_APPL_OSPF_LSDB_TYPE_NONE) {
+        FRR_ICLI_ospf_show_db_detail_info(req);
+    } else {
+        FRR_ICLI_ospf_show_db_general_info(req);
+    }
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** OSPF stub router
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = max-metric router-lsa {[on-startup <5-86400>] [on-shutdown <5-100>] [administrative]}*1
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ip_ospf_stub_router_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_on_startup
+CMD_VAR = on_startup_interval
+CMD_VAR = has_on_shutdown
+CMD_VAR = on_shutdown_interval
+CMD_VAR = has_administrative
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_router_lsa_startup
+RUNTIME =
+RUNTIME = OSPF_ICLI_runtime_router_lsa_shutdown
+RUNTIME =
+
+HELP = ##HELP_MAX_METRIC
+HELP = ##HELP_ROUTER_LSA
+HELP = ##HELP_STUB_ROUTER_ON_STARTUP
+HELP = User specified the time interval (seconds) to advertise itself as stub area
+HELP = ##HELP_STUB_ROUTER_ON_SHUTDOWN
+HELP = User specified the time interval (seconds) to wait till shutdown completed
+HELP = ##HELP_STUB_ROUTER_ADMIN
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    req.has_on_startup = has_on_startup;
+    req.on_startup_interval = on_startup_interval;
+    req.has_on_shutdown = has_on_shutdown;
+    req.on_shutdown_interval = on_shutdown_interval;
+    req.has_administrative = has_administrative;
+
+    FRR_ICLI_ospf_stub_router_set(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = no max-metric router-lsa [on-startup] [on-shutdown] [administrative]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_ip_ospf_stub_router_disable
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_OSPF
+MODE_VAR  =
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_on_startup
+CMD_VAR = has_on_shutdown
+CMD_VAR = has_administrative
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_MAX_METRIC
+HELP = ##HELP_ROUTER_LSA
+HELP = ##HELP_STUB_ROUTER_ON_STARTUP
+HELP = ##HELP_STUB_ROUTER_ON_SHUTDOWN
+HELP = ##HELP_STUB_ROUTER_ADMIN
+
+VARIABLE_BEGIN
+    FrrOspfCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.inst_id = FRR_OSPF_DEFAULT_INSTANCE_ID;
+    if (!has_on_startup && !has_on_shutdown && !has_administrative) {
+        req.has_on_startup = req.has_on_shutdown = req.has_administrative = true;
+    } else {
+        req.has_on_startup = has_on_startup;
+        req.has_on_shutdown = has_on_shutdown;
+        req.has_administrative = has_administrative;
+    }
+
+    FRR_ICLI_ospf_stub_router_disable(req);
+CODE_END
+CMD_END
+

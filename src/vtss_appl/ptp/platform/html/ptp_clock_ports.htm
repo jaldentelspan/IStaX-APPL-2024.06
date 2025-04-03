@@ -1,0 +1,443 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<!--
+ Microchip is aware that some terminology used in this technical document is
+ antiquated and inappropriate. As a result of the complex nature of software
+ where seemingly simple changes have unpredictable, and often far-reaching
+ negative results on the software's functionality (requiring extensive retesting
+ and revalidation) we are unable to make the desired changes in all legacy
+ systems without compromising our product or our clients' products.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>PTP Clock's Port Data Set Monitor Page</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/config.js"></script>
+    <script type="text/javascript" src="lib/ajax.js"></script>
+    <script type="text/javascript" src="lib/spom.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_ptp_port_data_stat.htm";
+
+
+var timerID = null;
+var ptp_clock_config = Array();
+
+// global_clock_inst is used to store the clock_inst value from the 
+//   ptp.htm screen
+var global_clock_inst = 0;
+// This piece of code makes sure that a specific clock_instancet can be selected
+// directly, when navigating from a hyperlink on a different page.
+var arg_idx = document.URL.indexOf('?');
+if(arg_idx != -1) {
+    var args = document.URL.substring(arg_idx+1, document.URL.length);
+    var tup = args.split('=');
+
+    if(tup.length == 2) {
+        if(tup[0] == 'clock_inst') {
+            global_clock_inst = parseInt(tup[1]);
+        }
+    }
+}
+
+// Display all the elements in a Row
+function addRow(index, frag, values, ptp_clock_config) {
+    var tr1 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr2 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr3 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var tr4 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var per_port_params_mix = values.split("^");
+    console.log("full arg list "+per_port_params_mix);
+    var per_port_params = per_port_params_mix[0].split("/");
+    var per_port_params_as = per_port_params_mix[1].split("/");
+    var per_port_params_cmlds = per_port_params_mix[2].split("/");
+    console.log("per port arg list "+per_port_params_cmlds);
+
+    for (var port_param_index = 0; port_param_index < per_port_params.length; port_param_index++) {
+        // If AED profile avoid adding parameters which are not used in AED specification
+        if((ptp_clock_config[2].split("/") != "AED 802.1AS" && ptp_clock_config[3].split("/") != "AED 802.1AS") || (port_param_index != 4 && port_param_index != 5 && port_param_index != 14 && port_param_index != 15)) {
+            addTextCell(tr1, per_port_params[port_param_index], "c");
+        }
+    }
+    addTextCell(tr2, per_port_params[0], "c");
+    console.log(per_port_params_as);
+    // Add text cells for 802.1as elements except the last 4 which are tied to the AED profile
+    for (var port_param_index = 0; port_param_index < per_port_params_as.length-4; port_param_index++) {
+        addTextCell(tr2, per_port_params_as[port_param_index], "c");
+    }
+
+    addTextCell(tr4, per_port_params[0], "c");
+    for (var port_param_index = 0; port_param_index < (per_port_params_as.length); port_param_index++) {
+        // Do not add text cell for 802.1as elements that are not used in the AED specification
+        if(port_param_index != 4 && port_param_index != 8 && port_param_index != 9 && port_param_index != 10 && port_param_index != 12 && port_param_index != 13){
+            addTextCell(tr4, per_port_params_as[port_param_index], "c");
+        }
+    }
+
+    addTextCell(tr3, per_port_params[0], "c");
+    for (var port_param_index = 0; port_param_index < per_port_params_cmlds.length; port_param_index++) {
+        addTextCell(tr3, per_port_params_cmlds[port_param_index], "c");
+    }
+    var td = CreateTd("c");
+    var td = CreateStyledElement("td", "c");
+    var txt = document.createTextNode("Default DS");
+    var link = document.createElement("a");
+    link.href = "ptp_cmlds_ds.htm?clock_inst=" + global_clock_inst;
+    link.appendChild(txt);  // Add Text
+    td.appendChild(link);   // Add link to cell
+    tr3.appendChild(td);     // Add cell to row
+    frag[0].appendChild(tr1);       // Add row to fragment
+    frag[1].appendChild(tr2);       // Add row to fragment
+    frag[2].appendChild(tr3);       // Add row to fragment
+    frag[4].appendChild(tr4);       // Add row to fragment
+}
+
+//addVirtualPortRow Description
+//Input config string comes like V_PORT/22/FALSE/dsbl/99999
+//V_PORT is tag to identify it's Virtual Port Configuration.
+function addVirtualPortRow(index, frag, values) {
+    var tr1 = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var per_port_params = values.split("/");
+    console.log("full arg list "+per_port_params);
+
+	//skip if port state is disable.
+	if (per_port_params[2] == "FALSE")
+		return;
+
+    //skip first index, since it's delimeter (V_PORT)
+    for (var port_param_index = 1; port_param_index < per_port_params.length; port_param_index++) {
+        addTextCell(tr1, per_port_params[port_param_index], "c");
+    }
+
+    var td = CreateTd("c");
+    var td = CreateStyledElement("td", "c");
+    tr1.appendChild(td);     // Add cell to row
+    frag[3].appendChild(tr1);       // Add row to fragment
+}
+
+
+//This function is used to Parse the data from the server and display
+//the values on the screen.
+
+//Follwoing is the sample notation is used while preparing the buffer,
+//Hence parsing should follow bellow notation
+//#$10/mstr/0/ 0.000,000,000,000/1/3/0/p2p/0/ 0.000,000,000,000/ 0.000,000,000,000/
+//0.000,000,000,000/2/Default/False/128^Disabled/False/False/0/1/0/ 0.000,000,000,000/0/
+//False/True/True/2/0/ NAN/3/3/9^00:00:00:ff:fe:00:00:04/False/False/
+//False/ 0.000,000,000,000/0/0/True/True/2/1#V_PORT/22/FALSE/dsbl/99999#No Profile
+
+//# ==>  delimeter for different tables.
+//$ ==> delimeter for different rows in same table.
+//^ ==> delimeter for 1AS data in same row.
+//TAG ==> after #, a tag is used (V_PORT) for respective config identification.
+//       (not used for port config, profile names).
+
+function processUpdate(req)
+{
+
+	var tbl_count;
+	var elem;
+	var second_config ;
+	var third_config;
+	var virtual_port_config;
+	var tr;
+	var clock_config_per_port;
+
+    if (redirectOnError(req))
+        return;
+
+	console.log(req.responseText);
+
+    if (req.responseText) {
+        ptp_clock_config = req.responseText.split("#");
+
+		tbl_count = ptp_clock_config.length;
+		var frag = [];
+		frag[0] = document.createDocumentFragment();
+		frag[1] = document.createDocumentFragment();
+		frag[2] = document.createDocumentFragment();
+		frag[3] = document.createDocumentFragment();
+        frag[4] = document.createDocumentFragment();
+
+		//console.log('split1 '+ptp_clock_config[1]);
+		//console.log('split2 '+ptp_clock_config[2]);
+		//console.log('split3 '+ptp_clock_config[3]);
+
+        // Create Local CLock Time Table
+        tr = CreateStyledElement("tr", "config_odd");
+        clock_config_per_port = ptp_clock_config[1].split("$");
+
+        // Display the Per Port Information.
+        for(var index = 1; index < clock_config_per_port.length; index++ ) {
+            addRow(index, frag, clock_config_per_port[index], ptp_clock_config);
+        }
+
+        elem = document.getElementById("PortDataset_tbody");
+        clearChildNodes(elem);
+        elem.appendChild(frag[0]);
+
+		//updating AS Info & Virtual Port Configuration: Handle cases when both are coming in either order
+		//or either of them are missing
+
+		if ( tbl_count >= 2 )
+			second_config = ptp_clock_config[2].split("/");
+		if ( tbl_count >= 3 )
+			third_config = ptp_clock_config[3].split("/");
+
+		// updating 1AS info
+        if (second_config[0] == "802.1AS" || third_config[0] == "802.1AS") {
+            document.getElementById("PortDatasetDiv").style.visibility = "visible";
+            document.getElementById("PortDatasetDiv").style.height = "auto";
+            document.getElementById("PortDatasetDiv").style.overflow = "visible";
+            elem = document.getElementById("PortDataset_tbody_2");
+            clearChildNodes(elem);
+            elem.appendChild(frag[1]);
+            elem = document.getElementById("CMLDS_PortDataset_tbody");
+            clearChildNodes(elem);
+            elem.appendChild(frag[2]);
+	    } else if (second_config[0] == "AED 802.1AS" || third_config[0] == "AED 802.1AS") {
+            document.getElementById("anv").style.display = "none";
+            document.getElementById("ato").style.display = "none";
+            document.getElementById("not-slve").style.display = "none";
+            document.getElementById("local-prio").style.display = "none";
+            document.getElementById("VirtualPortVid").style.display = "none";
+            document.getElementById("AEDPortDataset").style.visibility = "visible";
+            document.getElementById("AEDPortDataset").style.height = "auto";
+            document.getElementById("AEDPortDataset").style.overflow = "visible";
+            elem = document.getElementById("PortDataset_tbody_3");
+            clearChildNodes(elem);
+            elem.appendChild(frag[4]);
+        }
+        // updating virtual port config info
+        if (second_config[0] == "V_PORT")
+            virtual_port_config = ptp_clock_config[2];
+        else if (third_config[0] == "V_PORT")
+            virtual_port_config = ptp_clock_config[3];
+        if (virtual_port_config) { //V_PORT data is present.
+            console.log("virtual config "+virtual_port_config);
+            addVirtualPortRow(index, frag, virtual_port_config);
+            elem = document.getElementById("VirtualPortDataset_tbody");
+            clearChildNodes(elem);
+            elem.appendChild(frag[3]);
+        }
+    } else {
+        SpomHandleError();
+    }
+
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh.checked) {
+        if(timerID)
+           clearTimeout(timerID);
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+    document.getElementById("update").style.visibility = "hidden";
+}
+
+// This function is called on the load of the page which inturn sends the 
+// request to the server for fetching the information.
+function requestUpdate() {
+    if(SpomNavigationLoading())
+        return;                 // Bail out, navigation will trigger update
+
+    document.getElementById("update").style.visibility = "visible";
+    loadXMLDoc(SpomAddSidArg("/stat/ptp_clock_ports?clock_inst="+global_clock_inst), processUpdate);
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+            timerID = null;
+        }
+    } else {
+        requestUpdate();
+    }
+}
+
+// HTML script starts from here.
+</script>
+</head>
+<body class="content" onload="requestUpdate();">
+
+<h1>PTP Clock's Port Data Set Configuration <span id="display_sid"></span></h1>
+<div class="refreshbar">
+    <form action="#">
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+        <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+    </form>
+</div>
+
+<table summary="Port DataSet" class="config">
+  <thead>
+  <tr>
+   <th>Port</th>
+   <th>Stat</th>
+   <th>MDR</th>
+   <th>PeerMeanPathDel</th>
+   <th id="anv">Anv</th>
+   <th id="ato">ATo</th>
+   <th>Syv</th>
+   <th>Dlm</th>
+   <th>MPR</th>
+   <th>Delay Asymmetry</th>
+   <th>Ing. Latency</th>
+   <th>Egr. Latency</th>
+   <th>Version</th>
+   <th>Mcast Addr</th>
+   <th id="not-slve">Not Slave</th>
+   <th id="local-prio">Local Prio</th>
+  </tr>
+ </thead>
+ <tbody id="PortDataset_tbody">
+ </tbody>
+</table>
+
+<div id="VirtualPortVid">
+<h1>PTP Clock's Virtual Port Status <span id="display_vid"></span></h1>
+<table summary="Virtual Port DataSet" class="config">
+  <thead>
+  <tr>
+   <th>VirtualPort</th>
+   <th>Enabled</th>
+   <th>PTP-State</th>
+   <th>Io-pin</th>
+  </tr>
+ </thead>
+ <tbody id="VirtualPortDataset_tbody">
+ </tbody>
+</table>
+</div>
+
+<div id="PortDatasetDiv" style="visibility:hidden;height:0px;overflow:hidden;">
+<h1>802.1AS Port Data Set status </h1>
+<table summary="Port DataSet (part 2)" class="config">
+  <thead class = "has_ptp_1as">
+  <tr>
+   <th>Port</th>
+   <th>Port Role</th>
+   <th>IsMeasDelay</th>
+   <th>As Capable</th>
+   <th>Neighbor rate ratio</th>
+   <th>CAnv</th>
+   <th>CSyv</th>
+   <th>SyncTimeIntrv</th>
+   <th>CMPR</th>
+   <th>AMTE</th>
+   <th>Comp rate ratio</th>
+   <th>Comp Mean delay</th>
+   <th>Version Number</th>
+   <th>802.1as 2020</th>
+   <th>cLGCMv</th>
+   <th>NPDT</th>
+   <th>SRT</th>
+   <th>ALR</th>
+   <th>AFs</th>
+  </tr>
+ </thead>
+<tbody id="PortDataset_tbody_2">
+</tbody>
+</table>
+<h1>802.1AS Common link Delay services specific Port Data status </h1>
+<table summary="CMLDS Port DataSet" class="config">
+  <thead class = "has_ptp_1as">
+  <tr>
+   <th>Port</th>
+   <th>Identity</th>
+   <th>Enabled</th>
+   <th>IsMeasDelay</th>
+   <th>As Capable</th>
+   <th>mLinkDelay</th>
+   <th>Neighbor rate ratio</th>
+   <th>CLPDRv</th>
+   <th>CCNRR</th>
+   <th>CCMLD</th>
+   <th>Ver_Num</th>
+   <th>mVer_Num</th>
+   <th>Cmlds Default Ds</th>
+  </tr>
+ </thead>
+<tbody id="CMLDS_PortDataset_tbody">
+</tbody>
+</table>
+
+</div>
+
+<div id="AEDPortDataset" style="visibility:hidden;height:0px;overflow:hidden;">
+    <h1>802.1AS AED Port Data Set status </h1>
+    <table summary="AED" class="config">
+     <thead class = "has_ptp_1as">
+      <tr>
+       <th>Port</th>
+       <th>AED port role</th>
+       <th>IsMeasDelay</th>
+       <th>As Capable</th>
+       <th>Neighbor rate ratio</th>
+       <th>CSyv</th>
+       <th>SyncTimeIntrv</th>
+       <th>CMPR</th>
+       <th>Version Number</th>
+       <th>NPDT</th>
+       <th>SRT</th>
+       <th>ALR</th>
+       <th>AFs</th>
+       <th>initPdelayReq</th>
+       <th>operPdelayReq</th>
+       <th>initSync</th>
+       <th>operSync</th>
+      </tr>
+     </thead>
+     <tbody id="PortDataset_tbody_3">
+     </tbody>
+    </table>
+</div>
+
+<form action="#">
+<table id="ptpClockPortsInformation" summary="Per Clock Ports Information" cellspacing="0" class="config">
+  <tbody id="ptpClockPortsData"></tbody>
+</table>
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

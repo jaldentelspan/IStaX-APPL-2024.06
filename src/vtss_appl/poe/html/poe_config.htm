@@ -1,0 +1,434 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>Power over Ethernet Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript">
+    // Help page magic
+    var help_page = "/help/help_poe_at_config.htm";
+
+    // Global variables
+    var myDynamicTable;
+    var myNameMap;
+    var myPSUCapabilities;
+    var myIsPoeBT = new Boolean(false);
+
+    /* Check function before send out the HTML request */
+    function checkForm() {
+        if (document.getElementById('PSU_power').disabled  === false ) {
+            /* myPSUCapabilities.maxPower is in milliwat */
+            if(!isWithinRange('PSU_power', 0, myPSUCapabilities.maxPower , "Power Supply", " Watt")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function getPortNumber(key) {
+        var i;
+        for (i=0; i<myNameMap.length; i++) {
+            if (myNameMap[i].key == key) {
+                return myNameMap[i].val;
+            }
+        }
+        return "undefined";
+    }
+
+    /* Add table header */
+    function addHeader(table_rows) {
+        var row;
+	if(myIsPoeBT)
+	{
+            help_page = "/help/help_poe_bt_config.htm";
+            row = {
+                fields: [
+		    { type: "disp_hdr", params: ["Port"] },
+                    { type: "disp_hdr", params: ["Type"] },
+                    { type: "disp_hdr", params: ["Mode"] },
+                    { type: "disp_hdr", params: ["Pwr Mng"] },
+                    { type: "disp_hdr", params: ["Priority"] },
+                    { type: "disp_hdr", params: ["LLDP"] },
+                    { type: "disp_hdr", params: ["Cable Length"] }
+                ]
+            };
+	}
+	else
+	{
+            row = {
+                fields: [
+                    { type: "disp_hdr", params: ["Port"] },
+                    { type: "disp_hdr", params: ["Mode"] },
+                    { type: "disp_hdr", params: ["Priority"] },
+                    { type: "disp_hdr", params: ["LLDP"] },
+                    { type: "disp_hdr", params: ["Cable Length"] }
+                ]
+            };
+
+	}
+        table_rows.push(row);
+    }
+
+    /* Add a single row in the dynamic table.
+     * Notice:
+     * Except for the general usage, this function also can be a callback function
+     * which is registed by addNewRowButton().
+     * In this case, the value of parameter "key" is an integer number (start from 1),
+     * it identify the new row index for the entry and the value of parameter "val"
+     * is null.
+     */
+    function addRow(key, val, key_prefix) {
+        var row_affix = myDynamicTable.getRowPrefixs("rowKeyPrefix") + rowKey2Id(key);
+        var row;
+	 
+        if(myIsPoeBT)
+        {
+            row = {
+		"key": key,
+			fields: [ { type: "text", params: [getPortNumber(key), "c", null, key_prefix + key] },
+				{ type: "select", 
+				  params: [["type3-15w", "type3-30w", "type3-60w", "type4-90w"],
+						   ["type3pwr15w", "type3pwr30w", "type3pwr60w", "type4pwr90w"], val.Type, "c", "Type_" + row_affix] },
+				{ type: "select", 
+				  params: [["disable", "standard", "plus"],
+						   ["disable", "standard", "plus"],           val.Mode,        "c", "Mode_" + row_affix] },
+				{ type: "select",   											  
+				  params: [["dynamic", "static", "hybrid"],
+						   ["dynamic", "static", "hybrid"],           val.PwrMng,      "c", "PwrMng_" + row_affix] },
+				{ type: "select", 
+				  params: [["low", "high", "critical"],
+						   ["low", "high", "critical"],               val.Priority,    "c", "Priority_" + row_affix] },
+				{ type: "select",
+				  params: [["enable", "disable"],
+						   ["enable", "disable"],                     val.Lldp,        "c", "Lldp_" + row_affix] },
+				{ type: "select", 
+				  params: [["max10", "max30", "max60", "max100"],
+						   ["max10", "max30", "max60", "max100"], val.CableLength, "c", "CableLength_" + row_affix] }
+				] };
+	}
+	else
+	{
+	     row = {
+		  "key": key,
+		  fields: [ { type: "text", params: [getPortNumber(key), "c", null, key_prefix + key] },
+			  { type: "select", 
+				params: [["disable", "standard", "plus"],   	    
+						 ["disable", "standard", "plus"],           val.Mode,        "c", "Mode_" + row_affix] },
+			  { type: "select", 
+				params: [["low", "high", "critical"],
+						 ["low", "high", "critical"],               val.Priority,    "c", "Priority_" + row_affix] },
+			  { type: "select",
+				params: [["enable", "disable"],
+						 ["enable", "disable"],                     val.Lldp,        "c", "Lldp_" + row_affix] },
+			  { type: "select", 
+			    params: [["max10", "max30", "max60", "max100"],
+			   	         ["max10", "max30", "max60", "max100"], val.CableLength, "c", "CableLength_" + row_affix] }
+			  ]
+             };
+        }
+	
+	return row;
+    }
+
+    /* Add table rows in the dynamic table */
+    function addRows(recv_json) {
+        var row, empty_colspan = 4;
+        var table_rows = new Array();
+
+        // Add table header
+        addHeader(table_rows);
+
+        // Add single row
+        Object.each(recv_json, function (record) {
+            table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+        });
+
+        return table_rows;
+    }
+
+    /* Process the received JSON data */
+    function processUpdate(recv_json, name) {
+        // Ignore the process if no data is received
+        if (!recv_json) {
+            alert("processUpdate() failed: Get dynamic data failed.");
+            return;
+        }
+
+        var myConf = Array();
+        Object.each(recv_json, function (record) {
+            myConf.push(record);
+        });
+
+        // Save the received JSON data (both of the original and filted)
+        myDynamicTable.saveRecvJson(name, myConf);
+        myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+        // Add table rows
+        var table_rows = addRows(myConf);
+        myDynamicTable.addRows(table_rows);
+
+        // Update this dynamic table
+        myDynamicTable.update();
+        var cBar;
+        if(myIsPoeBT)
+        {
+            // Add header control bar
+            cBar = new HeaderControlBar([
+                        { text: "*", className: "c" },
+                        { name: "Type" },
+                        { name: "Mode" },
+                        { name: "PwrMng" },
+                        { name: "Priority" },
+                        { name: "Lldp" },
+                        { name: "CableLength" }
+            ]);
+            cBar.construct($("myTableContentTbody"), 'config_odd');
+        }
+        else
+        {
+            // Add header control bar
+            cBar = new HeaderControlBar([
+                        { text: "*", className: "c" },
+                        { name: "Mode" },
+                        { name: "Priority" },
+                        { name: "Lldp" },
+                        { name: "CableLength" }
+            ]);
+            cBar.construct($("myTableContentTbody"), 'config_odd');
+        }
+    }
+
+    function processNameMap(recv_json, name) {
+        myNameMap = recv_json;
+        requestUpdate();
+    }
+
+    function processCapabilities(recv_json, name) {
+        myPSUCapabilities = recv_json;
+        // console.log("myPSUCapabilities=", myPSUCapabilities);
+        if (myPSUCapabilities.userConfigurable) {
+            document.getElementById('PSU_power').style.backgroundColor = 'white';
+            document.getElementById('PSU_power').removeAttribute("readOnly", false);
+        }
+        if (!myPSUCapabilities.legacyModeConfigurable) {
+            document.getElementById("cap-detect-tr").style.display="none";
+        }
+        if (!myPSUCapabilities.interruptiblePowerSupported) {
+            document.getElementById("unint-power-tr").style.display="none";
+        }
+        if (!myPSUCapabilities.autoClass) {
+            document.getElementById("auto-class-tr").style.display="none";
+        }
+        if (!myPSUCapabilities.legacyPdClassMode) {
+            document.getElementById("legacy-pd-class-mode").style.display="none";
+        }
+
+        if (!myPSUCapabilities.isBt) {
+            document.getElementById("is-bt").style.display="none";
+        }
+
+        myIsPoeBT = myPSUCapabilities.isBt;
+    }
+
+    function processPsuUpdate(recv_json, name) {
+        // Ignore the process if no data is received
+        if (!recv_json) {
+            alert("processUpdate() failed: Get dynamic data failed.");
+            return;
+        }
+
+        // console.log("psu_update", recv_json[0].val);
+        document.getElementById('PSU_power').value           = recv_json[0].val.MaxPower;
+        document.getElementById('POE_POWER_LIMIT').value     = (recv_json[0].val.MaxPower > recv_json[0].val.SystemPwrUsage) ? recv_json[0].val.MaxPower - recv_json[0].val.SystemPwrUsage : 0;
+        document.getElementById('Capacitor_detect').value    = recv_json[0].val.CapacitorDetection ? "enabled" : "disabled";
+        document.getElementById('Interruptible_power').value = recv_json[0].val.InterruptiblePower ? "enabled" : "disabled";
+        document.getElementById('Auto_class').value          = recv_json[0].val.PDAutoClassRequest ? "enabled" : "disabled";
+
+        if (recv_json[0].val.LegacyPdClassMode === 0) {
+           document.getElementById('Legacy_pd_class_mode').value = "standard";
+        }
+        else if (recv_json[0].val.LegacyPdClassMode == 1) {
+           document.getElementById('Legacy_pd_class_mode').value = "poh";
+        }
+        else {
+           document.getElementById('Legacy_pd_class_mode').value = "ignore_pd_class";
+        }
+
+        if(recv_json[0].val.SystemPwrUsage === 0) {
+            document.getElementById("TD_POE_POWER_LIMIT").style.display = "none";
+        }
+    }
+
+    function requestPsuUpdate() {
+        requestJsonDoc("poe.capabilities.psu.get", null, processCapabilities, "psuCapabilities");
+        requestJsonDoc("poe.config.switch.get", null, processPsuUpdate, "psuConfig");
+    }
+
+    /* Update the received HTML request */
+    function requestUpdate() {
+        // Restore table content
+        myDynamicTable.restore();
+
+        requestJsonDoc("poe.config.interface.get", null, processUpdate, "config");
+    }
+
+    /* Change snooping mode select menu */
+    function onClickSave() {
+        if (!checkForm()) {
+            return false;
+        }
+
+        var pd_class_mode_val ;
+        if (document.getElementById('Legacy_pd_class_mode').value == "standard") {
+           pd_class_mode_val = 0;
+        }
+        else if (document.getElementById('Legacy_pd_class_mode').value == "poh") {
+           pd_class_mode_val = 1;
+        }
+        else {  //ignore_pd_class 
+           pd_class_mode_val = 2;
+        }
+        globalvars = 
+            [1,{"MaxPower":document.getElementById('PSU_power').value,
+                "CapacitorDetection":(document.getElementById('Capacitor_detect').value == "enabled"),
+                "InterruptiblePower":(document.getElementById('Interruptible_power').value == "enabled"),
+                "PDAutoClassRequest":(document.getElementById('Auto_class').value == "enabled"),
+                "LegacyPdClassMode" :pd_class_mode_val
+            }];
+        requestJsonDoc("poe.config.switch.set", globalvars);
+        myDynamicTable.submitEvent("config", "poe.config.interface", null);
+
+        milliSleep(500);
+
+        requestPsuUpdate();
+        requestUpdate();
+
+        return true;
+    }
+
+    function onClickReset() {
+
+        requestPsuUpdate();
+        requestUpdate();
+
+        return true;
+    }
+
+    /* Initialize resores when HTML document is ready */
+    window.addEvent('domready', function () {
+        // Create a from with table body for receive/transmit JSON data
+        myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", { func: checkForm, params: [] });
+
+        requestJsonDoc("port.namemap.get", null, processNameMap, "namemap");
+        requestPsuUpdate();
+    });
+    </script>
+</head>
+
+<body class="content">
+    <h1>Power over Ethernet Configuration</h1>
+    <div class="refreshbar">
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <h2>System Configuration</h2>
+    <div style="display: flex;">
+        <table summary="Configuration" cellspacing="0" class="config">
+            <tr class="config">
+                <td class="param_label">Power supply</td>
+                <td class="cl">
+                      <input type="text" size=5 id="PSU_power" readonly style="background-color: lightgray;" maxlength="5"> W
+		      <div id="TD_POE_POWER_LIMIT"> poe power limit: <input type="text" size=5 id="POE_POWER_LIMIT" readonly style="background-color: lightgray;">W</div>
+                </td>
+            </tr>
+            <tr id="cap-detect-tr" class="config">
+                <td class="param_label">Capacitor detection</td>
+                <td class="cl">
+                    <select id="Capacitor_detect" name="capacitor_detect">
+                        <option value="enabled" >Enabled</option>
+                        <option value="disabled">Disabled</option>
+                    </select>
+                </td>
+            </tr>
+            <tr id="unint-power-tr" class="config">
+                <td class="param_label">Interruptible power</td>
+                <td class="cl">
+                    <select id="Interruptible_power" name="interruptible_power">
+                        <option value="enabled" >Enabled</option>
+                        <option value="disabled">Disabled</option>
+                    </select>
+                </td>
+            </tr>
+                <tr id="auto-class-tr" class="config">
+                <td class="param_label">PD Auto-class request</td>
+                <td class="cl">
+                    <select id="Auto_class" name="auto_class">
+                        <option value="enabled" >Enabled</option>
+                        <option value="disabled">Disabled</option>
+                    </select>
+                </td>
+            </tr>
+                <tr id="legacy-pd-class-mode" class="config">
+                <td class="param_label">Legacy PD-Class Mode</td>
+                <td class="cl">
+                    <select id="Legacy_pd_class_mode" name="legacy_pd_class_mode">
+                        <option value="standard" >Standard</option>
+                        <option value="poh">PoH</option>
+                        <option value="ignore_pd_class">Ignore Pd-Class</option>
+                    </select>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <div>
+        <p id="is-bt">
+                <b>Note:</b><br>
+                - Legacy PD-Class Mode (standard / PoH / Ignore Pd-Class) configuration is applicable only to PoE ports configured as 'Plus' under the mode column.<br>
+                - Legacy PD-Class Mode - 'Ignore Pd-Class' is applicable only for ports configured as Type3-60W, Type4-90W. Excluding Type3-15W, Type3-30W.
+        </p>
+        <br>
+    </div>
+    <h2>Port Configuration</h2>
+    <div id="myTableContent"></div>
+    <p id="PoEButtons">
+        <input type="button" value="Save" onClick="onClickSave();">
+        <input type="button" value="Reset" onclick="onClickReset();">
+    </p>
+</body>
+
+</html>

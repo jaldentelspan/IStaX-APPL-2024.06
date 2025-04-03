@@ -1,0 +1,4468 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_PORT)
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "icfg_api.h"      /* For vtss_icfg_XXX() */
+#include "mgmt_api.h"      /* For mgmt_prio2txt() */
+#include "misc_api.h"      /* For iport2uport()   */
+#ifdef VTSS_SW_OPTION_KR
+#include "kr_api.h"        /* For kr_mgmt_XXX()   */
+#endif
+#include "port_api.h"
+#include "port_iter.hxx"
+#include "port_listener.hxx"
+
+#if defined VTSS_SW_OPTION_QOS
+#include <vtss/appl/qos.h> /* For vtss_appl_qos_XXX */
+#endif
+INCLUDE_END
+
+FUNCTION_BEGIN
+// Need to include port moudule's trace here, because ICLI defines its own that
+// I don't want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "port_trace.h"
+
+// Convert from mesa_rc to icli_rc_t. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define PORT_ICLI_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+/******************************************************************************/
+// PORT_ICLI_pfc_to_str()
+/******************************************************************************/
+static char *PORT_ICLI_pfc_to_str(char *buf, mesa_bool_t *pfc)
+{
+    uint8_t i, a = 0, b, tot = 0;
+    bool    first = true, once = true;
+
+    buf[0] = '\0';
+
+    for (i = 0; i < 8; i++) {
+        if (!pfc[i]) {
+            continue;
+        }
+
+        if (first) {
+            tot = a = + sprintf(buf + a, "%d", i);
+            first = false;
+        } else {
+            if (pfc[i]) {
+                if (pfc[i - 1]) {
+                    b = sprintf(buf + a, "-%d", i);
+                    if (once) {
+                        tot = tot + b;
+                        once = false;
+                    }
+                } else {
+                    a = tot = tot + sprintf(buf + tot, ",%d", i);
+                    once = true;
+                }
+            }
+        }
+    }
+
+    return buf;
+}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// PORT_ICFG_adv_dis_to_str()
+/******************************************************************************/
+static char *PORT_ICFG_adv_dis_to_str(char *buf, size_t size, meba_port_cap_t static_caps, bool all_defaults, mepa_adv_dis_t adv_dis, mepa_adv_dis_t adv_dis_default)
+{
+    int            s, res;
+    bool           is_ena, is_supported;
+    bool           hdx_dis, fdx_dis;
+    bool           speed_is_default;
+    mepa_adv_dis_t speed_bits_cfg, speed_bits_def;
+
+    buf[0] = 0;
+
+    if ((static_caps & MEBA_PORT_CAP_COPPER) == 0) {
+        // Only copper ports can have options along with the 'auto' keyword.
+        return buf;
+    }
+
+    speed_bits_cfg = adv_dis         & MEPA_ADV_DIS_SPEED;
+    speed_bits_def = adv_dis_default & MEPA_ADV_DIS_SPEED;
+    speed_is_default = (speed_bits_cfg & ~speed_bits_def) == 0;
+
+#define P(_str_)                                         \
+    if (size - s > 0) {                                  \
+        res = snprintf(buf + s, size - s, " %s", _str_); \
+        if (res > 0) {                                   \
+            s += res;                                    \
+        }                                                \
+    }
+
+#define F(X, _name_)                                          \
+    is_supported = (adv_dis_default & MEPA_ADV_DIS_##X) == 0; \
+    is_ena       = (adv_dis         & MEPA_ADV_DIS_##X) == 0; \
+    if (is_supported && is_ena) {                             \
+        P(_name_);                                            \
+    }
+
+    // Start with the speed advertisements. These should have been things NOT
+    // to advertise, but since this command has lived a loooong time, we cannot
+    // change it now.
+
+    s = 0;
+
+    if (!speed_is_default || all_defaults) {
+        F(10M,   "10");
+        F(100M,  "100");
+        F(1G,    "1000");
+        F(2500M, "2500");
+        F(5G,    "5g");
+        F(10G,   "10g")
+        buf[MIN(size - 1, s)] = 0;
+    }
+
+#undef F
+
+    // The duplex flags are somewhat different, as you can see in the
+    // "COMMAND = speed" section.
+    // First of all, they are only printed if the port supports half duplex.
+    if ((static_caps & MEBA_PORT_CAP_HDX) == 0) {
+        // HDX not supported on this interface. Don't print the flags.
+        return buf;
+    }
+
+    // Second of all, they don't depend on all-defaults, because the default
+    // settings when a port supports half duplex is that both are advertised, so
+    // adv_dis_default & (MEPA_ADV_DIS_HDX | MEPA_ADV_DIS_FDX) == 0.
+    hdx_dis = (adv_dis & MEPA_ADV_DIS_HDX) != 0;
+    fdx_dis = (adv_dis & MEPA_ADV_DIS_FDX) != 0;
+
+    if (hdx_dis && fdx_dis) {
+        // Both HDX and FDX are disabled on the port. Tat should not be possible
+        T_EG(PORT_TRACE_GRP_ICLI, "Both half and full duplex are disabled at the same time");
+        return buf;
+    }
+
+    if (hdx_dis) {
+        P("no-hdx");
+    } else if (fdx_dis) {
+        P("no-fdx");
+    }
+#undef P
+
+    buf[MIN(size - 1, s)] = 0;
+
+    return buf;
+}
+#endif //VTSS_SW_OPTION_ICFG
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// PORT_ICFG_conf_print()
+/******************************************************************************/
+static mesa_rc PORT_ICFG_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_icfg_conf_print_t                  conf_print;
+    vtss_appl_port_conf_t                   conf, default_conf;
+    vtss_appl_port_capabilities_t           caps;
+    vtss_appl_port_interface_capabilities_t if_caps;
+    vtss_ifindex_t                          ifindex;
+    char                                    buf[100];
+
+    // Format:
+    // interface GigabitEthernet 1/1
+    //  [no] media-type {rj45 | sfp | dual}
+    //  [no] fec {auto | r-fec | rs-fec | none}
+    //  [no] clause-73 parallel-detect
+    //  [no] speed {10 | 100 | 1000 | 2500 | 5g | 10g | 25g | force-clause-73 | auto {[10] [100] [1000] [2500] [5g] [10g] {[no-hdx] | [no-fdx]}}}
+    //  [no] duplex {half | full}
+    //  [no] flowcontrol {on | off}
+    //  [no] priority-flowcontrol prio <0~7>
+    //  [no] mtu <1518-9600>
+    //  [no] excessive-restart
+    //  [no] frame-length-check
+    //  [no] shutdown
+    //  [no] description <line200>
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+
+    VTSS_RC(vtss_ifindex_from_port(VTSS_ISID_START, req->instance_id.port.begin_iport, &ifindex));
+    VTSS_RC(vtss_appl_port_capabilities_get(                   &caps));
+    VTSS_RC(vtss_appl_port_interface_capabilities_get(ifindex, &if_caps));
+    VTSS_RC(vtss_appl_port_conf_default_get(         ifindex,  &default_conf));
+    VTSS_RC(vtss_appl_port_conf_get(                 ifindex,  &conf));
+
+    // media-type
+    // [no] media-type {rj45 | sfp | dual}
+    // We don't print the no-form, because we want the user to know what mode it
+    // really is in when using the all-defaults keyword.
+    // Currently conf_print.force_no_keyword == false, so we don't print the
+    // no-form.
+    conf_print.is_default = conf.media_type == default_conf.media_type;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "media-type", "%s", port_media_type_to_txt(conf.media_type, false /* print with small letters */)));
+
+    // FEC
+    //  [no] fec {auto | r-fec | rs-fec | none}
+    // We don't print the no-form, because we want the user to know what mode it
+    // really is in when using the all-defaults keyword
+    if (if_caps.has_kr) {
+        // We only print FEC if the chip has KR
+        conf_print.is_default = conf.fec_mode == default_conf.fec_mode;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "fec", "%s", port_fec_mode_to_txt(conf.fec_mode, false /* print with small letters */)));
+    }
+
+    // Clause-73 Parallel Detect
+    //  [no] clause-73 parallel-detect
+    if (if_caps.has_kr) {
+        // vtss_icfg_conf_print() is not that good in printing the no-form when
+        // that's the default.
+        if (conf.clause_73_pd != default_conf.clause_73_pd || req->all_defaults) {
+            VTSS_RC(vtss_icfg_printf(result, " %sclause-73 parallel-detect\n", conf.clause_73_pd ? "" : "no "));
+        }
+    }
+
+    // speed
+    // [no] speed {10 | 100 | 1000 | 2500 | 5g | 10g | 25g | force-clause-73 | auto {[10] [100] [1000] [2500] [5g] [10g] {[no-hdx] | [no-fdx]}}}
+    // We don't print the no-form, because we want the user to know the actually
+    // *configured* speed (not the actual speed, because it's unknown in auto).
+
+    // If conf.force_clause_73 is set, we output that.
+    if (conf.force_clause_73) {
+        VTSS_RC(vtss_icfg_printf(result, " %s", "speed force-clause-73\n"));
+    } else {
+        // If the speed equals the the default speed and the disabled
+        // advertisements equal the default disabled advertisements in auto
+        // mode, it is indeed default.
+        conf_print.is_default = conf.speed == default_conf.speed && (conf.speed != MESA_SPEED_AUTO || conf.adv_dis == default_conf.adv_dis);
+
+        if (conf.speed == MESA_SPEED_AUTO) {
+            // auto mode may take a list of things to advertise. Get a string of
+            // these things.
+            PORT_ICFG_adv_dis_to_str(buf, sizeof(buf), if_caps.static_caps, req->all_defaults, conf.adv_dis, default_conf.adv_dis);
+        } else {
+            buf[0] = '\0';
+        }
+
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "speed", "%s%s", port_speed_to_txt(conf.speed, false /* print with small letters */), buf));
+    }
+
+    // duplex
+    // [no] duplex {half | full}
+    // We don't support the no-keyword here, since both options can be shown.
+    conf_print.is_default = conf.fdx == default_conf.fdx;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "duplex", "%s", conf.fdx ? "full" : "half"));
+
+    // Flow control
+    // [no] flowcontrol {on | off}
+    // We don't support the no-keyword here, since both options can be shown.
+    conf_print.is_default = conf.flow_control == default_conf.flow_control;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "flowcontrol", "%s", conf.flow_control ? "on" : "off"));
+
+    // priority-flowcontrol
+    // [no] priority-flowcontrol prio <0~7>
+    if (caps.has_pfc) {
+        conf_print.is_default = memcmp(conf.pfc, default_conf.pfc, sizeof(conf.pfc)) == 0;
+
+        if (conf_print.is_default) {
+            // If user has asked for all-defaults, we need to print the
+            // following (I know it requires all PFC bits to be 0 and prios to
+            // be in range 0-7, but I take that chance for now).
+            if (req->all_defaults) {
+                VTSS_RC(vtss_icfg_printf(result, " %s", "no priority-flowcontrol prio 0-7\n"));
+            }
+        } else {
+            VTSS_RC(vtss_icfg_conf_print(&conf_print, "priority-flowcontrol prio", "%s", PORT_ICLI_pfc_to_str(buf, conf.pfc)));
+        }
+    }
+
+    // mtu
+    // [no] mtu <1518-9600>
+    // Don't use the no-form
+    conf_print.is_default = conf.max_length == default_conf.max_length;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "mtu", "%u", conf.max_length));
+
+    // Starting from here, we want to use the no-form
+    conf_print.force_no_keyword = true;
+
+    // excessive-restart
+    // [no] excessive-restart
+    conf_print.is_default = conf.exc_col_cont == default_conf.exc_col_cont;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "excessive-restart", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    // Frame length check
+    // [no] frame-length-check
+    conf_print.force_no_keyword = true;
+    conf_print.is_default = conf.frame_length_chk == default_conf.frame_length_chk;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "frame-length-check", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    // Shut down
+    // [no] shutdown
+    conf_print.force_no_keyword = true;
+    conf_print.is_default = conf.admin.enable == default_conf.admin.enable;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "shutdown", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    // Interface Description
+    // [no] description <line200>
+    conf_print.is_default = strcmp(conf.dscr, default_conf.dscr) == 0;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "description", "%s", conf.dscr));
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// port_icfg_init()
+/******************************************************************************/
+mesa_rc port_icfg_init(void)
+{
+    // Use "show running-config feature port" to show port settings
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_PORT_INTERFACE_CONF, "port", PORT_ICFG_conf_print));
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+/******************************************************************************/
+// port_icli_itr_t
+// sizeof(port_icli_itr_t) ~= 2000 bytes
+/******************************************************************************/
+typedef struct {
+    // Input set by caller
+    bool                                    need_conf;
+    bool                                    need_default_conf;
+    bool                                    need_status;
+    bool                                    need_vol_status;
+    bool                                    need_statistics;
+    bool                                    need_if_caps;
+    bool                                    need_caps;
+    icli_stack_port_range_t                 *port_list;
+
+    // Administered internally and may be used by caller
+    bool                                    not_first;
+    bool                                    has_more_than_one_port;
+    port_iter_t                             pit;
+    vtss_ifindex_t                          ifindex;
+    vtss_appl_port_capabilities_t           caps;
+    vtss_appl_port_conf_t                   conf;
+    vtss_appl_port_conf_t                   default_conf;
+    vtss_appl_port_status_t                 status;
+    port_vol_status_t                       vol_status;
+    vtss_appl_port_interface_capabilities_t if_caps;
+    mesa_port_counters_t                    statistics;
+} port_icli_itr_t;
+
+/******************************************************************************/
+// PORT_ICLI_print_error()
+/******************************************************************************/
+static mesa_rc PORT_ICLI_print_error(port_icli_itr_t &itr, const char *txt, mesa_rc rc)
+{
+    char if_str[40];
+
+    if (rc == VTSS_RC_OK) {
+        return rc;
+    }
+
+    if (itr.has_more_than_one_port) {
+        (void)icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str);
+        if (txt && txt[0] != '\0') {
+            icli_session_self_printf("%% %s: %s: %s\n", if_str, txt, error_txt(rc));
+        } else {
+            icli_session_self_printf("%% %s: %s\n", if_str, error_txt(rc));
+        }
+    } else {
+        if (txt && txt[0] != '\0') {
+            icli_session_self_printf("%% %s: %s\n", txt, error_txt(rc));
+        } else {
+            icli_session_self_printf("%% %s\n", error_txt(rc));
+        }
+    }
+
+    return rc;
+}
+
+/******************************************************************************/
+// PORT_ICLI_itr()
+/******************************************************************************/
+static bool PORT_ICLI_itr(port_icli_itr_t &itr)
+{
+    mesa_rc rc;
+
+    if (!itr.not_first) {
+        if ((rc = icli_port_iter_init(&itr.pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL_CPU)) != VTSS_RC_OK) {
+            (void)PORT_ICLI_print_error(itr, "Unable to initialize port iterator", rc);
+            return false;
+        }
+
+        // Figure out whether this iterator spans more than one port.
+        if (itr.port_list) {
+            if (itr.port_list->cnt == 0) {
+                // No iteration done. Not sure we can get here.
+                return false;
+            } else if (itr.port_list->cnt == 1) {
+                if (itr.port_list->switch_range[0].port_cnt > 1) {
+                    itr.has_more_than_one_port = true;
+                }
+            } else {
+                itr.has_more_than_one_port = true;
+            }
+        } else {
+            // If port_list is NULL, ICLI gets all ports.
+            itr.has_more_than_one_port = true;
+        }
+
+        itr.not_first = true;
+
+        if (itr.need_caps) {
+            if ((rc = vtss_appl_port_capabilities_get(&itr.caps)) != VTSS_RC_OK) {
+                (void)PORT_ICLI_print_error(itr, "Unable to get capabilities", rc);
+                return false;
+            }
+        }
+    }
+
+    while (icli_port_iter_getnext(&itr.pit, itr.port_list)) {
+        if ((rc = vtss_ifindex_from_port(VTSS_ISID_START, itr.pit.iport, &itr.ifindex)) != VTSS_RC_OK) {
+            (void)PORT_ICLI_print_error(itr, "Unable to convert port to interface index", rc);
+            continue;
+        }
+
+        if (itr.need_conf) {
+            if ((rc = vtss_appl_port_conf_get(itr.ifindex, &itr.conf)) != VTSS_RC_OK) {
+                (void)PORT_ICLI_print_error(itr, "Unable to get port configuration", rc);
+                continue;
+            }
+        }
+
+        if (itr.need_default_conf) {
+            if ((rc = vtss_appl_port_conf_default_get(itr.ifindex, &itr.default_conf)) != VTSS_RC_OK) {
+                (void)PORT_ICLI_print_error(itr, "Unable to get default port configuration", rc);
+                continue;
+            }
+        }
+
+        if (itr.need_status) {
+            if ((rc = vtss_appl_port_status_get(itr.ifindex, &itr.status)) != VTSS_RC_OK) {
+                (void)PORT_ICLI_print_error(itr, "Unable to get port status", rc);
+                continue;
+            }
+
+            T_IG_PORT(PORT_TRACE_GRP_ICLI, itr.pit.iport, "Status = %s", itr.status);
+        }
+
+        if (itr.need_vol_status) {
+            if ((rc = port_vol_status_get(PORT_USER_CNT, itr.pit.iport, &itr.vol_status)) != VTSS_RC_OK) {
+                (void)PORT_ICLI_print_error(itr, "Unable to get volatile port status", rc);
+                continue;
+            }
+        }
+
+        if (itr.need_statistics) {
+            if ((rc = vtss_appl_port_statistics_get(itr.ifindex, &itr.statistics)) != VTSS_RC_OK) {
+                (void)PORT_ICLI_print_error(itr, "Unable to get port statistics", rc);
+                continue;
+            }
+        }
+
+        if (itr.need_if_caps) {
+            if ((rc = vtss_appl_port_interface_capabilities_get(itr.ifindex, &itr.if_caps)) != VTSS_RC_OK) {
+                (void)PORT_ICLI_print_error(itr, "Unable to get interface capabilities", rc);
+                continue;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// PORT_ICLI_loading_startup_config()
+/******************************************************************************/
+static bool PORT_ICLI_loading_startup_config(uint32_t session_id)
+{
+    icli_session_way_t way;
+    icli_rc_t          icli_rc;
+
+    if ((icli_rc = (icli_rc_t)icli_session_way_get(session_id, &way)) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "icli_session_way_get() failed: %d", icli_rc);
+        return true;
+    }
+
+    // Only when ICFG is applying startup-config, will way be
+    // ICLI_SESSION_WAY_APP_EXEC. When normal RS232 CLI is running, way will be
+    // ICLI_SESSION_WAY_THREAD_CONSOLE - also when a config is copied from flash
+    // to running-config (which is kind-of a shame).
+    return way == ICLI_SESSION_WAY_APP_EXEC;
+}
+
+/******************************************************************************/
+// PORT_ICLI_at_least_one_port_supports_this_cap()
+// Returns TRUE if at least one of the selected interfaces supports a given
+// capability.
+// If the capability has more than one bit set, just one of them needs to be set
+/******************************************************************************/
+static bool PORT_ICLI_at_least_one_port_supports_this_cap(uint32_t session_id, meba_port_cap_t cap)
+{
+    port_icli_itr_t       itr = {};
+    icli_variable_value_t value;
+
+    // Get currently selected port list (which is the mode parameter)
+    if (ICLI_MODE_PARA_GET(NULL, &value) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "Unable to get mode parameter (port list)");
+        return false;
+    }
+
+    itr.port_list    = &(value.u.u_port_type_list);
+    itr.need_if_caps = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (itr.if_caps.static_caps & cap) {
+            return true;
+        } else {
+            continue;
+        }
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// PORT_ICLI_at_least_one_port_has_force_support()
+// Returns TRUE if at least one of the selected interfaces supports forced
+// speed or duplex
+/******************************************************************************/
+static bool PORT_ICLI_at_least_one_port_has_force_support(uint32_t session_id)
+{
+    port_icli_itr_t       itr = {};
+    icli_variable_value_t value;
+
+    // Get currently selected port list (which is the mode parameter)
+    if (ICLI_MODE_PARA_GET(NULL, &value) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "Unable to get mode parameter (port list)");
+        return false;
+    }
+
+    itr.port_list    = &(value.u.u_port_type_list);
+    itr.need_if_caps = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (((itr.if_caps.static_caps & (MEBA_PORT_CAP_COPPER | MEBA_PORT_CAP_NO_FORCE)) == (MEBA_PORT_CAP_COPPER | MEBA_PORT_CAP_NO_FORCE)) &&
+            ((itr.if_caps.static_caps & MEBA_PORT_CAP_ANY_FIBER) == 0x0)) {
+            // Copper only and no force capability
+            continue;
+        } else {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// PORT_ICLI_at_least_one_port_is_sfp_10g()
+// Returns TRUE if at least one of the selected interfaces supports 10G SFPs
+/******************************************************************************/
+static bool PORT_ICLI_at_least_one_port_is_sfp_10g(uint32_t session_id)
+{
+    port_icli_itr_t       itr = {};
+    icli_variable_value_t value;
+
+    // Get currently selected port list (which is the mode parameter)
+    if (ICLI_MODE_PARA_GET(NULL, &value) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "Unable to get mode parameter (port list)");
+        return false;
+    }
+
+    itr.port_list    = &(value.u.u_port_type_list);
+    itr.need_if_caps = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if ((itr.if_caps.static_caps & MEBA_PORT_CAP_SFP_ONLY) && (itr.if_caps.static_caps & MEBA_PORT_CAP_10G_FDX)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// PORT_ICLI_at_least_one_port_supports_aneg()
+// Returns TRUE if at least one of the selected interfaces supports aneg.
+/******************************************************************************/
+static bool PORT_ICLI_at_least_one_port_supports_aneg(uint32_t session_id)
+{
+    port_icli_itr_t       itr = {};
+    icli_variable_value_t value;
+
+    // Get currently selected port list (which is the mode parameter)
+    if (ICLI_MODE_PARA_GET(NULL, &value) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "Unable to get mode parameter (port list)");
+        return false;
+    }
+
+    itr.port_list    = &(value.u.u_port_type_list);
+    itr.need_if_caps = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (itr.if_caps.static_caps & MEBA_PORT_CAP_AUTONEG) {
+            // Port supports aneg
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/******************************************************************************/
+// PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap()
+// Returns TRUE if at least one of the selected interfaces supports aneg and
+// is a true copper (non-dual media) port and supports at least one of the
+// (speed-)bits set in #cap.
+/******************************************************************************/
+static bool PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(uint32_t session_id, meba_port_cap_t cap)
+{
+    port_icli_itr_t       itr = {};
+    icli_variable_value_t value;
+
+    // Get currently selected port list (which is the mode parameter)
+    if (ICLI_MODE_PARA_GET(NULL, &value) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "Unable to get mode parameter (port list)");
+        return false;
+    }
+
+    itr.port_list    = &(value.u.u_port_type_list);
+    itr.need_if_caps = true;
+
+    // Configuration must never be checked against sfp_caps - only static_caps!
+    // This function also used to check against currently configured media type.
+    // That must be prevented, because if the media type were correct when aneg
+    // advertisement was selected, and the media type then was changed, then the
+    // advertisement would suddenly be invalid.
+    // It's much better to let vtss_appl_port_conf_set() throw an error in case
+    // something is wrong.
+    while (PORT_ICLI_itr(itr)) {
+        if ((itr.if_caps.static_caps & MEBA_PORT_CAP_AUTONEG) == 0) {
+            // Port doesn't support aneg
+            continue;
+        }
+
+        if ((itr.if_caps.static_caps & MEBA_PORT_CAP_COPPER) && (itr.if_caps.static_caps & cap)) {
+            // We only support advertising on pure copper ports, and not dual
+            // media ports.
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#if defined(VTSS_SW_OPTION_KR)
+/******************************************************************************/
+// PORT_ICLI_at_least_one_port_supports_kr()
+// Returns TRUE if at least one of the selected interfaces supports KR
+/******************************************************************************/
+static bool PORT_ICLI_at_least_one_port_supports_kr(u32 session_id)
+{
+    port_icli_itr_t       itr = {};
+    icli_variable_value_t value;
+
+    // Get currently selected port list (which is the mode parameter)
+    if (ICLI_MODE_PARA_GET(NULL, &value) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "Unable to get mode parameter (port list)");
+        return false;
+    }
+
+    itr.port_list    = &(value.u.u_port_type_list);
+    itr.need_caps    = true; // Port module capabilities
+    itr.need_if_caps = true; // Per-port capabilities
+
+    while (PORT_ICLI_itr(itr)) {
+        if (!itr.caps.has_kr) {
+            // The chip doesn't support clause 73 at all. No need to continue.
+            return false;
+        }
+
+        if (itr.if_caps.has_kr) {
+            // This port supports KR. Done.
+            return true;
+        }
+    }
+
+    return false;
+}
+#endif
+
+#if defined(VTSS_SW_OPTION_KR)
+/******************************************************************************/
+// PORT_ICLI_at_least_one_port_supports_kr_25g()
+// Returns TRUE if at least one of the selected interfaces supports KR v3 and is
+// a 25G port.
+/******************************************************************************/
+static bool PORT_ICLI_at_least_one_port_supports_kr_25g(u32 session_id)
+{
+    port_icli_itr_t       itr = {};
+    icli_variable_value_t value;
+
+    // Get currently selected port list (which is the mode parameter)
+    if (ICLI_MODE_PARA_GET(NULL, &value) != ICLI_RC_OK) {
+        T_EG(PORT_TRACE_GRP_ICLI, "Unable to get mode parameter (port list)");
+        return false;
+    }
+
+    itr.port_list    = &(value.u.u_port_type_list);
+    itr.need_caps    = true; // Port module capabilities
+    itr.need_if_caps = true; // Per-port capabilities
+
+    while (PORT_ICLI_itr(itr)) {
+        if (!itr.caps.has_kr_v3) {
+            // The chip doesn't support RS-FEC at all. No need to continue.
+            return false;
+        }
+
+        if (itr.if_caps.has_kr && (itr.if_caps.static_caps & MEBA_PORT_CAP_25G_FDX) != 0) {
+            // This port supports RS-FEC. Done.
+            return true;
+        }
+    }
+
+    return false;
+}
+#endif
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_pfc()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_pfc(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_port_capabilities_t cap;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    (void)vtss_appl_port_capabilities_get(&cap);
+    runtime->present = cap.has_pfc;
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_errdisable()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_errdisable(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_ERRDISABLE)
+    runtime->present = TRUE;
+#else
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_mtu_range()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_mtu_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_port_capabilities_t cap;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    (void)vtss_appl_port_capabilities_get(&cap);
+    runtime->range.type              = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt          = 1;
+    runtime->range.u.ur.range[0].min = cap.frame_length_max_min;
+    runtime->range.u.ur.range[0].max = cap.frame_length_max_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_forced_half_duplex()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_forced_half_duplex(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_HDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_duplex_adv_hdx()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_duplex_adv_hdx(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_HDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_media_type_dual_or_copper()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_media_type_dual_or_copper(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_DUAL_COPPER | MEBA_PORT_CAP_DUAL_FIBER) ||
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_COPPER);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_media_type_dual_or_sfp()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_media_type_dual_or_sfp(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_DUAL_COPPER | MEBA_PORT_CAP_DUAL_FIBER) ||
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_SFP_ONLY);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_media_type_dual()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_media_type_dual(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_DUAL_COPPER | MEBA_PORT_CAP_DUAL_FIBER);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_media_type_sfp_10g_obsolete()
+// The 'media-type {dac-1m | dac-2m | dac-3m | dac-5m}' options are obsolete,
+// because we have found Serdes settings that cover all DAC cable lengths.
+// If we need to use special Serdes settings for different cable lengths in the
+// future again, we might be able to use the SFP ROM's byte 18.
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_media_type_sfp_10g_obsolete(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // Only if it's ICFG that applies the config and it's a 10G SFP port, is
+    // this option present.
+    runtime->present = PORT_ICLI_loading_startup_config(session_id) && PORT_ICLI_at_least_one_port_is_sfp_10g(session_id);
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_tsn_frame_preemption()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_tsn_frame_preemption(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_TSN)
+    runtime->present = fast_cap(MESA_CAP_QOS_FRAME_PREEMPTION);
+#else
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_qos_queues()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_qos_queues(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+#if defined(VTSS_SW_OPTION_QOS)
+        runtime->present = TRUE;
+#else
+        runtime->present = FALSE;
+#endif
+
+        return TRUE;
+    }
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = VTSS_PRIO_START;
+    runtime->range.u.ur.range[0].max = VTSS_PRIO_END - 1;
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_10m()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_10m(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_10M_HDX | MEBA_PORT_CAP_10M_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_100m()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_100m(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_100M_HDX | MEBA_PORT_CAP_100M_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_1g()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_1g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_1G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_2g5()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_2g5(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_2_5G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_5g()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_5g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_5G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_10g()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_10g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_10G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_25g()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_25g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_has_force_support(session_id) &&
+                       PORT_ICLI_at_least_one_port_supports_this_cap(session_id, MEBA_PORT_CAP_25G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_kr()
+// The asked-for-keyword is present if chip is KR capable (v2 or v3) and at
+// least one of the selected ports is a KR-capable port.
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_kr(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_KR)
+    runtime->present = PORT_ICLI_at_least_one_port_supports_kr(session_id);
+#else
+    // KR is disabled, so we don't support it.
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_platform_kr()
+// The asked-for-keyword is present if chip is KR capable (v2 or v3)
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_platform_kr(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_KR)
+    // I would really, really, really have loved to taste on the
+    // <port_type_list> argument  to 'show interface <port_type_list> status',
+    // with icli_session_cmd_value_get(), but ICLI allows the port type list to
+    // be shown many times, e.g.:
+    //    show int * status
+    //    show int g 1/1 2.5g 1/3 status
+    // and it doesn't collapse it into a single ICLI_VARIABLE_PORT_TYPE_LIST,
+    // so I cannot figure out whether one of the ports are KR capable.
+    // Therefore, I resort to returning present if the platform supports KR.
+
+    vtss_appl_port_capabilities_t cap;
+    (void)vtss_appl_port_capabilities_get(&cap);
+    runtime->present = cap.has_kr;
+#else
+    // KR is disabled, so we don't support it.
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_clause_73()
+// The asked-for-keyword is present if chip is KR capable (v2 or v3) and at
+// least one of the selected ports is a KR-capable port and either "platform
+// debug allow" has been run or we are handling the startup-config.
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_clause_73(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+#if defined(VTSS_SW_OPTION_KR)
+    BOOL platform_debug_allow;
+#endif
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_KR)
+    platform_debug_allow = icli_session_debug_cmd_allow_get(session_id);
+
+    runtime->present = (platform_debug_allow || PORT_ICLI_loading_startup_config(session_id)) && PORT_ICLI_at_least_one_port_supports_kr(session_id);
+#else
+    // KR is disabled, so we don't support it.
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_kr_25g()
+// The asked-for-keyword is present if chip is KR capable (v3) and at least one
+// of the selected ports is a 25G KR-capable port.
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_kr_25g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_KR)
+    runtime->present = PORT_ICLI_at_least_one_port_supports_kr_25g(session_id);
+#else
+    // KR is disabled, so we don't support it.
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_auto()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_auto(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg(session_id);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_adv_10m()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_adv_10m(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(session_id, MEBA_PORT_CAP_10M_HDX | MEBA_PORT_CAP_10M_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_adv_100m()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_adv_100m(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(session_id, MEBA_PORT_CAP_100M_HDX | MEBA_PORT_CAP_100M_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_adv_1g()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_adv_1g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(session_id, MEBA_PORT_CAP_1G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_adv_2g5()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_adv_2g5(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // 2.5G advertisements are only supported on Aquantia PHYs. The following
+    // check is OK, because those are the only PHYs that are copper.
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(session_id, MEBA_PORT_CAP_2_5G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_adv_5g()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_adv_5g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // 5G advertisements are only supported on Aquantia PHYs. The following
+    // check is OK, because those are the only PHYs that are copper.
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(session_id, MEBA_PORT_CAP_5G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_adv_10g()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_adv_10g(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    // 5G advertisements are only supported on Aquantia PHYs. The following
+    // check is OK, because those are the only PHYs that are copper.
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(session_id, MEBA_PORT_CAP_10G_FDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_runtime_has_adv_hdx()
+/******************************************************************************/
+static BOOL PORT_ICLI_runtime_has_adv_hdx(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = PORT_ICLI_at_least_one_port_supports_aneg_copper_and_this_cap(session_id, MEBA_PORT_CAP_HDX);
+    return TRUE;
+}
+
+/******************************************************************************/
+// PORT_ICLI_npi()
+/******************************************************************************/
+static mesa_rc PORT_ICLI_npi(uint32_t session_id, mesa_port_no_t &port_no, bool set)
+{
+    mesa_packet_rx_conf_t rx_conf;
+    mesa_npi_conf_t       npi_conf;
+    bool                  enable;
+    int                   qu;
+    mesa_rc               rc;
+
+    if (set) {
+        enable = port_no != MESA_PORT_NO_NONE;
+        vtss_clear(npi_conf);
+
+        if ((rc = mesa_packet_rx_conf_get(NULL, &rx_conf)) != VTSS_RC_OK) {
+            return rc;
+        }
+
+        // Redirect all CPU queues to NPI port
+        for (qu = 0; qu < VTSS_PACKET_RX_QUEUE_CNT; qu++) {
+            rx_conf.queue[qu].npi.enable = enable;
+        }
+
+        if ((rc = mesa_packet_rx_conf_set(NULL, &rx_conf)) != VTSS_RC_OK) {
+            return rc;
+        }
+
+        npi_conf.port_no = port_no;
+        npi_conf.enable  = enable;
+        return mesa_npi_conf_set(NULL, &npi_conf);
+    }
+
+    // Get current NPI port.
+    if ((rc = mesa_npi_conf_get(NULL, &npi_conf)) != VTSS_RC_OK) {
+        return rc;
+    }
+
+    port_no = npi_conf.enable ? npi_conf.port_no : MESA_PORT_NO_NONE;
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// PORT_ICLI_yes_no()
+/******************************************************************************/
+static const char *PORT_ICLI_yes_no(bool val)
+{
+    return val ? "Yes" : "No";
+}
+
+/******************************************************************************/
+// PORT_ICLI_enabled_disabled()
+/******************************************************************************/
+static const char *PORT_ICLI_enabled_disabled(bool val)
+{
+    return val ? "Enabled" : "Disabled";
+}
+
+/******************************************************************************/
+// PORT_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t PORT_ICLI_show_capabilities(uint32_t session_id)
+{
+    vtss_appl_port_capabilities_t cap;
+    const int                     cap_width = 38;
+    char                          buf[400];
+
+    PORT_ICLI_PRINT_RC(vtss_appl_port_capabilities_get(&cap));
+
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Last packet size threshold:",            cap.last_pktsize_threshold);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Min. maximum frame length:",             cap.frame_length_max_min);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. maximum frame length:",             cap.frame_length_max_max);
+    ICLI_PRINTF("%-*s %s\n", cap_width, "KR supported",                           PORT_ICLI_yes_no(cap.has_kr));
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Priority-based flow control supported:", PORT_ICLI_yes_no(cap.has_pfc));
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Aggregated capabilities:",               port_cap_to_txt(buf, sizeof(buf), cap.aggr_caps));
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Port count:",                            cap.port_cnt);
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// PORT_ICLI_show_statistics_line()
+/******************************************************************************/
+static void PORT_ICLI_show_statistics_line(uint32_t session_id, port_icli_itr_t &itr, const char *name1, const char *name2, bool has_down, bool has_up, uint64_t c1, uint64_t c2)
+{
+    char buf[ICLI_PORTING_STR_BUF_SIZE], *p;
+
+    if (itr.pit.first) {
+        p = buf;
+        p += sprintf(p, "%-23s %-20s", "Interface", name1);
+        if (name2) {
+            sprintf(p, "%-20s", name2);
+        }
+
+        icli_table_header(session_id, buf);
+    }
+
+    if ((has_down && itr.status.link) || (has_up && !itr.status.link)) {
+        T_NG(PORT_TRACE_GRP_ICLI, "has_up = %d, has_down = %d, link = %d", has_up, has_down, itr.status.link);
+        return;
+    }
+
+    ICLI_PRINTF("%-23s " VPRI64Fu("-20"), icli_port_info_txt(VTSS_USID_START, itr.pit.uport, buf), c1); // 20 is 17 + the size of "Rx "
+
+    if (name2) {
+        ICLI_PRINTF(VPRI64Fu("-20"), c2);
+    }
+
+    ICLI_PRINTF("\n");
+}
+
+#if defined(VTSS_SW_OPTION_TSN)
+/******************************************************************************/
+// PORT_ICLI_show_statistics_dot3br()
+/******************************************************************************/
+static void PORT_ICLI_show_statistics_dot3br(uint32_t session_id, port_icli_itr_t &itr, bool header)
+{
+    ICLI_PRINTF("\n");
+    if (header) {
+        icli_print_port_info_txt(session_id, VTSS_USID_START, itr.pit.uport);
+        ICLI_PRINTF("802.3br Statistics:\n");
+    }
+
+    icli_cmd_stati(session_id, "MM Fragments",       "",        itr.statistics.dot3br.aMACMergeFragCountRx,        itr.statistics.dot3br.aMACMergeFragCountTx);
+    icli_cmd_stati(session_id, "MM Assembly Ok",     "MM Hold", itr.statistics.dot3br.aMACMergeFrameAssOkCount,    itr.statistics.dot3br.aMACMergeHoldCount);
+    icli_cmd_stati(session_id, "MM Assembly Errors", NULL,      itr.statistics.dot3br.aMACMergeFrameAssErrorCount, 0);
+    icli_cmd_stati(session_id, "MM SMD Errors",      NULL,      itr.statistics.dot3br.aMACMergeFrameSmdErrorCount, 0);
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_QOS
+/******************************************************************************/
+// PORT_ICLI_show_statistics_one_prio()
+/******************************************************************************/
+static void PORT_ICLI_show_statistics_one_prio(uint32_t session_id, port_icli_itr_t &itr, bool first, const char *name, uint64_t c1, uint64_t c2)
+{
+    char buf[200];
+
+    if (first) {
+        sprintf(&buf[0], "%-43s Rx %-17s Tx %-17s", icli_port_info_txt(VTSS_USID_START, itr.pit.uport, buf), name, name);
+        icli_table_header(session_id, buf);
+    } else {
+        ICLI_PRINTF("%-43s " VPRI64Fu("-20") " " VPRI64Fu("-20") "\n", name, c1, c2);
+    }
+}
+#endif
+
+#ifdef VTSS_SW_OPTION_QOS
+/******************************************************************************/
+// PORT_ICLI_show_statistics_prio()
+/******************************************************************************/
+static void PORT_ICLI_show_statistics_prio(uint32_t session_id, port_icli_itr_t &itr, icli_unsigned_range_t *priority_list)
+{
+    int  i, j;
+    char buf[40];
+
+    PORT_ICLI_show_statistics_one_prio(session_id, itr, true, "Priority queue", 0, 0);
+
+    if (priority_list) {
+        // User wants specific priorities
+        for (i = 0; i < priority_list->cnt; i++) {
+            for (j = priority_list->range[i].min; j <= priority_list->range[i].max; j++) {
+                strcpy(buf, "Priority ");
+                strncat(buf, mgmt_prio2txt(j, false), 20);
+                PORT_ICLI_show_statistics_one_prio(session_id, itr, false, buf, itr.statistics.prio[j].rx, itr.statistics.prio[j].tx);
+            }
+        }
+    } else {
+        // User wants all priorities
+        for (j = VTSS_PRIO_START; j < VTSS_PRIO_END; j++) {
+            strcpy(buf, "Priority ");
+            strcat(buf, mgmt_prio2txt(j, false));
+            PORT_ICLI_show_statistics_one_prio(session_id, itr, false, buf, itr.statistics.prio[j].rx, itr.statistics.prio[j].tx);
+        }
+    }
+
+    ICLI_PRINTF("\n");
+}
+#endif
+
+/******************************************************************************/
+// PORT_ICLI_show_statistics()
+/******************************************************************************/
+static void PORT_ICLI_show_statistics(uint32_t session_id, port_icli_itr_t &itr, bool has_packets, bool has_bytes, bool has_errors, bool has_discards, bool has_filtered, bool has_dot3br, bool has_priority, icli_unsigned_range_t *priority_list, bool has_link_state_changes, bool has_up, bool has_down)
+{
+    char buf[100];
+
+    // Handle 'packets' command
+    if (has_packets) {
+        PORT_ICLI_show_statistics_line(session_id, itr, "Rx Packets", "Tx Packets", has_down, has_up, itr.statistics.rmon.rx_etherStatsPkts, itr.statistics.rmon.tx_etherStatsPkts);
+        return;
+    }
+
+    // Handle 'bytes' command
+    if (has_bytes) {
+        PORT_ICLI_show_statistics_line(session_id, itr, "Rx Octets", "Tx Octets", has_down, has_up, itr.statistics.rmon.rx_etherStatsOctets, itr.statistics.rmon.tx_etherStatsOctets);
+        return;
+    }
+
+    // Handle 'errors' command
+    if (has_errors) {
+        PORT_ICLI_show_statistics_line(session_id, itr, "Rx Errors", "Tx Errors", has_down, has_up, itr.statistics.if_group.ifInErrors, itr.statistics.if_group.ifOutErrors);
+        return;
+    }
+
+    // Handle 'discards' command
+    if (has_discards) {
+        PORT_ICLI_show_statistics_line(session_id, itr, "Rx Discards", "Tx Discards", has_down, has_up, itr.statistics.if_group.ifInDiscards, itr.statistics.if_group.ifOutDiscards);
+        return;
+    }
+
+    // Handle 'filtered' command
+    if (has_filtered) {
+        PORT_ICLI_show_statistics_line(session_id, itr, "Rx Filtered", NULL, has_down, has_up, itr.statistics.bridge.dot1dTpPortInDiscards, 0);
+        return;
+    }
+
+    // Handle 'link-state-changes' command
+    if (has_link_state_changes) {
+        PORT_ICLI_show_statistics_line(session_id, itr, "Link Ups", "Link Downs", has_down, has_up, itr.status.link_up_cnt, itr.status.link_down_cnt);
+        return;
+    }
+
+    // Skip remainder if has_up/has_down and link state doesn't fit.
+    if ((has_down && itr.status.link) || (has_up && !itr.status.link)) {
+        return;
+    }
+
+#if defined(VTSS_SW_OPTION_TSN)
+    if (has_dot3br) {
+        PORT_ICLI_show_statistics_dot3br(session_id, itr, true);
+        return;
+    }
+#endif
+
+#ifdef VTSS_SW_OPTION_QOS
+    if (has_priority) {
+        PORT_ICLI_show_statistics_prio(session_id, itr, priority_list);
+        return;
+    }
+#endif
+
+    // Print out interface
+    icli_print_port_info_txt(session_id, VTSS_USID_START, itr.pit.uport);
+    ICLI_PRINTF("Statistics:\n");
+
+    /* Handle default command */
+    icli_cmd_stati(session_id, "Packets",   "", itr.statistics.rmon.rx_etherStatsPkts,                 itr.statistics.rmon.tx_etherStatsPkts);
+    icli_cmd_stati(session_id, "Octets",    "", itr.statistics.rmon.rx_etherStatsOctets,               itr.statistics.rmon.tx_etherStatsOctets);
+    icli_cmd_stati(session_id, "Unicast",   "", itr.statistics.if_group.ifInUcastPkts,                 itr.statistics.if_group.ifOutUcastPkts);
+    icli_cmd_stati(session_id, "Multicast", "", itr.statistics.rmon.rx_etherStatsMulticastPkts,        itr.statistics.rmon.tx_etherStatsMulticastPkts);
+    icli_cmd_stati(session_id, "Broadcast", "", itr.statistics.rmon.rx_etherStatsBroadcastPkts,        itr.statistics.rmon.tx_etherStatsBroadcastPkts);
+    icli_cmd_stati(session_id, "Pause",     "", itr.statistics.ethernet_like.dot3InPauseFrames,        itr.statistics.ethernet_like.dot3OutPauseFrames);
+    ICLI_PRINTF("\n");
+
+    icli_cmd_stati(session_id, "64",        "", itr.statistics.rmon.rx_etherStatsPkts64Octets,         itr.statistics.rmon.tx_etherStatsPkts64Octets);
+    icli_cmd_stati(session_id, "65-127",    "", itr.statistics.rmon.rx_etherStatsPkts65to127Octets,    itr.statistics.rmon.tx_etherStatsPkts65to127Octets);
+    icli_cmd_stati(session_id, "128-255",   "", itr.statistics.rmon.rx_etherStatsPkts128to255Octets,   itr.statistics.rmon.tx_etherStatsPkts128to255Octets);
+    icli_cmd_stati(session_id, "256-511",   "", itr.statistics.rmon.rx_etherStatsPkts256to511Octets,   itr.statistics.rmon.tx_etherStatsPkts256to511Octets);
+    icli_cmd_stati(session_id, "512-1023",  "", itr.statistics.rmon.rx_etherStatsPkts512to1023Octets,  itr.statistics.rmon.tx_etherStatsPkts512to1023Octets);
+
+    snprintf(buf, 100, "1024-%u", itr.caps.last_pktsize_threshold);
+    icli_cmd_stati(session_id, buf,         "", itr.statistics.rmon.rx_etherStatsPkts1024to1518Octets, itr.statistics.rmon.tx_etherStatsPkts1024to1518Octets);
+
+    snprintf(buf, 100, "%u-    ", itr.caps.last_pktsize_threshold + 1);
+    icli_cmd_stati(session_id, buf,         "", itr.statistics.rmon.rx_etherStatsPkts1519toMaxOctets,  itr.statistics.rmon.tx_etherStatsPkts1519toMaxOctets);
+    ICLI_PRINTF("\n");
+
+#ifdef VTSS_SW_OPTION_QOS
+    uint8_t idx;
+    for (idx = VTSS_PRIO_START; idx < VTSS_PRIO_END; idx++) {
+        strcpy(buf, "Priority ");
+        strncat(buf, mgmt_prio2txt(idx, FALSE), 30);
+        icli_cmd_stati(session_id, buf, "", itr.statistics.prio[idx].rx, itr.statistics.prio[idx].tx);
+    }
+
+    ICLI_PRINTF("\n");
+#endif
+
+    icli_cmd_stati(session_id, "Drops",         "",                itr.statistics.rmon.rx_etherStatsDropEvents,     itr.statistics.rmon.tx_etherStatsDropEvents);
+    icli_cmd_stati(session_id, "CRC/Alignment", "Late/Exc. Coll.", itr.statistics.rmon.rx_etherStatsCRCAlignErrors, itr.statistics.if_group.ifOutErrors);
+    icli_cmd_stati(session_id, "Undersize",     NULL,              itr.statistics.rmon.rx_etherStatsUndersizePkts,  0);
+    icli_cmd_stati(session_id, "Oversize",      NULL,              itr.statistics.rmon.rx_etherStatsOversizePkts,   0);
+    icli_cmd_stati(session_id, "Fragments",     NULL,              itr.statistics.rmon.rx_etherStatsFragments,      0);
+    icli_cmd_stati(session_id, "Jabbers",       NULL,              itr.statistics.rmon.rx_etherStatsJabbers,        0);
+    icli_cmd_stati(session_id, "Filtered",      NULL,              itr.statistics.bridge.dot1dTpPortInDiscards,     0);
+
+#if defined(VTSS_SW_OPTION_TSN)
+    if (fast_cap(MESA_CAP_QOS_FRAME_PREEMPTION)) {
+        PORT_ICLI_show_statistics_dot3br(session_id, itr, false);
+    }
+#endif
+
+    ICLI_PRINTF("\n");
+}
+
+/******************************************************************************/
+// PORT_ICLI_speed_to_txt()
+/******************************************************************************/
+static char *PORT_ICLI_speed_to_txt(meba_port_cap_t cap, char *str)
+{
+    char *ptr = str;
+
+    ptr[0] = '\0';
+
+    // If force mode is unsupported, don't show the force speed
+    if ((cap &  (MEBA_PORT_CAP_10M_HDX | MEBA_PORT_CAP_10M_FDX)) && (!(cap & MEBA_PORT_CAP_NO_FORCE))) {
+        ptr += sprintf(ptr, "10");
+    }
+
+    if ((cap & (MEBA_PORT_CAP_100M_HDX | MEBA_PORT_CAP_100M_FDX)) && (!(cap & MEBA_PORT_CAP_NO_FORCE))) {
+        ptr += sprintf(ptr, "%s100", ptr == str ? "" : ",");
+    }
+
+    if ((cap & (MEBA_PORT_CAP_1G_FDX)) && (!(cap & MEBA_PORT_CAP_NO_FORCE))) {
+        ptr += sprintf(ptr, "%s1000", ptr == str ? "" : ",");
+    }
+
+    if ((cap & (MEBA_PORT_CAP_2_5G_FDX)) && (!(cap & MEBA_PORT_CAP_NO_FORCE))) {
+        ptr += sprintf(ptr, "%s2.5G", ptr == str ? "" : ",");
+    }
+
+    if ((cap & (MEBA_PORT_CAP_5G_FDX)) && (!(cap & MEBA_PORT_CAP_NO_FORCE))) {
+        ptr += sprintf(ptr, "%s5G", ptr == str ? "" : ",");
+    }
+
+    if ((cap & (MEBA_PORT_CAP_10G_FDX)) && (!(cap & MEBA_PORT_CAP_NO_FORCE))) {
+        ptr += sprintf(ptr, "%s10G", ptr == str ? "" : ",");
+    }
+
+    if ((cap & (MEBA_PORT_CAP_25G_FDX)) && (!(cap & MEBA_PORT_CAP_NO_FORCE))) {
+        ptr += sprintf(ptr, "%s25G", ptr == str ? "" : ",");
+    }
+
+    if (cap & MEBA_PORT_CAP_AUTONEG) {
+        sprintf(ptr, "%sauto", ptr == str ? "" : ",");
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// PORT_ICLI_duplex_to_txt()
+/******************************************************************************/
+static char *PORT_ICLI_duplex_to_txt(meba_port_cap_t cap, char *str)
+{
+    char *ptr = str;
+
+    ptr[0] = '\0';
+
+    if (cap &  MEBA_PORT_CAP_HDX) {
+        ptr += sprintf(ptr, "half");
+    }
+
+    if (cap & MEBA_PORT_CAP_TRI_SPEED_FDX) {
+        ptr += sprintf(ptr, "%sfull", ptr == str ? "" : ",");
+    }
+
+    if (cap & MEBA_PORT_CAP_AUTONEG) {
+        sprintf(ptr, "%sauto", ptr == str ? "" : ",");
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// PORT_ICLI_show_interface_capabilities()
+/******************************************************************************/
+static void PORT_ICLI_show_interface_capabilities(uint32_t session_id, port_icli_itr_t &itr)
+{
+    const int cap_width = 22;
+    char      buf[100];
+    bool      b;
+
+#if defined(VTSS_SW_OPTION_QOS)
+    vtss_appl_qos_capabilities_t qos_cap;
+    mesa_rc                      rc;
+#endif
+
+    icli_print_port_info_txt(session_id, VTSS_USID_START, itr.pit.uport);
+    ICLI_PRINTF("Capabilities:\n");
+
+    if (itr.status.static_caps & (MEBA_PORT_CAP_SFP_DETECT | MEBA_PORT_CAP_DUAL_SFP_DETECT)) {
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Family:",          port_sfp_type_speed_to_txt(buf, sizeof(buf), itr.status));
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Vendor Name:",     itr.status.sfp_info.vendor_name[0] == 0 ? "None" : itr.status.sfp_info.vendor_name);
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Vendor P/N:",      itr.status.sfp_info.vendor_pn[0]   == 0 ? "None" : itr.status.sfp_info.vendor_pn);
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Vendor S/N:",      itr.status.sfp_info.vendor_sn[0]   == 0 ? "None" : itr.status.sfp_info.vendor_sn);
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Vendor Revision:", itr.status.sfp_info.vendor_rev[0]  == 0 ? "None" : itr.status.sfp_info.vendor_rev);
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Date Code:",       itr.status.sfp_info.date_code[0]   == 0 ? "None" : itr.status.sfp_info.date_code);
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Transceiver:",     port_sfp_transceiver_to_txt(itr.status.sfp_info.transceiver));
+
+        // Until we can pre-provision a driver that can override the connector
+        // type, leave it out. I have had at least one SFP (SPT-SFP+C2), which
+        // says it's an optical PHY with a Lucent Connector, when in fact it's a
+        // DAC cable with a Copper Pigtail connector.
+        // ICLI_PRINTF(" %-*s %s\n", cap_width, "SFP Connector:", port_sfp_connector_to_txt(itr.status.sfp_info.connector));
+    }
+
+    if (itr.status.static_caps & (MEBA_PORT_CAP_DUAL_COPPER | MEBA_PORT_CAP_DUAL_FIBER)) {
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "Dual Media Port: ", "Yes");
+    }
+
+    switch (itr.status.mac_if) {
+    case MESA_PORT_INTERFACE_SGMII_CISCO:
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "Speed cap:",  "auto");
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "Duplex cap:", "auto");
+        break;
+    case MESA_PORT_INTERFACE_100FX:
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "Speed cap:",  "100");
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "Duplex cap:", "full");
+        break;
+    default:
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "Speed cap:",  PORT_ICLI_speed_to_txt( itr.status.fiber && itr.status.sfp_type != VTSS_APPL_PORT_SFP_TYPE_NONE ? itr.status.sfp_caps : itr.status.static_caps, buf));
+        ICLI_PRINTF(" %-*s %s\n", cap_width, "Duplex cap:", PORT_ICLI_duplex_to_txt(itr.status.fiber && itr.status.sfp_type != VTSS_APPL_PORT_SFP_TYPE_NONE ? itr.status.sfp_caps : itr.status.static_caps, buf));
+    }
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Flowcontrol:",        PORT_ICLI_yes_no((itr.status.static_caps & MEBA_PORT_CAP_FLOW_CTRL) != 0));
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Trunk encap. type:", "802.1Q");
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Trunk mode:",        "access,hybrid,trunk");
+
+    // IPMC
+#if defined(VTSS_SW_OPTION_IPMC)
+    b = true;
+#else
+    b = false;
+#endif
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Channel:", PORT_ICLI_yes_no(b));
+
+    // QoS
+#if defined(VTSS_SW_OPTION_QOS)
+    if ((rc = vtss_appl_qos_capabilities_get(&qos_cap)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to get QoS capabilities: %s", error_txt(rc));
+        vtss_clear(qos_cap);
+    }
+
+    if (qos_cap.has_port_storm_policers) {
+        sprintf(buf, "%u-%u kbps/%u-%u fps", qos_cap.port_storm_bit_rate_min, qos_cap.port_storm_bit_rate_max, qos_cap.port_storm_frame_rate_min, qos_cap.port_storm_frame_rate_max);
+    } else if (qos_cap.has_global_storm_policers) {
+        sprintf(buf, "%u-%u kbps/%u-%u fps", qos_cap.global_storm_bit_rate_min, qos_cap.global_storm_bit_rate_max, qos_cap.global_storm_frame_rate_min, qos_cap.global_storm_frame_rate_max);
+    } else {
+        strcpy(buf, "No");
+    }
+#else
+    strcpy(buf, "No");
+#endif
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Broadcast suppression:", buf);
+
+#if defined(VTSS_SW_OPTION_QOS)
+    ICLI_PRINTF(" %-*s %s%u%s\n", cap_width, "QoS scheduling:", "Tx (", VTSS_PRIO_END - VTSS_PRIO_START, " queues)");
+    ICLI_PRINTF(" %-*s %s\n",     cap_width, "CoS rewrite:",    "Yes");
+    ICLI_PRINTF(" %-*s %s\n",     cap_width, "ToS rewrite:",    "Yes");
+#else
+    ICLI_PRINTF(" %-*s %s\n",     cap_width, "QoS scheduling:", "No");
+    ICLI_PRINTF(" %-*s %s\n",     cap_width, "CoS rewrite:",    "No");
+    ICLI_PRINTF(" %-*s %s\n",     cap_width, "ToS rewrite:",    "No");
+#endif
+
+    // UDLD (UniDirectional Link Detection)
+#if defined(VTSS_SW_OPTION_UDLD)
+    b = true;
+#else
+    b = false;
+#endif
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "UDLD:", PORT_ICLI_yes_no(b));
+
+#if defined(VTSS_SW_OPTION_POE)
+    b = true;
+#else
+    b = false;
+#endif
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Inline power:", PORT_ICLI_yes_no(b));
+
+    // Remote mirroring
+#if defined(VTSS_SW_OPTION_RMIRROR)
+    b = true;
+#else
+    b = false;
+#endif
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "RMirror:", PORT_ICLI_yes_no(b));
+
+    // PSEC
+#if defined(VTSS_SW_OPTION_PSEC)
+    b = true;
+#else
+    b = false;
+#endif
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Port Security:", PORT_ICLI_yes_no(b));
+
+    // 802.1X
+#if defined(VTSS_SW_OPTION_DOT1X)
+    b = true;
+#else
+    b = false;
+#endif
+
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "802.1X:",         PORT_ICLI_yes_no(b));
+    ICLI_PRINTF(" %-*s %s\n", cap_width, "Clause 73 (KR):", PORT_ICLI_yes_no(itr.if_caps.has_kr));
+    ICLI_PRINTF("\n");
+}
+
+#ifdef VTSS_SW_OPTION_KR
+/******************************************************************************/
+// PORT_ICLI_tap_result()
+/******************************************************************************/
+static uint32_t PORT_ICLI_tap_result(uint32_t value, uint32_t mask)
+{
+    if ((value & ~mask) > 0) {
+        return ((~value) + 1) & mask;
+    } else {
+        return value;
+    }
+}
+
+/******************************************************************************/
+// PORT_ICLI_show_interface_status_clause_73()
+/******************************************************************************/
+static mesa_rc PORT_ICLI_show_interface_status_clause_73(uint32_t session_id, const int width, port_icli_itr_t &itr, mesa_port_kr_conf_t &kr_conf, kr_mgmt_status_t &kr_status, bool has_clause_73_details)
+{
+    mesa_port_kr_state_t  &krs = kr_status.state;
+    mesa_port_kr_status_t &sts = kr_status.status;
+    bool                  cm, cp, c0;
+    uint32_t              i;
+
+    ICLI_PRINTF("  %-*s %s\n",         width, "Completed:",        PORT_ICLI_yes_no(sts.aneg.complete));
+    ICLI_PRINTF("  %-*s %u seconds\n", width, "Time since start:", kr_status.time_since_restart);
+    if (!kr_conf.train.enable) {
+        ICLI_PRINTF("  %-*s %s\n", width, "Training:",  "Disabled");
+    } else if (itr.caps.has_kr_v3 && !kr_conf.train.no_remote && has_clause_73_details) {
+        ICLI_PRINTF("  Training Results:\n");
+        ICLI_PRINTF("  %-*s %u/%u\n", width, " LP CM1 MAX/END:", krs.lp_tap_max_cnt[CM1], krs.lp_tap_end_cnt[CM1]);
+        ICLI_PRINTF("  %-*s %u/%u\n", width, " LP C0  MAX/END:", krs.lp_tap_max_cnt[C0],  krs.lp_tap_end_cnt[C0]);
+        ICLI_PRINTF("  %-*s %u/%u\n", width, " LP CP1 MAX/END:", krs.lp_tap_max_cnt[CP1], krs.lp_tap_end_cnt[CP1]);
+
+        ICLI_PRINTF("  %-*s", width, " BER Count CM1:");
+        for (i = 0; i < krs.lp_tap_max_cnt[CM1]; i++) {
+            ICLI_PRINTF(" %u", krs.ber_cnt[0][i]);
+        }
+
+        ICLI_PRINTF("\n  %-*s", width, " BER Count C0:");
+        for (i = 0; i < krs.lp_tap_max_cnt[C0]; i++) {
+            ICLI_PRINTF(" %u", krs.ber_cnt[1][i]);
+        }
+
+        ICLI_PRINTF("\n  %-*s", width, " BER Count CP1:");
+        for (i = 0; i < krs.lp_tap_max_cnt[CP1]; i++) {
+            ICLI_PRINTF(" %u", krs.ber_cnt[2][i]);
+        }
+
+        ICLI_PRINTF("\n  %-*s", width, " Eye Height CM1:");
+        for (i = 0; i < krs.lp_tap_max_cnt[CM1]; i++) {
+            ICLI_PRINTF(" %u", krs.eye_height[0][i]);
+        }
+
+        ICLI_PRINTF("\n  %-*s", width, " Eye Height C0:");
+        for (i = 0; i < krs.lp_tap_max_cnt[C0]; i++) {
+            ICLI_PRINTF(" %u", krs.eye_height[1][i]);
+        }
+
+        ICLI_PRINTF("\n  %-*s", width, " Eye Height CP1:");
+        for (i = 0; i < krs.lp_tap_max_cnt[CP1]; i++) {
+            ICLI_PRINTF(" %u", krs.eye_height[2][i]);
+        }
+
+        ICLI_PRINTF("\n");
+    } else if (kr_conf.train.no_remote) {
+        ICLI_PRINTF("  Link partner not trained\n");
+    }
+
+    if (itr.caps.has_kr_v3) {
+        ICLI_PRINTF("  %-*s %s\n", width, "Training status:", krs.current_state == MESA_TR_SEND_DATA ? "OK" : "Failed");
+
+        if (krs.current_state == MESA_TR_SEND_DATA) {
+            ICLI_PRINTF("  %-*s %u ms\n", width, "Training time:", kr_status.time_ld);
+        }
+
+        if (has_clause_73_details) {
+            ICLI_PRINTF("  %-*s %u\n", width, "Current eye height:", kr_status.eye_height);
+            ICLI_PRINTF("  Tx Equalizer settings:\n");
+            ICLI_PRINTF("  %-*s %u\n", width, " LD CM (tap_dly):",   sts.train.cm_ob_tap_result);
+            ICLI_PRINTF("  %-*s %u\n", width, " LD C0 (amplitude):", sts.train.c0_ob_tap_result);
+            ICLI_PRINTF("  %-*s %u\n", width, " LD CP (tap_adv):",   sts.train.cp_ob_tap_result);
+            ICLI_PRINTF("  Rx CTLE settings:\n");
+            ICLI_PRINTF("  %-*s %u\n", width, " LD VGA:",            kr_status.ctle.vga);
+            ICLI_PRINTF("  %-*s %u\n", width, " LD EDC:",            kr_status.ctle.edc);
+            ICLI_PRINTF("  %-*s %u\n", width, " LD EQR:",            kr_status.ctle.eqr);
+        }
+    } else {
+        ICLI_PRINTF("  %-*s %s\n", width, "Training complete:", PORT_ICLI_yes_no(sts.train.complete));
+
+        if (sts.train.complete) {
+            ICLI_PRINTF("  %-*s %u ms\n", width, "Training time:", kr_status.time_ld);
+        }
+
+        if (has_clause_73_details) {
+            cm = (sts.train.cm_ob_tap_result >> 6) > 0;
+            cp = (sts.train.cp_ob_tap_result >> 6) > 0;
+            c0 = (sts.train.c0_ob_tap_result >> 6) > 0;
+
+            ICLI_PRINTF("  %-*s %c%u (%u)\n", width, " CM OB tap (7-bit signed):",      cm ? '-' : '+', PORT_ICLI_tap_result(sts.train.cm_ob_tap_result, 0x3f), sts.train.cm_ob_tap_result);
+            ICLI_PRINTF("  %-*s %c%u (%u)\n", width, " CP OB tap (7-bit signed):",      cp ? '-' : '+', PORT_ICLI_tap_result(sts.train.cp_ob_tap_result, 0x3f), sts.train.cp_ob_tap_result);
+            ICLI_PRINTF("  %-*s %c%u (%u)\n", width, " C0 OB tap (7-bit signed):",      c0 ? '-' : '+', PORT_ICLI_tap_result(sts.train.c0_ob_tap_result, 0x3f), sts.train.c0_ob_tap_result);
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// PORT_ICLI_show_interface_status_details()
+/******************************************************************************/
+static void PORT_ICLI_show_interface_status_details(uint32_t session_id, port_icli_itr_t &itr, bool vol_link_down, bool has_clause_73_details)
+{
+    mesa_port_kr_conf_t            kr_conf;
+    kr_mgmt_status_t               kr_status;
+    vtss_appl_port_oper_warnings_t oper_warning;
+    char                           buf[400];
+    int                            i;
+    bool                           first, is_dual_media;
+    const int                      width = 25;
+    mesa_rc                        rc;
+
+    ICLI_PRINTF("%s:\n", icli_port_info_txt(VTSS_USID_START, itr.pit.uport, buf));
+
+    // Print configuration
+    ICLI_PRINTF(" Configuration:\n");
+    ICLI_PRINTF("  %-*s %s\n", width, "Description:",  itr.conf.dscr);
+    ICLI_PRINTF("  %-*s %s\n", width, "Mode:",         PORT_ICLI_enabled_disabled(itr.conf.admin.enable));
+    ICLI_PRINTF("  %-*s %s\n", width, "Speed/Duplex:", itr.conf.force_clause_73 ? "Forced Clause 73": port_speed_duplex_to_txt_from_conf(itr.conf));
+    ICLI_PRINTF("  %-*s %s\n", width, "Media-type:",   port_media_type_to_txt(itr.conf.media_type));
+    ICLI_PRINTF("  %-*s %s\n", width, "Flowcontrol:",  itr.conf.flow_control ? "On" : "Off");
+
+    if (itr.caps.has_pfc) {
+        // Priority-based flow control
+        ICLI_PRINTF("  %-*s %s\n", width, "Priority-based F/C:", PORT_ICLI_pfc_to_str(buf, itr.conf.pfc));
+    }
+
+    ICLI_PRINTF("  %-*s %u bytes\n", width, "Max. Frame:",          itr.conf.max_length);
+    ICLI_PRINTF("  %-*s %s\n",       width, "Excessive Collision:", itr.conf.exc_col_cont ? "Restart" : "Discard");
+    ICLI_PRINTF("  %-*s %s\n",       width, "Frame Length Check:",  PORT_ICLI_enabled_disabled(itr.conf.frame_length_chk));
+
+    if (itr.if_caps.has_kr) {
+        ICLI_PRINTF("  %-*s %s\n", width, "FEC Mode:", port_fec_mode_to_txt(itr.conf.fec_mode));
+    }
+
+    // Print status
+    ICLI_PRINTF(" Status:\n");
+    ICLI_PRINTF("  %-*s %s\n", width, "Aneg:", port_aneg_method_to_txt(itr.status.aneg_method, true));
+
+    is_dual_media = (itr.status.static_caps & MEBA_PORT_CAP_DUAL_COPPER) || (itr.status.static_caps & MEBA_PORT_CAP_DUAL_FIBER);
+
+    if (is_dual_media) {
+        ICLI_PRINTF("  %-*s %s\n", width, "Media-type:", itr.status.fiber ? "SFP" : "RJ45");
+    }
+
+    if (itr.status.link) {
+        sprintf(buf, "%s", port_speed_duplex_link_to_txt(itr.status));
+    } else if (vol_link_down) {
+        sprintf(buf, "Down (%s)", itr.vol_status.name);
+    } else {
+        strcpy(buf, "Down");
+    }
+
+    ICLI_PRINTF("  %-*s %s\n", width, "Link:", buf);
+
+    if (itr.status.link && (itr.status.aneg_method == VTSS_APPL_PORT_ANEG_METHOD_CLAUSE_28 || itr.status.aneg_method == VTSS_APPL_PORT_ANEG_METHOD_CLAUSE_37)) {
+        ICLI_PRINTF("  %-*s %s\n", width, "Flowcontrol Obey:",     PORT_ICLI_yes_no(itr.status.aneg.obey_pause));
+        ICLI_PRINTF("  %-*s %s\n", width, "Flowcontrol Generate:", PORT_ICLI_yes_no(itr.status.aneg.generate_pause));
+    }
+
+    if (itr.status.oper_warnings != 0) {
+        // Print one operational warning per line
+        first = true;
+
+        for (i = 0; i < 8 * sizeof(itr.status.oper_warnings); i++) {
+            oper_warning = itr.status.oper_warnings & (vtss_appl_port_oper_warnings_t)VTSS_BIT(i);
+            if (oper_warning) {
+                ICLI_PRINTF("  %-*s %s\n", width, first ? "Operational Warnings:" : "", port_oper_warnings_to_txt(buf, sizeof(buf), oper_warning));
+                first = false;
+            }
+        }
+    } else {
+        ICLI_PRINTF("  %-*s %s\n", width, "Operational Warnings:", "None");
+    }
+
+    if (itr.if_caps.has_kr) {
+        ICLI_PRINTF("  %-*s %s\n", width, "FEC Mode:", port_fec_mode_to_txt(itr.status.fec_mode));
+    }
+
+    if (itr.status.fiber) {
+        ICLI_PRINTF("  %-*s %s\n", width, "SFP Family:", port_sfp_type_speed_to_txt(buf, sizeof(buf), itr.status));
+
+        if (itr.status.sfp_type != VTSS_APPL_PORT_SFP_TYPE_NONE) {
+            ICLI_PRINTF("  %-*s %s\n", width, "SFP Vendor Name:",     itr.status.sfp_info.vendor_name);
+            ICLI_PRINTF("  %-*s %s\n", width, "SFP Vendor P/N:",      itr.status.sfp_info.vendor_pn);
+            ICLI_PRINTF("  %-*s %s\n", width, "SFP Vendor S/N:",      itr.status.sfp_info.vendor_sn);
+            ICLI_PRINTF("  %-*s %s\n", width, "SFP Vendor Revision:", itr.status.sfp_info.vendor_rev);
+            ICLI_PRINTF("  %-*s %s\n", width, "SFP Date Code:",       itr.status.sfp_info.date_code);
+            ICLI_PRINTF("  %-*s %s\n", width, "SFP Transceiver:",     port_sfp_transceiver_to_txt(itr.status.sfp_info.transceiver));
+        }
+    }
+
+    // Clause 73 status
+    if (itr.status.aneg_method == VTSS_APPL_PORT_ANEG_METHOD_CLAUSE_73) {
+         ICLI_PRINTF(" Clause 73 Aneg Status:\n");
+
+         if (!itr.conf.admin.enable || vol_link_down) {
+             // We must not fetch the KR status if KR is not enabled, as this
+             // can cause trace errors when getting eye heights.
+             // Instead, we just print that the port is administratively
+             // disabled.
+             ICLI_PRINTF("  Cannot display clause 73 status, as the port is %s\n", !itr.conf.admin.enable ? "administratively disabled" : "volatilly disabled");
+             goto do_exit;
+         }
+
+        if ((rc = kr_mgmt_port_conf_get(itr.pit.iport, &kr_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to get clause 73 configuration: %s", error_txt(rc));
+            goto do_exit;
+        }
+
+        if ((rc = kr_mgmt_port_status_get(itr.pit.iport, &kr_status)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unable to get clause 73 status: %s", error_txt(rc));
+            goto do_exit;
+        }
+
+        PORT_ICLI_show_interface_status_clause_73(session_id, width, itr, kr_conf, kr_status, has_clause_73_details);
+    }
+
+do_exit:
+    ICLI_PRINTF("\n");
+}
+#endif
+
+/******************************************************************************/
+// PORT_ICLI_show_interface_status()
+/******************************************************************************/
+static void PORT_ICLI_show_interface_status(uint32_t session_id, port_icli_itr_t &itr, bool has_errdisable, bool has_details, bool has_clause_73_details)
+{
+    char buf[400];
+    bool vol_link_down, has_sfp;
+
+    // Don't print the SFP Family if this platform doesn't have SFP sockets.
+    has_sfp = (itr.caps.aggr_caps & MEBA_PORT_CAP_FIBER)       ||
+              (itr.caps.aggr_caps & MEBA_PORT_CAP_SFP_ONLY)    ||
+              (itr.caps.aggr_caps & MEBA_PORT_CAP_DUAL_COPPER) ||
+              (itr.caps.aggr_caps & MEBA_PORT_CAP_DUAL_FIBER);
+
+    if (itr.vol_status.conf.disable || itr.vol_status.conf.disable_adm_recover) {
+        vol_link_down = true;
+    } else {
+        vol_link_down = false;
+    }
+
+    if (!has_details) {
+        // Header
+        if (itr.pit.first) {
+            ICLI_PRINTF("Interface  Mode     Speed   Aneg       %s%sLink    Operational Warnings\n", has_sfp ? "Media Type " : "", has_sfp ? "SFP Family   " : "");
+            ICLI_PRINTF("---------- -------- ------- ---------- %s%s------- --------------------\n", has_sfp ? "---------- " : "", has_sfp ? "------------ " : "");
+        }
+    }
+
+#if defined(VTSS_SW_OPTION_ERRDISABLE)
+    // If user has asked for only errdisabled ports then skip ports that are not
+    // errdisabled
+    if (has_errdisable && (!vol_link_down || itr.vol_status.user != PORT_USER_ERRDISABLE)) {
+        return VTSS_RC_OK;
+    }
+#endif /* defined(VTSS_SW_OPTION_ERRDISABLE) */
+
+#ifdef VTSS_SW_OPTION_KR
+    if (has_details) {
+        PORT_ICLI_show_interface_status_details(session_id, itr, vol_link_down, has_clause_73_details);
+        return;
+    }
+#endif
+
+    // Print interface, mode, speed/duplex
+    ICLI_PRINTF("%-10s %-8s %-7s %-10s",
+                icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, buf),
+                PORT_ICLI_enabled_disabled(itr.conf.admin.enable),
+                port_speed_duplex_to_txt_from_conf(itr.conf),
+                port_aneg_method_to_txt(itr.status.aneg_method, true));
+
+    if (has_sfp) {
+        // Print actual Media type and SFP's nominal speed and type
+        ICLI_PRINTF(" %-10s %-12s", itr.status.fiber ? "SFP" : "RJ45", port_sfp_type_speed_to_txt(buf, sizeof(buf), itr.status));
+    }
+
+    // Print Link
+    if (itr.status.link) {
+        sprintf(buf, "%s", port_speed_duplex_link_to_txt(itr.status));
+    } else if (vol_link_down) {
+        sprintf(buf, "Down (%s)", itr.vol_status.name);
+    } else {
+        strcpy(buf, "Down");
+    }
+
+    ICLI_PRINTF(" %-7s", buf);
+
+    // Finally print warnings
+    ICLI_PRINTF(" %s\n", port_oper_warnings_to_txt(buf, sizeof(buf), itr.status.oper_warnings));
+}
+
+/******************************************************************************/
+// PORT_ICLI_show_registration()
+/******************************************************************************/
+static void PORT_ICLI_show_registration(i32 session_id, bool &first, vtss_module_id_t module_id, uint64_t ms)
+{
+    if (first) {
+        first = false;
+        icli_table_header(session_id, "Module           Max Callback [msec]");
+    }
+
+    ICLI_PRINTF("%-15.15s  " VPRI64u "\n", vtss_module_names[module_id], ms);
+}
+
+/******************************************************************************/
+// PORT_ICLI_show_oper_state()
+/******************************************************************************/
+static void PORT_ICLI_show_oper_state(i32 session_id, port_icli_itr_t &itr)
+{
+    port_vol_status_t status;
+    uint32_t          user;
+    char              buf[40];
+    mesa_rc           rc;
+
+    if (itr.pit.first) {
+         ICLI_PRINTF("Interface  User          Disable DisableAdmRecover OperUp OperDn\n");
+         ICLI_PRINTF("---------- ------------- ------- ----------------- ------ ------\n");
+    }
+
+    for (user = 0; user < PORT_USER_CNT; user++) {
+        if ((rc = port_vol_status_get((port_user_t)user, itr.pit.iport, &status)) != VTSS_RC_OK) {
+            (void)PORT_ICLI_print_error(itr, "Unable to get volatile port status", rc);
+            continue;
+        }
+
+        if (!status.conf.disable && !status.conf.disable_adm_recover && !status.conf.oper_up && !status.conf.oper_down) {
+            // No overrides.
+            continue;
+        }
+
+        ICLI_PRINTF("%-10s %-13s %-7s %-17s %-6s %-6s\n",
+                    icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, buf),
+                    status.name,
+                    PORT_ICLI_yes_no(status.conf.disable),
+                    PORT_ICLI_yes_no(status.conf.disable_adm_recover),
+                    PORT_ICLI_yes_no(status.conf.oper_up),
+                    PORT_ICLI_yes_no(status.conf.oper_down));
+    }
+}
+
+#if defined(VTSS_UI_OPT_VERIPHY)
+/******************************************************************************/
+// PORT_ICLI_show_veriphy()
+/******************************************************************************/
+static void PORT_ICLI_show_veriphy(uint32_t session_id, port_icli_itr_t &itr)
+{
+    char                     buf[250], *p;
+    int                      i;
+    mepa_cable_diag_result_t veriphy = {};
+    bool                     result_invalid;
+
+    // Get veriPHY result
+    result_invalid = itr.if_caps.static_caps == 0 || (itr.if_caps.static_caps & MEBA_PORT_CAP_1G_PHY) == 0 || port_veriphy_result_get(itr.pit.iport, &veriphy, 60) != VTSS_RC_OK;
+
+    if (itr.pit.first) {
+        sprintf(buf, "%-23s %-7s %-7s %-7s %-7s %-7s %-7s %-7s %-7s", "Interface", "Pair A", "Length", "Pair B", "Length", "Pair C", "Length", "Pair D", "Length");
+        icli_table_header(session_id, buf);
+    }
+
+    // Print interface
+    ICLI_PRINTF("%-23s ", icli_port_info_txt(VTSS_USID_START, itr.pit.uport, buf));
+
+    if (result_invalid) {
+        ICLI_PRINTF("No test results\n");
+    } else {
+        p = buf;
+        for (i = 0; i < 4; i++) {
+            p += sprintf(p, "%-7s %-7d ", port_veriphy_status_to_txt(veriphy.status[i]), veriphy.length[i]);
+        }
+
+        ICLI_PRINTF("%s\n", buf);
+    }
+}
+#endif // VTSS_UI_OPT_VERIPHY
+
+FUNCTION_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = media-type {rj45 | sfp | dual | dac-1m | dac-2m | dac-3m | dac-5m}
+IF_FLAG =
+
+DOC_CMD_DESC    = Use media-type to configure the interface media type.
+DOC_CMD_DEFAULT = media-type is rj45 for copper ports, sfp for SFP ports, dual for dual media ports
+DOC_CMD_USAGE   = Use to configure the interface media type.
+DOC_CMD_EXAMPLE = media-type sfp
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_media_type_dual_or_copper
+RUNTIME = PORT_ICLI_runtime_has_media_type_dual_or_sfp
+RUNTIME = PORT_ICLI_runtime_has_media_type_dual
+RUNTIME = PORT_ICLI_runtime_has_media_type_sfp_10g_obsolete
+RUNTIME = PORT_ICLI_runtime_has_media_type_sfp_10g_obsolete
+RUNTIME = PORT_ICLI_runtime_has_media_type_sfp_10g_obsolete
+RUNTIME = PORT_ICLI_runtime_has_media_type_sfp_10g_obsolete
+
+CMD_VAR =
+CMD_VAR = has_rj45
+CMD_VAR =
+CMD_VAR = has_dual
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP    = Media type.
+HELP    = RJ45 interface (copper interface).
+HELP    = SFP interface (fiber interface).
+HELP    = Dual media interface (cu & fiber interface).
+HELP    = SFP interface (fiber interface) tuned for 1m DAC cables (obsolete).
+HELP    = SFP interface (fiber interface) tuned for 2m DAC cables (obsolete).
+HELP    = SFP interface (fiber interface) tuned for 3m DAC cables (obsolete).
+HELP    = SFP interface (fiber interface) tuned for 5m DAC cables (obsolete).
+
+VARIABLE_BEGIN
+    port_icli_itr_t        itr = {};
+    vtss_appl_port_media_t media_type;
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    if (has_rj45) {
+        media_type = VTSS_APPL_PORT_MEDIA_CU;
+    } else if (has_dual) {
+        media_type = VTSS_APPL_PORT_MEDIA_DUAL;
+    } else {
+        // Because dac-1m, dac-2m, dac-3m, and dac-5m options are obsolete, we
+        // set all these options to media type SFP.
+        media_type = VTSS_APPL_PORT_MEDIA_SFP;
+    }
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.media_type = media_type;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no media-type
+IF_FLAG =
+
+FORM_DOC_CMD_DESC    = Use to configure the interface media-type type to default.
+FORM_DOC_CMD_DEFAULT = media-type is set to what this port supports.
+FORM_DOC_CMD_USAGE   = Use to configure the interface media-type type to default.
+FORM_DOC_CMD_EXAMPLE = no media-type
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME =
+
+HELP    = ##ICLI_HELP_NO
+HELP    = Set media type to default (dual for dual-media interfaces, rj45 for copper-only interfaces, SFP for SFP-only interfaces).
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.media_type = itr.default_conf.media_type;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = fec {auto | r-fec | rs-fec | none}
+IF_FLAG =
+
+DOC_CMD_DESC    = Use this command to force a particular FEC mode.
+DOC_CMD_DEFAULT = 'fec auto' is default and tells the switch application to combine the SFP and port type to find a suitable FEC to use - if any.
+DOC_CMD_USAGE   = Use this command to force a particular FEC mode.
+DOC_CMD_EXAMPLE = 'fec r-fec'
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = PORT_ICLI_runtime_has_kr
+RUNTIME =
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_kr_25g
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR = has_auto
+CMD_VAR = has_r_fec
+CMD_VAR = has_rs_fec
+CMD_VAR =
+
+HELP    = Control Forward Error Correction
+HELP    = Let the switch application decide which FEC (if any) to enable based on port and SFP transceiver type.
+HELP    = Force-enable R-FEC (Firecode Forward Error Correction, 802.3by clause 74).
+HELP    = Force-enable RS-FEC (Reed-Solomon Forward Error Correction, 802.3by clause 108).
+HELP    = Do not use FEC. If using 802.3 clause 73 to negotiate speed, FEC may get enabled anyway if link partner requests it.
+
+VARIABLE_BEGIN
+    port_icli_itr_t           itr = {};
+    vtss_appl_port_fec_mode_t fec_mode;
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    if (has_auto) {
+        fec_mode = VTSS_APPL_PORT_FEC_MODE_AUTO;
+    } else if (has_r_fec) {
+        fec_mode = VTSS_APPL_PORT_FEC_MODE_R_FEC;
+    } else if (has_rs_fec) {
+        fec_mode = VTSS_APPL_PORT_FEC_MODE_RS_FEC;
+    } else {
+        fec_mode = VTSS_APPL_PORT_FEC_MODE_NONE;
+    }
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.fec_mode = fec_mode;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no fec
+IF_FLAG =
+
+DOC_CMD_DESC    = Use this command to default the FEC mode (corresponds to 'fec auto')
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use this command to default the FEC mode.
+DOC_CMD_EXAMPLE = 'no fec'
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_kr
+
+HELP    = ##ICLI_HELP_NO
+HELP    = Set FEC mode to 'auto'
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.fec_mode = itr.default_conf.fec_mode;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clause-73 parallel-detect
+IF_FLAG =
+
+PORT_KR_PD_HELP = Enable Clause-73 (KR) parallel-detect. Use the no-form to disable. Default is enabled.
+
+DOC_CMD_DESC    = ##PORT_KR_PD_HELP
+DOC_CMD_DEFAULT = Clause 73 Parallel Detect is enabled.
+DOC_CMD_USAGE   = ##PORT_KR_PD_HELP
+DOC_CMD_EXAMPLE = no clause-73 parallel-detect
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = PORT_ICLI_runtime_has_clause_73
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = Change Clause-73 (KR) behavior.
+HELP = ##PORT_KR_PD_HELP
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.clause_73_pd = true;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.clause_73_pd = false;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = speed {10 | 100 | 1000 | 2500 | 5g | 10g | 25g | force-clause-73 | auto {[10] [100] [1000] [2500] [5g] [10g] {[no-hdx] | [no-fdx]}}}
+IF_FLAG =
+
+PORT_SPEED_HELP = Configures interface speed. If you use 10, 100, 1000 or one of the other keywords with the auto keyword the port will only advertise the specified speeds.
+
+DOC_CMD_DESC    = ##PORT_SPEED_HELP
+DOC_CMD_DEFAULT = Speed is auto.
+DOC_CMD_USAGE   = ##PORT_SPEED_HELP
+DOC_CMD_EXAMPLE = speed 100
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_10m
+RUNTIME = PORT_ICLI_runtime_has_100m
+RUNTIME = PORT_ICLI_runtime_has_1g
+RUNTIME = PORT_ICLI_runtime_has_2g5
+RUNTIME = PORT_ICLI_runtime_has_5g
+RUNTIME = PORT_ICLI_runtime_has_10g
+RUNTIME = PORT_ICLI_runtime_has_25g
+RUNTIME = PORT_ICLI_runtime_has_clause_73
+RUNTIME = PORT_ICLI_runtime_has_auto
+RUNTIME = PORT_ICLI_runtime_has_adv_10m
+RUNTIME = PORT_ICLI_runtime_has_adv_100m
+RUNTIME = PORT_ICLI_runtime_has_adv_1g
+RUNTIME = PORT_ICLI_runtime_has_adv_2g5
+RUNTIME = PORT_ICLI_runtime_has_adv_5g
+RUNTIME = PORT_ICLI_runtime_has_adv_10g
+RUNTIME = PORT_ICLI_runtime_has_adv_hdx
+RUNTIME = PORT_ICLI_runtime_has_adv_hdx
+
+CMD_VAR =
+CMD_VAR = has_speed_10m
+CMD_VAR = has_speed_100m
+CMD_VAR = has_speed_1g
+CMD_VAR = has_speed_2g5
+CMD_VAR = has_speed_5g
+CMD_VAR = has_speed_10g
+CMD_VAR = has_speed_25g
+CMD_VAR = has_force_clause_73
+CMD_VAR =
+CMD_VAR = has_adv_10m
+CMD_VAR = has_adv_100m
+CMD_VAR = has_adv_1g
+CMD_VAR = has_adv_2g5
+CMD_VAR = has_adv_5g
+CMD_VAR = has_adv_10g
+CMD_VAR = has_adv_no_hdx
+CMD_VAR = has_adv_no_fdx
+
+HELP = ##PORT_SPEED_HELP
+HELP = Force   10 Mbps
+HELP = Force  100 Mbps
+HELP = Force 1000 Mbps
+HELP = Force 2500 Mbps
+HELP = Force    5 Gbps
+HELP = Force   10 Gbps
+HELP = Force   25 Gbps
+HELP = Force clause 73 even on Fiber SFPs
+HELP = Let the switch application decide whether to run aneg or a fixed speed - depending on port type and/or SFP transceiver types.
+HELP = Advertise   10 Mbps
+HELP = Advertise  100 Mbps
+HELP = Advertise 1000 Mbps
+HELP = Advertise 2500 Mbps
+HELP = Advertise    5 Gbps
+HELP = Advertise   10 Gbps
+HELP = Only advertise full duplex, not half duplex.
+HELP = Only adverties half duplex, not full duplex
+
+VARIABLE_BEGIN
+    port_icli_itr_t   itr = {};
+    mesa_port_speed_t speed;
+    mepa_adv_dis_t    speed_adv_dis;
+#if (VTSS_TRACE_LVL_MIN <= VTSS_TRACE_LVL_INFO)
+    char              buf[50];
+#endif    
+VARIABLE_END
+
+CODE_BEGIN
+    speed_adv_dis = MEPA_ADV_DIS_SPEED;
+
+    if (has_speed_10m) {
+        speed = MESA_SPEED_10M;
+    } else if (has_speed_100m) {
+        speed = MESA_SPEED_100M;
+    } else if (has_speed_1g) {
+        speed = MESA_SPEED_1G;
+    } else if (has_speed_2g5) {
+        speed = MESA_SPEED_2500M;
+    } else if (has_speed_5g) {
+        speed = MESA_SPEED_5G;
+    } else if (has_speed_10g) {
+        speed = MESA_SPEED_10G;
+    } else if (has_speed_25g) {
+        speed = MESA_SPEED_25G;
+    } else if (has_force_clause_73) {
+        // We use MESA_SPEED_AUTO and force_clause_73 to force it into using Clause 73 aneg mode.
+        speed = MESA_SPEED_AUTO;
+    } else {
+        speed = MESA_SPEED_AUTO;
+
+        if (has_adv_10m) {
+            speed_adv_dis &= ~MEPA_ADV_DIS_10M;
+        }
+
+        if (has_adv_100m) {
+            speed_adv_dis &= ~MEPA_ADV_DIS_100M;
+        }
+
+        if (has_adv_1g) {
+            speed_adv_dis &= ~MEPA_ADV_DIS_1G;
+        }
+
+        if (has_adv_2g5) {
+            // Advertisement of 2.5G is only supported by Aquantia PHYs.
+            speed_adv_dis &= ~MEPA_ADV_DIS_2500M;
+        }
+
+        if (has_adv_5g) {
+            // Advertisement of 5G is only supported by Aquantia PHYs.
+            speed_adv_dis &= ~MEPA_ADV_DIS_5G;
+        }
+
+        if (has_adv_10g) {
+            // Advertisement of 10G is only supported by Aquantia PHYs.
+            speed_adv_dis &= ~MEPA_ADV_DIS_10G;
+        }
+    }
+
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.speed           = speed;
+        itr.conf.force_clause_73 = has_force_clause_73;
+
+        if (speed == MESA_SPEED_AUTO) {
+            T_IG(PORT_TRACE_GRP_ICLI, "default.adv_dis = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.default_conf.adv_dis));
+            T_IG(PORT_TRACE_GRP_ICLI, "adv_dis before  = %s",  port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+
+            // First clear all speed- and duplex- bits.
+            itr.conf.adv_dis &= ~(MEPA_ADV_DIS_SPEED | MEPA_ADV_DIS_DUPLEX);
+
+            if (speed_adv_dis == MEPA_ADV_DIS_SPEED) {
+                // User hasn't specified any speeds to advertise.
+                // Use those from the default conf.
+                itr.conf.adv_dis |= (itr.default_conf.adv_dis & MEPA_ADV_DIS_SPEED);
+            } else {
+                itr.conf.adv_dis |= speed_adv_dis;
+            }
+
+            // At least one of the duplex modes must be set. This means the
+            // following:
+            // If HDX supported:
+            //    None specified: Both fdx and hdx is advertised
+            //    no-hdx => Only fdx is advertised
+            //    no-fdx => Only hdx is advertised
+            // If HDX is not supported:
+            //    no-hdx keyword is not available. Only fdx is advertised.
+            //    no-fdx keyword is not available. Only fdx is advertised.
+            if (has_adv_no_hdx) {
+                // Half duplex is supported on at least one of the selected
+                // interfaces (checked runtime).
+                // The duplex bits are already cleared. Set the HDX one
+                itr.conf.adv_dis |= MEPA_ADV_DIS_HDX;
+            } else if (has_adv_no_fdx) {
+                // Same story as for has_adv_no_hdx
+                itr.conf.adv_dis |= MEPA_ADV_DIS_FDX;
+            } else {
+                // Either none of the [no-Xdx] are specified or half duplex is
+                // not supported on the interface. Use those from the default
+                // configuration, which has the MEPA_ADV_DIS_HDX bit set if the
+                // interface doesn't support half duplex.
+                // The duplex bits are already cleared. Set those from default.
+                itr.conf.adv_dis |= (itr.default_conf.adv_dis & MEPA_ADV_DIS_DUPLEX);
+            }
+
+            T_IG(PORT_TRACE_GRP_ICLI, "adv_dis after = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+        } else {
+            // Set the adv_dis bits to default
+            itr.conf.adv_dis = itr.default_conf.adv_dis;
+        }
+
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no speed
+IF_FLAG =
+
+DOC_CMD_DESC    = Use "no speed" to configure interface to default speed.
+DOC_CMD_DEFAULT = Speed is auto.
+DOC_CMD_USAGE   = Use to configure interface speed to default.
+DOC_CMD_EXAMPLE = no speed
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = Configure speed to default.
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+#if (VTSS_TRACE_LVL_MIN <= VTSS_TRACE_LVL_INFO)
+    char            buf[50];
+#endif
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.speed           = itr.default_conf.speed;
+        itr.conf.force_clause_73 = itr.default_conf.force_clause_73;
+
+        T_IG(PORT_TRACE_GRP_ICLI, "adv_dis before = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+
+        // Clear all speed and duplex bits.
+        itr.conf.adv_dis &= ~(MEPA_ADV_DIS_SPEED | MEPA_ADV_DIS_DUPLEX);
+
+        // Then set those from the default conf.
+        itr.conf.adv_dis |= (itr.default_conf.adv_dis & (MEPA_ADV_DIS_SPEED | MEPA_ADV_DIS_DUPLEX));
+
+        T_IG(PORT_TRACE_GRP_ICLI, "adv_dis after  = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! The last three items of this command are obsolete, but can still be set with
+! the speed command (no-fdx, no-hdx). They can no longer be synthesized.
+COMMAND = duplex {half | full | {auto [half | full]}}
+
+IF_FLAG =
+
+DOC_CMD_DESC    = Use duplex to configure interface duplex mode when speed is a forced speed
+DOC_CMD_DEFAULT = duplex is full
+DOC_CMD_USAGE   = Configure interface duplex mode when speed is a forced speed
+DOC_CMD_EXAMPLE = duplex half
+
+FUNC_NAME = port_duplex
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_forced_half_duplex
+RUNTIME =
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_duplex_adv_hdx
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR = has_half
+CMD_VAR =
+CMD_VAR = has_auto
+CMD_VAR = has_advertise_hdx
+CMD_VAR = has_advertise_fdx
+
+HELP = Interface duplex for forced speeds
+HELP = Half duplex when speed is forced (non-auto)
+HELP = Full duplex when speed is forced (non-auto)
+HELP = Auto negotiation of duplex mode (obsolete, but still supported in startup-config)
+HELP = Advertise half duplex (obsolete, but still supported in startup-config)
+HELP = Advertise full duplex (obsolete, but still supported in startup-config)
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+#if (VTSS_TRACE_LVL_MIN <= VTSS_TRACE_LVL_INFO)
+    char            buf[50];
+#endif
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+    itr.need_if_caps      = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (has_auto) {
+            // This is an obsolete keyword and is only allowed when loading
+            // startup-config (for backwards compatibility). Unfortunately,
+            // ICLI has a bug, so that I cannot filter this out runtime.
+            if (!PORT_ICLI_loading_startup_config(session_id)) {
+                (void)PORT_ICLI_print_error(itr, NULL, VTSS_APPL_PORT_RC_ICLI_DUPLEX_AUTO_OBSOLETE);
+                continue;
+            }
+
+            T_IG(PORT_TRACE_GRP_ICLI, "adv_dis before = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+
+            // Start by clearing both HDX and FDX bits (corresponding to
+            // enabling advertisement of both)
+            itr.conf.adv_dis &= ~MEPA_ADV_DIS_DUPLEX;
+
+            // The duplex advertisement options are not used unless the port
+            // is in speed auto. That shouldn't prevent us from setting them.
+            if (has_advertise_fdx) {
+                // Disable advertising of half duplex.
+                itr.conf.adv_dis |= MEPA_ADV_DIS_HDX;
+            } else if (has_advertise_hdx) {
+                // Disable advertising of full duplex
+                // If the port doesn't support half duplex, we will get an error
+                // when we try to set the configuration.
+                itr.conf.adv_dis |= MEPA_ADV_DIS_FDX;
+            } else {
+                // User has selected to advertise whatever we can, which is
+                // indicated by the default configuration's duplex bits
+                itr.conf.adv_dis |= (itr.default_conf.adv_dis & MEPA_ADV_DIS_DUPLEX);
+            }
+
+            T_IG(PORT_TRACE_GRP_ICLI, "adv_dis after  = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+        } else {
+            // Duplex used when in forced mode.
+            itr.conf.fdx = !has_half;
+        }
+
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no duplex
+IF_FLAG =
+
+DOC_CMD_DESC    = Use "no duplex" to set duplex to default.
+DOC_CMD_DEFAULT = duplex is auto.
+DOC_CMD_USAGE   = Use to set duplex to default.
+DOC_CMD_EXAMPLE = no duplex.
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = Set duplex to default.
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+#if (VTSS_TRACE_LVL_MIN <= VTSS_TRACE_LVL_INFO)
+    char            buf[50];
+#endif
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        T_IG(PORT_TRACE_GRP_ICLI, "adv_dis before = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+        itr.conf.fdx = itr.default_conf.fdx;
+        T_IG(PORT_TRACE_GRP_ICLI, "adv_dis after  = %s", port_adv_dis_to_txt(buf, sizeof(buf), itr.conf.adv_dis));
+
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = flowcontrol {on | off}
+IF_FLAG =
+
+DOC_CMD_DESC    = Use flowcontrol to configure flow control for the interface.
+DOC_CMD_DEFAULT = Flow control is off.
+DOC_CMD_USAGE   = Configure flow control for the interface.
+DOC_CMD_EXAMPLE = flowcontrol on
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR = has_on
+CMD_VAR =
+
+HELP = Traffic flow control (not used on ports running clause 37 aneg)
+HELP = Enable flow control (not used on ports running clause 37 aneg)
+HELP = Disable flow control (not used on ports running clause 37 aneg)
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.flow_control = has_on;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no flowcontrol
+IF_FLAG =
+
+DOC_CMD_DESC    = Use no flowcontrol to set flow control to default.
+DOC_CMD_DEFAULT = flowcontrol is off.
+DOC_CMD_USAGE   = Use to set flow control to default configuration.
+DOC_CMD_EXAMPLE = no flowcontrol
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = Configure flow control to default
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.flow_control = itr.default_conf.flow_control;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = priority-flowcontrol prio <0~7>
+IF_FLAG =
+
+DOC_CMD_DESC    = Use priority flowcontrol (802.1Qbb) to configure flow control per priority.
+DOC_CMD_DEFAULT = Priority flow control is off.
+DOC_CMD_USAGE   = Configure priority flow control on the interface.
+DOC_CMD_EXAMPLE = priority-flowcontrol 0-4,6
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = PORT_ICLI_runtime_has_pfc
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = prio
+
+HELP = Priority Flow Control (802.1Qbb)
+HELP = Traffic priority
+HELP = Range of priorities (e.g. 0-4,6)
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+    uint32_t        i, j;
+    bool            pfc[ARRSZ(vtss_appl_port_conf_t::pfc)];
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    vtss_clear(pfc);
+    for (i = 0; i < prio->cnt; i++) {
+        for (j = prio->range[i].min; j <= prio->range[i].max; j++) {
+            pfc[j] = true;
+        }
+    }
+
+    while (PORT_ICLI_itr(itr)) {
+        for (i = 0; i < ARRSZ(pfc); i++) {
+            // This function can only set PFC, not clear (SIC!)
+            if (pfc[i]) {
+                itr.conf.pfc[i] = true;
+            }
+        }
+
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no priority-flowcontrol prio [<0~7>]
+IF_FLAG =
+
+DOC_CMD_DESC    = Use priority flowcontrol (802.1Qbb) to configure flow control for each priority.
+DOC_CMD_DEFAULT = Priority flow control is off.
+DOC_CMD_USAGE   = Configure priority flow control on the interface.
+DOC_CMD_EXAMPLE = no priority-flowcontrol 0-4,6
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME = PORT_ICLI_runtime_has_pfc
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = prio
+
+HELP = ##ICLI_HELP_NO
+HELP = Priority Flow Control (802.1Qbb)
+HELP = Traffic priority not to enable flow control for
+HELP = Specify range of priorities not to enable flow control for  (e.g. 0-4,6)
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+    uint32_t        i, j;
+    bool            pfc[ARRSZ(vtss_appl_port_conf_t::pfc)];
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    vtss_clear(pfc);
+
+    if (prio) {
+        for (i = 0; i < prio->cnt; i++) {
+            for (j = prio->range[i].min; j <= prio->range[i].max; j++) {
+                pfc[j] = true;
+            }
+        }
+    } else {
+        // No specificprio given, so setting all (causing PFC to be cleared in
+        // final configuration)
+        memset(pfc, 1, sizeof(pfc));
+    }
+
+    while (PORT_ICLI_itr(itr)) {
+        for (i = 0; i < ARRSZ(pfc); i++) {
+            // This function can only set PFC, not clear (SIC!)
+            if (pfc[i]) {
+                itr.conf.pfc[i] = false;
+            }
+        }
+
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! 'mtu' is not the correct name for this, because MTU specifies how much you may
+! transmit and not how much your are able to receive. But we can't change it
+! since it's already being used out there.
+COMMAND = mtu <1518-9600>
+IF_FLAG =
+
+DOC_CMD_DESC    = Use mtu to specify maximum frame size (1518-max-for-platform bytes).
+DOC_CMD_DEFAULT = Varies with platform
+DOC_CMD_USAGE   = Use to specify maximum frame size (1518-max-for-platform bytes).
+DOC_CMD_EXAMPLE = mtu 2000
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+CMD_VAR =
+CMD_VAR = max_length
+
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_mtu_range
+
+HELP = Maximum acceptable Rx frame size
+HELP = Maximum acceptable Rx frame size in bytes
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.max_length = max_length;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no mtu
+IF_FLAG =
+
+DOC_CMD_DESC    = Use no mtu to set maximum frame size to default.
+DOC_CMD_DEFAULT = mtu is maximum-for-platform.
+DOC_CMD_USAGE   = Use to set maximum frame size to default.
+DOC_CMD_EXAMPLE = no mtu
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = Maximum acceptable Rx frame size
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.max_length = itr.default_conf.max_length;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = excessive-restart
+IF_FLAG =
+
+DOC_CMD_DESC    = Use excessive-restart to configure backoff algorithm in half duplex mode.
+DOC_CMD_DEFAULT = Excessive-restart is no excessive-restart, that is, discard frame after 16 collisions.
+DOC_CMD_USAGE   = Use to configure backoff algorithm in half duplex mode.
+DOC_CMD_EXAMPLE = excessive-restart.
+
+NO_FORM_DOC_CMD_DESC    = Use no excessive-restart to configure backoff algorithm in half duplex mode to default.
+NO_FORM_DOC_CMD_DEFAULT = excessive-restart is no excessive-restart, that is, discard frame after 16 collisions.
+NO_FORM_DOC_CMD_USAGE   = Configure backoff algorithm in half duplex mode to default.
+NO_FORM_DOC_CMD_EXAMPLE = no excessive-restart
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+CMD_VAR =
+HELP = Restart backoff algorithm after 16 collisions ('no excessive-restart' means discard frame after 16 collisions)
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.exc_col_cont = true;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    itr.port_list         = port_list;
+    itr.need_conf         = true;
+    itr.need_default_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.exc_col_cont = itr.default_conf.exc_col_cont;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = frame-length-check
+IF_FLAG =
+
+DOC_CMD_DESC = Enable  803.3 frame length check for ether-types below 0x0600
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+CMD_VAR =
+HELP = Drop frames with mismatch between EtherType/Length field and actual payload size.
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.frame_length_chk = true;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no frame-length-check
+IF_FLAG =
+
+DOC_CMD_DESC = Disable 803.3 frame length check for ethertypes below 0x0600
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = Do not drop frames with mismatch between EtherType/Length field and actual payload size.
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.frame_length_chk = itr.default_conf.frame_length_chk;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = shutdown
+IF_FLAG =
+
+DOC_CMD_DESC    = Use shutdown to shutdown the interface.
+DOC_CMD_DEFAULT = Interface is up.
+DOC_CMD_USAGE   = Use to shutdown the interface.
+DOC_CMD_EXAMPLE = shutdown
+
+NO_FORM_DOC_CMD_DESC    = Use "no shutdown" to power up the interface.
+NO_FORM_DOC_CMD_DEFAULT = Interface is up.
+NO_FORM_DOC_CMD_USAGE   = Use to power up the interface.
+NO_FORM_DOC_CMD_EXAMPLE = no shutdown
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+CMD_VAR =
+HELP = Shutdown of the interface.
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.admin.enable = false;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        itr.conf.admin.enable = true;
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = description <line200>
+IF_FLAG =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+CMD_VAR =
+CMD_VAR = dscr
+
+HELP = Description of the interface
+HELP = Add an alphanumeric description of the interface
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    if (dscr == nullptr || strlen(dscr) >= sizeof(vtss_appl_port_conf_t::dscr)) {
+        ICLI_PRINTF("%% The length of the description must be less than %zu\n", sizeof(vtss_appl_port_conf_t::dscr) - 1);
+        return ICLI_RC_ERROR;
+    }
+
+    while (PORT_ICLI_itr(itr)) {
+        // Clear all lef-overs beyond the end of the string.
+        vtss_clear(itr.conf.dscr);
+        strncpy(itr.conf.dscr, dscr, sizeof(itr.conf.dscr) - 1);
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no description
+IF_FLAG =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+HELP = ##ICLI_HELP_NO
+HELP = Clear description of the interface
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        // Clear all lef-overs beyond the end of the string.
+        vtss_clear(itr.conf.dscr);
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_conf_set(itr.ifindex, &itr.conf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show interface <port_type_list> status [err-disable] [details [clause-73]]
+IF_FLAG =
+
+DOC_CMD_DESC    = Display status for the interface.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to display status for the interface.
+DOC_CMD_EXAMPLE = show interface status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_errdisable
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_platform_kr
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+CMD_VAR =
+CMD_VAR = has_errdisable
+CMD_VAR = has_details
+CMD_VAR = has_clause_73_details
+
+HELP = ##ICLI_HELP_SHOW
+HELP = Interface.
+HELP = Interface list.
+HELP = Display status.
+HELP = Show only interfaces that are down due to err-disable
+HELP = Show details
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list       = port_list;
+    itr.need_status     = true;
+    itr.need_vol_status = true;
+    itr.need_conf       = true;
+    itr.need_caps       = true;
+    itr.need_if_caps    = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        PORT_ICLI_show_interface_status(session_id, itr, has_errdisable, has_details, has_clause_73_details);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show interface <port_type_list> description
+IF_FLAG =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: show
+! 2: interface
+! 3: <port_type_list>
+! 4: description
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+CMD_VAR =
+
+HELP =
+HELP =
+HELP =
+HELP = Description of interface
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+    char            if_str[40];
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_conf = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (itr.pit.first) {
+            ICLI_PRINTF("Interface  Description\n");
+            ICLI_PRINTF("---------- ------------------------------------------\n");
+        }
+
+        ICLI_PRINTF("%-10s %s\n", icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str), itr.conf.dscr);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show interface <port_type_list> statistics [{packets | bytes | errors | discards | filtered | dot3br | {priority [<0~7>]} | link-state-changes}] [{up | down}]
+IF_FLAG =
+
+DOC_CMD_DESC    = Shows statistics for the interface.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Show the statistics for the interface.
+DOC_CMD_EXAMPLE = show interface GigabitEthernet 1/1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = PORT_ICLI_runtime_has_tsn_frame_preemption
+RUNTIME = PORT_ICLI_runtime_has_qos_queues
+RUNTIME = PORT_ICLI_runtime_has_qos_queues
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+CMD_VAR =
+CMD_VAR = has_packets
+CMD_VAR = has_bytes
+CMD_VAR = has_errors
+CMD_VAR = has_discards
+CMD_VAR = has_filtered
+CMD_VAR = has_dot3br
+CMD_VAR = has_priority
+CMD_VAR = priority_list
+CMD_VAR = has_link_state_changes
+CMD_VAR = has_up
+CMD_VAR = has_down
+
+HELP = Display statistics
+HELP = Interface.
+HELP = Interface list.
+HELP = Display statistics
+HELP = Show packet statistics
+HELP = Show byte statistics
+HELP = Show error statistics
+HELP = Show discard statistics
+HELP = Show filtered statistics
+HELP = Show 802.3br statistics
+HELP = Show priority statistics
+HELP = Priority of the queue (or queues) to show statistics for
+HELP = Show number of link ups and downs
+HELP = Show ports which are up
+HELP = Show ports which are down
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    itr.need_statistics = true;
+    itr.need_status     = true;
+    itr.need_caps       = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        PORT_ICLI_show_statistics(session_id, itr, has_packets, has_bytes, has_errors, has_discards, has_filtered, has_dot3br, has_priority, priority_list, has_link_state_changes, has_up, has_down);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show interface <port_type_list> capabilities
+IF_FLAG =
+
+DOC_CMD_DESC    = To display the interface capabilities for interfaces.
+DOC_CMD_DEFAULT = This command has no default settings.
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+CMD_VAR =
+
+HELP = Display interface capabilities.
+HELP = Interface.
+HELP = Interface list.
+HELP = Display capabilities.
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list    = port_list;
+    itr.need_status  = true;
+    itr.need_if_caps = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        PORT_ICLI_show_interface_capabilities(session_id, itr);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show interface <port_type_list> veriphy
+IF_FLAG = defined(VTSS_UI_OPT_VERIPHY)
+
+DOC_CMD_DESC    = Display cable diagnostics.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to display cable diagnostics.
+DOC_CMD_EXAMPLE = show veriphy
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+
+HELP = Show
+HELP = Interface
+HELP = Interface list.
+HELP = Display the latest cable diagnostic results.
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list    = port_list;
+    itr.need_if_caps = true;
+    while (PORT_ICLI_itr(itr)) {
+        PORT_ICLI_show_veriphy(session_id, itr);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear statistics [interface] <port_type_list>
+IF_FLAG =
+
+DOC_CMD_DESC    = Clears the statistics for the interface.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to clear the statistics for the interface.
+DOC_CMD_EXAMPLE = clear statistics GigabitEthernet 1/1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_10
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+
+HELP = ##ICLI_HELP_CLEAR
+HELP = Clear statistics for one or more interfaces
+HELP = Interface
+HELP = Interface list
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+
+    while (PORT_ICLI_itr(itr)) {
+        (void)PORT_ICLI_print_error(itr, NULL, vtss_appl_port_statistics_clear(itr.ifindex));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = veriphy [{interface <port_type_list>}]
+IF_FLAG = defined(VTSS_UI_OPT_VERIPHY)
+
+DOC_CMD_DESC    = Run cable diagnostics.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to run cable diagnostics.
+DOC_CMD_EXAMPLE = veriphy
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+
+HELP = VeriPHY keyword
+HELP = Interface keyword
+HELP = Interface list.
+
+VARIABLE_BEGIN
+    CapArray<port_veriphy_mode_t, MEBA_CAP_BOARD_PORT_MAP_COUNT> mode;
+    port_icli_itr_t                                              itr;
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_clear(itr);
+    itr.port_list = port_list;
+    while (PORT_ICLI_itr(itr)) {
+        mode[itr.pit.iport] = PORT_VERIPHY_MODE_NONE;
+    }
+
+    vtss_clear(itr);
+    itr.port_list    = port_list;
+    itr.need_if_caps = true;
+
+    ICLI_PRINTF("Starting VeriPHY - Please wait\n");
+    while (PORT_ICLI_itr(itr)) {
+        mode[itr.pit.iport] = (itr.if_caps.static_caps == 0 || (itr.if_caps.static_caps & MEBA_PORT_CAP_1G_PHY) == 0) ? PORT_VERIPHY_MODE_NONE : PORT_VERIPHY_MODE_FULL;
+        (void)PORT_ICLI_print_error(itr, NULL, port_veriphy_start(mode.data()));
+    }
+
+    vtss_clear(itr);
+    itr.port_list    = port_list;
+    itr.need_if_caps = true;
+    while (PORT_ICLI_itr(itr)) {
+        PORT_ICLI_show_veriphy(session_id, itr);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show port capabilities
+IF_FLAG =
+
+DOC_CMD_DESC    = Show port module's capabilities
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Show keyword
+HELP = Show port module's capabilities
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+     ICLI_RC(PORT_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show capabilities
+IF_FLAG =
+
+DOC_CMD_DESC    = Show port capabilities
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Show keyword
+HELP = Show port capabilities
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+    char            buf[400], if_str[40];
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list    = port_list;
+    itr.need_if_caps = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (itr.pit.first) {
+            ICLI_PRINTF("Interface  Capabilities\n");
+            ICLI_PRINTF("---------- ------------------------------------------------------------------------------------------------------------------------------------------\n");
+        }
+
+        ICLI_PRINTF("%-10s %s\n", icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str), port_cap_to_txt(buf, sizeof(buf), itr.if_caps.static_caps));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug show port registrations
+IF_FLAG =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+HELP = Debug keyword.
+HELP = Show keyword
+HELP = Show port module registrations.
+
+CODE_BEGIN
+#define PRINT_ENTRIES(id, func, msg)                                                         \
+    do {                                                                                     \
+        auto itr = func();                                                                   \
+        bool first = true;                                                                   \
+        while (itr.first != itr.second) {                                                    \
+            if (first) {                                                                     \
+                icli_header(id, msg, true);                                                  \
+            }                                                                                \
+                                                                                             \
+            PORT_ICLI_show_registration(id, first, itr.first->module_id, itr.first->max_ms); \
+            itr.first++;                                                                     \
+        }                                                                                    \
+    } while (0);
+
+    PRINT_ENTRIES(session_id, port_listener_change_registrants_get,      "Port Change Registrations");
+    PRINT_ENTRIES(session_id, port_listener_shutdown_registrants_get,    "Port Shutdown Registrations");
+    PRINT_ENTRIES(session_id, port_listener_conf_change_registrants_get, "Port Configuration Change Registrations");
+#undef PRINT_ENTRIES
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = debug clear port registrations
+IF_FLAG =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##ICLI_HELP_CLEAR
+HELP      = Clear port module registrations.
+
+CODE_BEGIN
+    port_listener_clear_max_ms();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug loopback [{near-end | far-end | facility | equipment | disable}]
+IF_FLAG =
+
+DOC_CMD_DESC    = Use to control port loopback
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_near_end
+CMD_VAR = has_far_end
+CMD_VAR = has_facility
+CMD_VAR = has_equipment
+CMD_VAR = has_disable
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Port loopback
+
+VARIABLE_BEGIN
+    port_icli_itr_t       itr = {};
+    bool                  set = true;
+    mesa_port_test_conf_t conf;
+    mesa_port_lb_t        lb;
+    char                  if_str[40];
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_near_end) {
+        lb = MESA_PORT_LB_NEAR_END;
+    } else if (has_far_end) {
+        lb = MESA_PORT_LB_FAR_END;
+    } else if (has_facility) {
+        lb = MESA_PORT_LB_FACILITY;
+    } else if (has_equipment) {
+        lb = MESA_PORT_LB_EQUIPMENT;
+    } else if (has_disable) {
+        lb = MESA_PORT_LB_DISABLED;
+    } else {
+        lb = MESA_PORT_LB_DISABLED;
+        set = false;
+    }
+
+    itr.port_list = port_list;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (PORT_ICLI_print_error(itr,  NULL, mesa_port_test_conf_get(NULL, itr.pit.iport, &conf)) != VTSS_RC_OK) {
+            // Skip port
+            continue;
+        }
+
+        if (set) {
+            conf.loopback = lb;
+            PORT_ICLI_print_error(itr, NULL, meba_port_test_conf_set(board_instance, itr.pit.iport, &conf));
+        } else {
+            if (itr.pit.first) {
+                ICLI_PRINTF("Interface  Loopback\n");
+                ICLI_PRINTF("---------- ---------\n");
+            }
+
+            lb = conf.loopback;
+            ICLI_PRINTF("%-10s %s\n",
+                        icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str),
+                        lb == MESA_PORT_LB_NEAR_END  ? "Near-End"  :
+                        lb == MESA_PORT_LB_FAR_END   ? "Far-End"   :
+                        lb == MESA_PORT_LB_FACILITY  ? "Facility"  :
+                        lb == MESA_PORT_LB_EQUIPMENT ? "Equipment" : "Disabled");
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug sfp dump [interface <port_type_list>]
+IF_FLAG =
+
+FUNC_NAME = deb_sfp_dump
+
+HELP_DEBUG_SFP_DUMP = Debug command to dump contents of SFP MSA ROM
+DOC_CMD_DESC    = ##HELP_DEBUG_SFP_DUMP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_DEBUG_SFP_DUMP
+DOC_CMD_EXAMPLE = debug sfp interface 25g 1/1
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_DEBUG_SFP_DUMP
+HELP = Dump
+HELP = Interface
+HELP = Interface(s) to dump. Only SFP ports will actually be dumped
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+    char            if_str[40];
+    uint8_t         rom[255]; // I2C read fails if set to 256
+    char            out_buf[4096];
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list    = port_list;
+    itr.need_if_caps = true;
+
+    while (PORT_ICLI_itr(itr)) {
+        if (itr.if_caps.static_caps & MEBA_PORT_CAP_COPPER) {
+            // Can't read SFP on pure copper port
+            continue;
+        }
+
+        ICLI_PRINTF("%s:\n", icli_port_info_txt_short(VTSS_USID_START, itr.pit.uport, if_str));
+
+        // Interpretation of this can be found in SFF-8472
+        // (https://members.snia.org/document/dl/25916)
+        // Read two-wire address 1010000x (A0h) => 0x50.
+        if ((meba_sfp_i2c_xfer(board_instance, itr.pit.iport, false, 0x50, 0, rom, sizeof(rom), false) != VTSS_RC_OK)) {
+            ICLI_PRINTF("%% Reading of SFP failed\n\n");
+            continue;
+        }
+
+        ICLI_PRINTF("A0h:\n%s\n", misc_mem_print(rom, sizeof(rom), out_buf, sizeof(out_buf)));
+
+        // Read two-wire address 1010001x (A2h) => 0x51.
+        if ((meba_sfp_i2c_xfer(board_instance, itr.pit.iport, false, 0x51, 0, rom, sizeof(rom), false) != VTSS_RC_OK)) {
+            ICLI_PRINTF("A2h: Not available\n\n");
+            continue;
+        }
+
+        ICLI_PRINTF("A2h:\n%s\n", misc_mem_print(rom, sizeof(rom), out_buf, sizeof(out_buf)));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug npi [{interface <port_type_id> | none}]
+IF_FLAG =
+
+DOC_CMD_DESC    = Set port to be NPI.
+DOC_CMD_DEFAULT = This command has no default settings.
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+CMD_MODE = ICLI_CMD_MODE_EXEC
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_interface
+CMD_VAR = port_id
+CMD_VAR = has_none
+
+VARIABLE_BEGIN
+    mesa_port_no_t port_no;
+    mesa_rc        rc;
+VARIABLE_END
+CODE_BEGIN
+    if (has_interface) {
+        port_no = port_id.begin_iport;
+    } else {
+        port_no = MESA_PORT_NO_NONE;
+    }
+
+    if ((rc = PORT_ICLI_npi(session_id, port_no, has_interface || has_none)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Command failed. Error: %s", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    if (!has_interface && !has_none) {
+        if (port_no == MESA_PORT_NO_NONE) {
+            ICLI_PRINTF("NPI redirect is currently disabled\n");
+        } else {
+            char if_str[50];
+            ICLI_PRINTF("Current NPI port is interface %s\n", icli_port_info_txt_short(VTSS_USID_START, iport2uport(port_no), if_str));
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug serdes [{dfe <uint> <uint> <uint> <uint> <uint> <uint> | ctle <uint> <uint> <uint> <uint> | txeq <uint> <uint> <uint>}]
+IF_FLAG =
+
+DOC_CMD_DESC    = Use to control SerDes tuning for debug purposes
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = dfe:  For 10G: h1,h2,h3,h4,h5,0. For 25G: h1,h2,h3,h4,h5,dlev\
+                  ctle: For 10G: r,c,vga,0         For 25G: vga_r,vga_c,c,gain\
+                  txeq: tap_dly, tap_adv, amplitude
+DOC_CMD_EXAMPLE =
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = port_list
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! serdes
+HELP    = SerDes tuning
+CMD_VAR =
+RUNTIME =
+
+! dfe
+HELP    =
+CMD_VAR = has_dfe
+RUNTIME =
+
+! h1
+HELP    =
+CMD_VAR = h1
+RUNTIME =
+
+! h2
+HELP    =
+CMD_VAR = h2
+RUNTIME =
+
+! h3
+HELP    =
+CMD_VAR = h3
+RUNTIME =
+
+! h4
+HELP    =
+CMD_VAR = h4
+RUNTIME =
+
+! h5
+HELP    =
+CMD_VAR = h5
+RUNTIME =
+
+! dlev
+HELP    =
+CMD_VAR = dlev
+RUNTIME =
+
+! ctle
+HELP    =
+CMD_VAR = has_ctle
+RUNTIME =
+
+! vga_r
+HELP    =
+CMD_VAR = vga_r
+RUNTIME =
+
+! vga_c
+HELP    =
+CMD_VAR = vga_c
+RUNTIME =
+
+! c
+HELP    =
+CMD_VAR = c
+RUNTIME =
+
+! gain
+HELP    =
+CMD_VAR = gain
+RUNTIME =
+
+! txeq
+HELP    =
+CMD_VAR = has_txeq
+RUNTIME =
+
+! tap_dly
+HELP    =
+CMD_VAR = tap_dly
+RUNTIME =
+
+! tap_adv
+HELP    =
+CMD_VAR = tap_adv
+RUNTIME =
+
+! amplitude
+HELP    =
+CMD_VAR = amplitude
+RUNTIME =
+
+VARIABLE_BEGIN
+    port_icli_itr_t          itr = {};
+    mesa_port_serdes_debug_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+    vtss_clear(conf);
+
+    if (has_dfe) {
+        conf.debug_type = MESA_SERDES_DFE_PRM;
+        conf.serdes_prm[0] = h1;
+        conf.serdes_prm[1] = h2;
+        conf.serdes_prm[2] = h3;
+        conf.serdes_prm[3] = h4;
+        conf.serdes_prm[4] = h5;
+        conf.serdes_prm[5] = dlev;
+    } else if (has_ctle) {
+        conf.debug_type = MESA_SERDES_CTLE_PRM;
+        conf.serdes_prm[0] = vga_r;
+        conf.serdes_prm[1] = vga_c;
+        conf.serdes_prm[2] = c;
+        conf.serdes_prm[3] = gain;
+    } else if (has_txeq) {
+        conf.debug_type = MESA_SERDES_TXEQ_PRM;
+        conf.serdes_prm[0] = tap_dly;
+        conf.serdes_prm[1] = tap_adv;
+        conf.serdes_prm[2] = amplitude;
+    }
+
+    while (PORT_ICLI_itr(itr)) {
+        (void)mesa_port_serdes_debug_set(NULL, itr.pit.iport, &conf);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_PORT_DEBUG_STATE = Show internal port state
+COMMAND         = debug show interface <port_type_list> state
+DOC_CMD_DESC    = ##HELP_PORT_DEBUG_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_PORT_DEBUG_STATE
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+MODE_VAR        =
+
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = port_list
+CMD_VAR         =
+
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = Select interface(s) to dump
+HELP            = Select interface(s) to dump
+HELP            = ##HELP_PORT_DEBUG_STATE
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+
+    mesa_rc port_debug_state_dump(vtss_ifindex_t ifindex, uint32_t session_id, port_icli_pr_t pr);
+    while (PORT_ICLI_itr(itr)) {
+        (void)PORT_ICLI_print_error(itr, NULL, port_debug_state_dump(itr.ifindex, session_id, icli_session_printf));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug oper interface <port_type_list> {up | down | disable | disable-adm-recover | all} {enable | disable}
+FUNC_NAME = deb_oper_up_down
+
+HELP_DEBUG_OPER_UP_DOWN = Debug command to enable or disable a port operational parameter
+DOC_CMD_DESC    = ##HELP_DEBUG_OPER_UP_DOWN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_DEBUG_OPER_UP_DOWN
+DOC_CMD_EXAMPLE = debug oper interface 25g 1/1 up enable. Use 'debug show int <port-list> vol-state' to display state
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_DEBUG_OPER_UP_DOWN
+HELP = Interface(s) to change operational state of.
+HELP = Interface(s) to change operational state of.
+HELP = Set port operational up
+HELP = Set port operational down
+HELP = Set port operational disabled
+HELP = Set port operational disabled w/ administrative recover (shut/no shut)
+HELP = Set all operational parameters in one go
+HELP = Enable the operational parameter(s)
+HELP = Disable the operational parameter(s)
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = port_list
+CMD_VAR = has_up
+CMD_VAR = has_down
+CMD_VAR = has_disable
+CMD_VAR = has_disable_adm_recover
+CMD_VAR =
+CMD_VAR = has_enable
+CMD_VAR =
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+    port_vol_conf_t vol_conf;
+    mesa_rc         rc;
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+
+    while (PORT_ICLI_itr(itr)) {
+        if ((rc = port_vol_conf_get(PORT_USER_STATIC, itr.pit.iport, &vol_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% port_vol_conf_get(%d) failed: %s\n", itr.pit.uport, error_txt(rc));
+            continue;
+        }
+
+        if (has_up) {
+            vol_conf.oper_up = has_enable;
+        } else if (has_down) {
+            vol_conf.oper_down = has_enable;
+        } else if (has_disable) {
+            vol_conf.disable = has_enable;
+        } else if (has_disable_adm_recover) {
+            vol_conf.disable_adm_recover = has_enable;
+        } else {
+            vol_conf.oper_up             = has_enable;
+            vol_conf.oper_down           = has_enable;
+            vol_conf.disable             = has_enable;
+            vol_conf.disable_adm_recover = has_enable;
+        }
+
+        if ((rc = port_vol_conf_set(PORT_USER_STATIC, itr.pit.iport, &vol_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% port_vol_conf_set(%d) failed: %s\n", itr.pit.uport, error_txt(rc));
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_PORT_DEBUG_OPER_STATE = Show operational port state
+COMMAND         = debug show interface <port_type_list> oper-state
+DOC_CMD_DESC    = ##HELP_PORT_DEBUG_OPER_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_PORT_DEBUG_OPER_STATE
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+MODE_VAR        =
+
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = port_list
+CMD_VAR         =
+
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = Select interface(s) to dump
+HELP            = Select interface(s) to dump
+HELP            = ##HELP_PORT_DEBUG_OPER_STATE
+
+VARIABLE_BEGIN
+    port_icli_itr_t itr = {};
+VARIABLE_END
+
+CODE_BEGIN
+    itr.port_list = port_list;
+
+    while (PORT_ICLI_itr(itr)) {
+        PORT_ICLI_show_oper_state(session_id, itr);
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND         = debug show sgpio [group <int>] [changes-only]
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+MODE_VAR        =
+
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         = has_group
+CMD_VAR         = group
+CMD_VAR         = changes_only
+
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = Serial GPIOs
+HELP            = Read a particular SGPIO group (0 if not specified)
+HELP            = Particular SGPIO group (0 if not specified)
+HELP            = Only show changes since last invocation
+
+VARIABLE_BEGIN
+    mesa_sgpio_port_data_t        data[MESA_SGPIO_PORTS];
+    static mesa_sgpio_port_data_t prev_data[MESA_SGPIO_PORTS];
+    int                           i, j;
+    bool                          at_least_one_change;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_group) {
+        group = 0;
+    }
+
+    if (mesa_sgpio_read(NULL, 0, group, data) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to read SGPIOs\n");
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("p  b0 b1 b2 b3\n");
+    ICLI_PRINTF("-- -- -- -- --\n");
+
+    for (i = 0; i < MESA_SGPIO_PORTS; i++) {
+        at_least_one_change = true;
+
+        if (changes_only) {
+            at_least_one_change = false;
+
+            for (j = 0; j < ARRSZ(data[i].value); j++) {
+                if (data[i].value[j] != prev_data[i].value[j]) {
+                    at_least_one_change = true;
+                    break;
+                }
+            }
+        }
+
+        if (!at_least_one_change) {
+            continue;
+        }
+
+        ICLI_PRINTF("%2d", i);
+
+        for (j = 0; j < ARRSZ(data[i].value); j++) {
+            if (changes_only) {
+                if (data[i].value[j] != prev_data[i].value[j]) {
+                    ICLI_PRINTF(" %2d", data[i].value[j]);
+                } else {
+                    ICLI_PRINTF("   ");
+                }
+            } else {
+                ICLI_PRINTF(" %2d", data[i].value[j]);
+            }
+        }
+
+        ICLI_PRINTF("\n");
+    }
+
+    memcpy(prev_data, data, sizeof(prev_data));
+CODE_END
+CMD_END
+

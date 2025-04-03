@@ -1,0 +1,436 @@
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_FRR_ROUTER)
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include "icli_api.h"
+#include "frr_router_api.hxx"
+#include "frr_daemon.hxx"
+#include "frr_router_icli_functions.hxx"
+#include "ip_utils.hxx" // For vtss_conv_ipv4mask_to_prefix()
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+/* Update router access-list name valid length on runtime stage */
+static BOOL ROUTER_ICLI_runtime_access_list_name(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MIN_LEN,
+                     VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MAX_LEN);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MIN_LEN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MAX_LEN;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update Router key chain ID valid range on runtime stage */
+static BOOL ROUTER_ICLI_runtime_key_chain_key_id(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_ROUTER_KEY_CHAIN_KEY_ID_MIN,
+                     VTSS_APPL_ROUTER_KEY_CHAIN_KEY_ID_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_ROUTER_KEY_CHAIN_KEY_ID_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_ROUTER_KEY_CHAIN_KEY_ID_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+FUNCTION_END
+
+//
+// Local help message segment
+//
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no key chain <word1-31>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = This command is an invisible command which is used to prevent
+DOC_CMD_DESC    = user deleting the current submode accidentally.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_router_key_chain_prevent_delete_myself
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_KEYCHAIN
+MODE_VAR  = my_key_chain_name
+PROPERTY  = ICLI_CMD_PROP_INVISIBLE
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = key_chain_name
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+    vtss_appl_router_key_chain_name_t name;
+VARIABLE_END
+
+CODE_BEGIN
+    strcpy(name.name, key_chain_name);
+    if (vtss_appl_router_key_chain_name_del(&name) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Delete Router key chain name %s failed.\n", key_chain_name);
+    } else if (!strcmp(my_key_chain_name, key_chain_name)) {
+        (void)ICLI_MODE_EXIT();
+    }
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no key chain <word1-31>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = Use 'no key chain <word1-31>' to remove the router key chain name.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_router_key_chain_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = key_chain_name
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+    vtss_appl_router_key_chain_name_t name;
+VARIABLE_END
+
+CODE_BEGIN
+    strcpy(name.name, key_chain_name);
+    if (vtss_appl_router_key_chain_name_del(&name) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Delete Router key chain name %s failed.\n", key_chain_name);
+    }
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = key <1-255> key-string { unencrypted <word1-63> | encrypted <word128-224> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_router_key_chain_key_string_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_KEYCHAIN
+MODE_VAR  = keychain_name
+
+CMD_VAR =
+CMD_VAR = key_id
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = plaintext_pwd
+CMD_VAR =
+CMD_VAR = encrypted_pwd
+
+RUNTIME =
+RUNTIME = ROUTER_ICLI_runtime_key_chain_key_id
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+    FrrRouterCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.keychain_key_id = key_id;
+
+    if (plaintext_pwd) {
+        req.has_key_string_encrypted = false;
+        strncpy(req.keychain_key_string, plaintext_pwd, VTSS_APPL_ROUTER_KEY_CHAIN_KEY_STR_MAX_LEN);
+        req.keychain_key_string[VTSS_APPL_ROUTER_KEY_CHAIN_KEY_STR_MAX_LEN] = '\0';
+    } else if (encrypted_pwd) {
+        req.has_key_string_encrypted = true;
+        strncpy(req.keychain_key_string, encrypted_pwd, VTSS_APPL_ROUTER_KEY_CHAIN_ENCRYPTED_KEY_STR_MAX_LEN);
+        req.keychain_key_string[VTSS_APPL_ROUTER_KEY_CHAIN_ENCRYPTED_KEY_STR_MAX_LEN] = '\0';
+    }
+
+    (void)icli_str_cpy(req.keychain_name.name, keychain_name);
+    FRR_ICLI_router_key_chain_key_conf_set(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = no key <1-255> key-string
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_router_key_chain_key_string_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_KEYCHAIN
+MODE_VAR  = keychain_name
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = key_id
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP =
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+    FrrRouterCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.keychain_key_id = key_id;
+
+    (void)icli_str_cpy(req.keychain_name.name, keychain_name);
+    FRR_ICLI_router_key_chain_key_del(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** Access-list
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = router access-list <word1-31> {permit|deny} {any|<ipv4_addr> <ipv4_netmask>}
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_router_access_list_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+PROPERTY  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = access_list_name
+CMD_VAR = has_permit
+CMD_VAR =
+CMD_VAR = has_any_addr
+CMD_VAR = ipv4_addr
+CMD_VAR = ipv4_netmask
+
+RUNTIME =
+RUNTIME =
+RUNTIME = ROUTER_ICLI_runtime_access_list_name
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = router
+HELP = Router access list
+HELP = The name of the access list
+HELP = Permit the access right for the following IPv4 network domain
+HELP = Deny the access right for the following IPv4 network domain
+HELP = Any IPv4 address
+HELP = The IPv4 address for the access list entry
+HELP = The IPv4 network mask for the access list entry
+
+VARIABLE_BEGIN
+    FrrRouterCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    strcpy(req.access_list_name.name, access_list_name);
+    req.access_list_mode = has_permit ?
+        VTSS_APPL_ROUTER_ACCESS_LIST_MODE_PERMIT :
+        VTSS_APPL_ROUTER_ACCESS_LIST_MODE_DENY;
+    req.ipv4_network.address = has_any_addr ? 0 : ipv4_addr;
+    if (vtss_conv_ipv4mask_to_prefix(ipv4_netmask,
+                                     &req.ipv4_network.prefix_size) != VTSS_RC_OK) {
+        ICLI_PRINTF(
+                "%% Cannot map the IP address mask vaule to a valid network"
+                " mask length.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    FRR_ICLI_router_access_list_set(req);
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrRouterCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.has_no_form = true;
+    strcpy(req.access_list_name.name, access_list_name);
+    req.access_list_mode = has_permit ?
+        VTSS_APPL_ROUTER_ACCESS_LIST_MODE_PERMIT :
+        VTSS_APPL_ROUTER_ACCESS_LIST_MODE_DENY;
+    req.ipv4_network.address = has_any_addr ? 0 : ipv4_addr;
+    if (vtss_conv_ipv4mask_to_prefix(ipv4_netmask,
+                                     &req.ipv4_network.prefix_size) != VTSS_RC_OK) {
+        ICLI_PRINTF(
+                "%% Cannot map the IP address mask vaule to a valid network"
+                " mask length.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    FRR_ICLI_router_access_list_set(req);
+NO_FORM_CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no router access-list <word1-31>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_router_access_list_del_by_name
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+PROPERTY  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = access_list_name
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = ROUTER_ICLI_runtime_access_list_name
+
+HELP = ##ICLI_HELP_NO
+HELP = router
+HELP = Router access list
+HELP = The name of the access list
+
+VARIABLE_BEGIN
+    FrrRouterCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.has_no_form = true;
+    strcpy(req.access_list_name.name, access_list_name);
+    req.del_access_list_by_name = true;
+    FRR_ICLI_router_access_list_set(req);
+CODE_END
+CMD_END
+

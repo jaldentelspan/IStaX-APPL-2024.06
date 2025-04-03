@@ -1,0 +1,224 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>DHCPv6 Relay Configuration</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript">
+// Help page magic
+var help_page = "/help/help_dhcp6_relay_config.htm";
+
+// Global variables
+var myDynamicTable;
+
+/* Check function before send out the HTML request */
+function checkForm() {
+
+    return true;
+}
+
+/* Get the default entry of table row */
+function getMyRowDefaultRow() {
+    def_row = {
+        "key": ["VLAN 1", "VLAN 1"],
+        "val": {"RelayDestination":"ff05::1:3"}
+    };
+
+    return def_row;
+}
+
+/* Add table header */
+function addHeader(table_rows) {
+    var row = {
+        fields: [
+            { type: "disp_hdr", params: ["Delete"] },
+            { type: "disp_hdr", params: ["Interface"] },
+            { type: "disp_hdr", params: ["Relay Interface"] },
+            { type: "disp_hdr", params: ["Relay Destination"] }
+        ]
+    };
+    table_rows.push(row);
+}
+
+/* Add a single row in the dynamic table.
+ * Notice:
+ * Except for the general usage, this function also can be a callback function
+ * which is registed by addNewRowButton().
+ * In this case, the value of parameter "key" is an integer number (start from 1),
+ * it identify the new row index for the entry and the value of parameter "val"
+ * is null.
+ */
+function addRow(key, val, key_prefix) {
+    var elem_id, new_row_key, is_new_row = false;
+
+    /* When the value of parameter "val" is null, it means this function is
+     * called by addNewRowButton(). It requires the default entry datas. */
+    if (!val) {
+        is_new_row = true;
+        new_row_key = getMyRowDefaultRow().key;
+        val = getMyRowDefaultRow().val;
+    }
+
+    var row_affix = (is_new_row ? key_prefix : myDynamicTable.getRowPrefixs("rowKeyPrefix")) + rowKey2Id(key);
+    var row = {
+        "key": is_new_row ? new_row_key : key,
+        fields: [
+            { type: "chkbox", params: [0, "c", key_prefix + rowKey2Id(key)] },
+            { type: "text", params: [is_new_row ? new_row_key[0] : key[0], "cr"] },
+            { type: "text", params: [is_new_row ? new_row_key[1] : key[1], "cr"] },
+            {
+                type: "input",
+                params: [val.RelayDestination, "cr", "RelayDestination_" + row_affix, 25, 50],
+                validate: { func: isIpv6Str2, params: ["RelayDestination_" + row_affix, "Relay Destination", 0] }
+            }
+        ]
+    };
+
+    /* When a new row is created, use <input> form for the entry key.
+     * Notice that the element ID MUST start with the following syntax
+     * newrowKey_<key_idx>_<json_name>
+     * For example, "newrowKey_1_Network", "newrowKey_1_IpSubnetMaskLength".
+     */
+    if (is_new_row) {
+        var new_row_prefix = key_prefix + key;
+
+        // VLAN Interface
+        elem_id = new_row_prefix + "_vlanInterface";
+        row.fields[1] = {
+            type: "input",
+            params: [new_row_key[0], "cr", elem_id, 15, 15]
+        };
+
+        // Relay VLAN interface
+        elem_id = new_row_prefix + "_relayVlanInterface";
+        row.fields[2] = {
+            type: "input",
+            params: [new_row_key[1], "cr", elem_id, 15, 15]
+        };
+
+        // Relay address
+        elem_id = "RelayDestination_" + row_affix;
+        row.fields[3] = {
+            type: "input",
+            params: [val.RelayDestination, "cr", elem_id, 25, 50],
+            validate: { func: isIpv6Str2, params: [elem_id, "Relay Destination", 0] }
+        };
+
+    }
+    console.log("addRow::row:");
+    console.log(row);
+
+    return row;
+}
+
+/* Add table rows in the dynamic table */
+function addRows(recv_json) {
+    var row, empty_colspan = 4;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function (record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row (Display "No entry exists" when empty row)
+    if (!recv_json.length) {
+        table_rows.push({ fields: [{ type: "empty_row", params: [empty_colspan] }] });
+    }
+
+    return table_rows;
+}
+
+/* Process the received JSON data */
+function processUpdate(recv_json, name) {
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    var myConf = Array();
+    Object.each(recv_json, function (record) {
+        myConf.push(record);
+    });
+
+    // Save the received JSON data (both of the original and filted)
+    myDynamicTable.saveRecvJson(name, myConf);
+    myDynamicTable.saveRecvJson("original_" + name, recv_json); // For isDuplicatedRowKey()
+
+    // Add table rows
+    var table_rows = addRows(myConf);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Add buttons
+    myDynamicTable.addNewRowButton(addRow, 256);
+    myDynamicTable.addSubmitButton(name, "dhcp6_relay.config.vlan", requestUpdate);
+    myDynamicTable.addResetButton();
+
+}
+
+/* Update the received HTML request */
+function requestUpdate(recv_json, name) {
+    // Restore table content
+    myDynamicTable.restore();
+
+    requestJsonDoc("dhcp6_relay.config.vlan.get", null, processUpdate, "config");
+}
+
+/* Initialize resores when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", { func: checkForm, params: [] });
+
+    requestJsonDoc("dhcp6_relay.config.vlan.get", null, requestUpdate, "config");
+});
+    </script>
+</head>
+
+<body class="content">
+    <h1>DHCPv6 Relay Configuration</h1>
+    <div class="refreshbar">
+        <img id="update" alt="" src="images/updating.gif">
+    </div>
+    <div id="myTableContent"></div>
+</body>
+
+</html>

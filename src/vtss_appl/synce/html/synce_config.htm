@@ -1,0 +1,823 @@
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<!--
+ Microchip is aware that some terminology used in this technical document is
+ antiquated and inappropriate. As a result of the complex nature of software
+ where seemingly simple changes have unpredictable, and often far-reaching
+ negative results on the software's functionality (requiring extensive retesting
+ and revalidation) we are unable to make the desired changes in all legacy
+ systems without compromising our product or our clients' products.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>SyncE Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_synce_config.htm";
+// Creating arrays used to convert json syntax to web syntax
+var syncePortsTable, ptpPortsTable, myPortInfo, myPtpCapabilities, mySynceCapabilities, table;
+var oTPort = Array(), oVPort = Array();
+var gPortStatus = null, gPortConfig = null, gClockSourceStatus = null, gClockSourceConfig = null, gClockSourcePortConfig = null, 
+    gClockSourceWtrConfig = null, gClockSelectionStatus = null, gClockSelectionConfig = null, gClockStationConfig = null;
+var oTSSM = Array("QL NONE","QL PRC","QL SSUA","QL SSUB","QL EEC1","QL DNU","QL INV","QL FAIL","QL LINK","QL PRS",
+                  "QL STU","QL ST2","QL TNC","QL ST3E","QL EEC2","QL SMC","QL PROV","QL DUS");
+var oKSSM = Array("qlNone","qlPrc","qlSsua", "qlSsub", "qlEec1", "qlDnu", "qlInv","qlFail","qlLink","qlPrs","qlStu",
+                  "qlSt2","qlTnc","qlSt3e","qlEec2","qlSmc","qlProv","qlDus");
+var oTPriority = null;
+var oVPriority = null;
+var oTSource = null;
+var oVSource = null;
+var oTEec = Array(1,2);
+var oVEec = Array("eecOption1","eecOption2");
+var oTSSM_over_opt_1 = Array("Disabled", "QL PRC", "QL SSUA", "QL SSUB", "QL EEC1", "QL DNU");
+var oVSSM_over_opt_1 = Array("qlNone", "qlPrc", "qlSsua", "qlSsub", "qlEec1", "qlDnu");
+var oTSSM_over_opt_2 = Array("Disabled", "QL PRS", "QL STU", "QL ST2", "QL TNC", "QL ST3E", "QL EEC2", "QL SMC", "QL PROV", "QL DUS");
+var oVSSM_over_opt_2 = Array("qlNone", "qlPrs", "qlStu", "qlSt2", "qlTnc", "qlSt3e", "qlEec2", "qlSmc", "qlProv", "qlDus");
+var oTSSM_selection_opt_1 = Array("Disabled", "QL PRC", "QL SSUA", "QL SSUB", "QL EEC1", "QL DNU", "QL INV");
+var oVSSM_selection_opt_1 = Array("qlNone", "qlPrc", "qlSsua", "qlSsub", "qlEec1", "qlDnu", "qlInv");
+var oTSSM_selection_opt_2 = Array("Disabled", "QL PRS", "QL STU", "QL ST2", "QL TNC", "QL ST3E", "QL EEC2", "QL SMC", "QL PROV", "QL DUS");
+var oVSSM_selection_opt_2 = Array("qlNone", "qlPrs", "qlStu", "qlSt2", "qlTnc", "qlSt3e", "qlEec2", "qlSmc", "qlProv", "qlDus");
+var oTHoldoff = Array("Disabled","300ms","400ms","500ms","600ms","700ms","800ms","900ms","1000ms","1100ms","1200ms","1300ms","1400ms","1500ms","1600ms","1700ms","1800ms","Test");
+var oVHoldoff = Array(0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 100);
+var oTaneg = Array("None", "Prefer Slave", "Prefer Master", "Forced Slave");
+var oVaneg = Array("none", "preferedSlave", "preferedMaster", "forcedSlave");
+var oTClearWtr = Array("none","clear");
+var oVClearWtr = Array(0, 1);
+var oTPtsf = Array("None", "Unusable", "LossSync", "LossAnn");
+var oVPtsf = Array("none", "unusable", "lossSync", "lossAnnounce");
+var oTSelectMode = Array("Manual", "Manual To Selected", "Auto NonRevertive", "Auto Revertive", "Forced Holdover", "Forced Free Run");
+var oVSelectMode = Array("manual", "manualToSelected", "autoNonrevertive", "autoRevertive", "forcedHoldover", "forcedFreeRun");
+var oTWTR = Array("Disable", "1M", "2M", "3M", "4M", "5M", "6M", "7M", "8M", "9M", "10M", "11M", "12M");
+var oVWTR = Array(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+var SelectorState = Array("Locked", "Holdover", "Free Run", "PTP", "Ref.Fail", "Acquire Lock");
+var eecOption = null;
+var oTHardwareId = Array("None", "SI 5326", "SI 5328", "ZL 30343", "ZL 30363", "Omega", "ZL 30771", "ZL 30772", "ZL 30773", "ZL 30732");
+var oVHardwareId = Array("hwNone", "hwSI5326", "hwSI5328", "hwZL30343", "hwZL30363", "hwOmega", "hwZL30771", "hwZL30772", "hwZL30773", "hwZL30732");
+var oTStationClockModeIn = new Array (new Array ("Disabled","1.544 MHz","2.048 MHz","10.00 MHz"),new Array ("Disabled","10.00 MHz"),new Array ("Disabled"), new Array ("Disabled","1.544 MHz","2.048 MHz","10.00 MHz"));
+var oVStationClockModeIn = new Array(new Array("disabled", "freq1544kHz", "freq2048kHz", "freq10MHz"), new Array("disabled", "freq10MHz"), new Array("disabled"),  new Array("disabled", "freq1544kHz", "freq2048kHz", "freq10MHz"));
+var oTStationClockModeOut = new Array (new Array ("Disabled","1.544 MHz","2.048 MHz","10.00 MHz"), new Array ("Disabled","2.048 MHz","10.00 MHz"), new Array ("Disabled"), new Array ("Disabled","10.00 MHz"));
+var oVStationClockModeOut = new Array (new Array("disabled", "freq1544kHz", "freq2048kHz", "freq10MHz"), new Array("disabled", "freq2048kHz", "freq10MHz"), new Array("disabled"), new Array("disabled", "freq10MHz"));
+var keyLength = null;
+/*
+ * Function: addHeader
+ * ----------------------------
+ *   Adds the headers to the different tables
+ *
+ *   Inputs:
+ *   table_rows: An empty array to save the header row in 
+ *   table: A string specifying which table 
+ *
+ *   Returns: none
+ */
+function addHeader(table_rows, table)
+{
+    var row;
+    if (table == "syncePort") {
+        row = {fields:[
+                    {type:"disp_hdr", params:["Port"]},
+                    {type:"disp_hdr", params:["SSM Enable"]},
+                    {type:"disp_hdr", params:["Tx SSM"]},
+                    {type:"disp_hdr", params:["Rx SSM"]},
+                    {type:"disp_hdr", params:["1000BaseT Mode"]}
+                    ]
+            };
+        table_rows.push(row);
+    }
+    else if (table == "clockSource") {
+        row = {fields:[
+                    {type:"disp_hdr", params:["Clock\nSource"]},
+                    {type:"disp_hdr", params:["Nominated"]},
+                    {type:"disp_hdr", params:["Port"]},
+                    {type:"disp_hdr", params:["Priority"]},
+                    {type:"disp_hdr", params:["SSM\nOverwrite"]},
+                    {type:"disp_hdr", params:["Hold Off"]},
+                    {type:"disp_hdr", params:["ANEG mode"]},
+                    {type:"disp_hdr", params:[""]},
+                    {type:"disp_hdr", params:["LOCS"]},
+                    {type:"disp_hdr", params:["SSM"]},
+                    {type:"disp_hdr", params:["WTR"]},
+                    {type:"disp_hdr", params:["Clear\nWTR"]}
+                    ]
+            };
+        table_rows.push(row);
+    }
+    else if (table == "clockSelection") {
+        row = {fields:[
+                    {type:"disp_hdr", params:["Mode"]},
+                    {type:"disp_hdr", params:["Source"]},
+                    {type:"disp_hdr", params:["WTR Time"]},
+                    {type:"disp_hdr", params:["SSM Hold Over"]},
+                    {type:"disp_hdr", params:["SSM Free Run"]},
+                    {type:"disp_hdr", params:["EEC Option"]},
+                    {type:"disp_hdr", params:[""]},
+                    {type:"disp_hdr", params:["State"]},
+                    {type:"disp_hdr", params:["Clock Source"]},
+                    {type:"disp_hdr", params:["LOL"]},
+                    {type:"disp_hdr", params:["DHOLD"]}
+                    ]
+        
+        };
+        table_rows.push(row);
+    }
+    else if (table == "stationClock") {
+        row = {fields:[
+                    {type:"disp_hdr", params:["Clock input frequency"]},
+                    {type:"disp_hdr", params:["Clock output frequency"]},
+                    {type:"disp_hdr", params:["Clock hardware id"]},
+                    {type:"disp_hdr", params:["Clock F/W version"]}
+                    ]
+        };
+        table_rows.push(row);
+    }
+}
+
+/*
+ * Function: addRows
+ * ----------------------------
+ *   Assigning the JSON values to the coherent tables
+ *
+ *   Inputs:
+ *   table: A string specifying which table 
+ *
+ *   Returns: 
+ *   table_rows: An array containing the updated table row values
+ */
+
+function addRows(table)
+{
+    var table_rows = new Array();
+    addHeader(table_rows, table);
+    if (table == "syncePort"){
+        for (index=0; index<gPortConfig.length; ++index) {
+            table_rows.push(addRow(gPortConfig[index].key, gPortConfig[index].val, gPortStatus[index].val, table, null, null));
+        }
+    }
+    else if (table == "clockSource"){
+        for (index=0; index<gClockSourceConfig.length; ++index) {
+            table_rows.push(addRow(gClockSourceConfig[index].key, gClockSourceConfig[index].val, gClockSourceStatus[index].val,
+                                   table, gClockSourceWtrConfig[index].val, null));
+        }  
+    }
+    else if (table == "clockSelection"){
+        table_rows.push(addRow(null, gClockSelectionConfig, gClockSelectionStatus, table, null, null));
+    }
+    else if (table == "stationClock"){
+        table_rows.push(addRow(null, gClockStationConfig, mySynceCapabilities, table));
+    }
+    return table_rows;
+}
+
+/*
+ * Function: addRow
+ * ----------------------------
+ *   Add rows to all tables and assign their values using JSON by converting 
+ *   the JSON syntax to a user friendly web syntax.
+ *
+ *   Inputs:
+ *   key: Each key from the JSON command
+ *   conf: The configurable variables from the JSON command 
+ *   status: The status variables from the JSON command
+ *   table: A string specifying which table 
+ *   conf2: An extra slot for an extra JSON command
+ *
+ *   Returns: 
+ *   row: containing the updated table values
+ */
+
+function addRow(key, conf, status, table, conf2)
+{
+    if (table == "syncePort") {
+        var row = {fields:[
+                       {type:"text",   params:[oTPort[oVPort.indexOf(key)], "cr"]},
+                       {type:"chkbox", params:[conf.ssmEnabled ? true : false, "c", "ssm_Enable" + key]},
+                       {type:"text",   params:[conf.ssmEnabled ? oTSSM[oKSSM.indexOf(status.ssmTx)] : "", "c", "port_ssmTX"]},
+                       {type:"text",   params:[conf.ssmEnabled ? oTSSM[oKSSM.indexOf(status.ssmRx)] : "", "c", "port_ssmRX"]},
+                       {type:"text",   params:[!status.master ? "Slave" : "Master", "c", "port_Master" + key]}
+                      ]
+                };
+
+        return row;
+    }
+    else if (table == "clockSource") {
+        var oTClockSourcePort = Array(), oVClockSourcePort = Array();  
+        oTClockSourcePort.length = 0; 
+        oVClockSourcePort.length = 0;
+        // Convert the networkPort and clockInPort syntax to the web version
+        Object.each(gClockSourcePortConfig, function(record) {
+            if (record.key[0] == key) {
+                if (record.val.networkPort == "NONE") {
+                    if (record.val.clockInPort === 0) {
+                        oTClockSourcePort.push("S-CLK");
+                        oVClockSourcePort.push(0);
+                    } else {
+                        oTClockSourcePort.push("PTP-" + (record.val.clockInPort-128));
+                        oVClockSourcePort.push(record.val.clockInPort);
+                    }
+                } else {
+                    oTClockSourcePort.push(oTPort[oVPort.indexOf(record.val.networkPort)]);
+                    oVClockSourcePort.push(record.val.networkPort);
+                }
+             
+            }
+        });
+
+            row = {fields:[
+                       {type:"text",   params:[key, "cr"]},
+                       {type:"chkbox", params:[conf.nominated ? true : false, "c", "nominated_Enable" + key]},
+                       {type:"select", params:[oTClockSourcePort, oVClockSourcePort,
+                       conf.networkPort != "NONE" ? conf.networkPort : conf.clkInPort, "cr", "clockSource_Port" + key]},
+                       {type:"select", params:[oTPriority, oVPriority, conf.priority, "c", "clockSource_Prio" + key]},
+                       {type:"select", params:[eecOption == "eecOption1" ? oTSSM_over_opt_1 : oTSSM_over_opt_2,
+                       eecOption == "eecOption1" ? oVSSM_over_opt_1 : oVSSM_over_opt_2, conf.ssmOverwrite, "c",
+                       "clockSource_Overwrite" + key]},
+                       {type:"select", params:[oTHoldoff, oVHoldoff, conf.holdoffTime, "c", "clockSource_Holdoff" + key]},
+                       {type:"select", params:[oTaneg, oVaneg, conf.anegMode, "c", "clockSource_Aneg" + key]},
+                       {type:"text",   params:[""]},
+                       {type:"image",  params:["c", status.locs ? "images/led-down.gif" : "images/led-up.gif"]},
+                       // The option for fos that is currently not used
+                       //{type:"image",  params:["c", status.fos ? "images/led-down.gif" : "images/led-up.gif"]},
+                       {type:"image",  params:["c", status.ssm === true ? "images/led-down.gif" : "images/led-up.gif"]},
+                       {type:"image",  params:["c", status.wtr === true ? "images/led-down.gif" : "images/led-up.gif"]},
+                       {type:"select", params:[oTClearWtr, oVClearWtr, conf2.clearWtr, "c", "clockSource_Clearwtr" + key]}
+                      ]
+                };
+        return row;
+    }
+    else if (table == "clockSelection") {
+        var index = 0;
+        if (status.selectorState.startsWith("l")) {
+            index = 0;
+        }
+        else if (status.selectorState.startsWith("h")) {
+            index = 1;
+        }
+        else if (status.selectorState.startsWith("f")) {
+            index = 2;
+        }
+        else if (status.selectorState.startsWith("p")) {
+            index = 3;
+        }
+        else if (status.selectorState.startsWith("r")) {
+            index = 4;
+        }
+        else if (status.selectorState.startsWith("a")) {
+            index = 5;
+        }
+            row = {fields:[
+                       {type:"select",   params:[oTSelectMode, oVSelectMode, conf.selectionMode, "cr", "clockSelection_Mode"]},
+                       {type:"select",   params:[oTSource, oVSource, conf.source, "cr", "clockSelection_Source"]},
+                       {type:"select",   params:[oTWTR, oVWTR, conf.wtrTime, "cr", "clockSelection_WtrTime"]},
+                       {type:"select",   params:[conf.eecOption == "eecOption1" ? oTSSM_selection_opt_1 : oTSSM_selection_opt_2, 
+                       conf.eecOption == "eecOption1" ? oVSSM_selection_opt_1 : oVSSM_selection_opt_2, conf.ssmHoldover, "cr", "clockSelection_Holdover"]},
+                       {type:"select",   params:[conf.eecOption == "eecOption1" ? oTSSM_selection_opt_1 : oTSSM_selection_opt_2, 
+                       conf.eecOption == "eecOption1" ? oVSSM_selection_opt_1 : oVSSM_selection_opt_2, conf.ssmFreerun, "cr", "clockSelection_Freerun"]},
+                       {type:"select",   params:[oTEec, oVEec, conf.eecOption, "cr", "clockSelection_Eec"]},
+                       {type:"text",     params:[""]},
+                       {type:"text",     params:[SelectorState[index], "cr", "clockSelection_State"]},
+                       {type:"text",     params:[status.selectorState == "locked" && status.clockInput !== 5 ? status.clockInput : " ", "c"]},
+                       {type:"image",    params:["c", status.lol === true ? "images/led-down.gif" : "images/led-up.gif"]},
+                       {type:"image",    params:["c", status.dhold === true ? "images/led-down.gif" : "images/led-up.gif"]}
+                      ]
+                };
+    
+      eecOption = conf.eecOption;
+      return row;
+        
+    }
+    else if (table == "stationClock") {
+        for (i=0;i<oVHardwareId.length;i++){
+            if (status.dpllType == oVHardwareId[i]){
+                dpllType = oTHardwareId[i];
+                if (status.dpllType == "hwZL30772") {
+                    // reading/output of version is only supported on ZL3077
+                    dpllFwVer = status.dpllFwVer.toString(16);
+                }
+                else {
+                    dpllFwVer = "-";
+                }
+                break;
+            }
+        };
+        row = {fields:[
+                   {type:"select",   params:[oTStationClockModeIn[status.clockType],oVStationClockModeIn[status.clockType], conf.stationClkIn, "cr", "stationClock_ClkIn"]},
+                   {type:"select",   params:[oTStationClockModeOut[status.clockType],oVStationClockModeOut[status.clockType], conf.stationClkOut, "cr", "stationClock_ClkOut"]},
+                   {type:"text",     params:[dpllType, "cr", "stationClock_HwId"]},
+                   {type:"text",     params:[dpllFwVer, "cr", "stationClock_FwVer"]}
+                ]
+            };
+        return row;
+    }
+}
+
+/*
+ * Function: cbEecOptionChange
+ * ----------------------------
+ *   Updates the 'SSM Overwrite', 'SSM Hold Over' and 'SSM Free Run'
+ *   if any changes to the 'EEC Option' occurs.
+ *
+ *   Inputs: none
+ * 
+ *   Returns: none
+ */
+
+function cbEecOptionChange()
+{
+    var newEecOption = document.getElementById("clockSelection_Eec").value;
+    if (newEecOption == "eecOption2") {  
+        for (var i = 1; i <= keyLength; i++) {
+            UpdateIdSelect("clockSource_Overwrite" + i, oTSSM_over_opt_2, oVSSM_over_opt_2, 0);
+        }
+        UpdateIdSelect("clockSelection_Holdover", oTSSM_selection_opt_2, oVSSM_selection_opt_2, 0);
+        UpdateIdSelect("clockSelection_Freerun", oTSSM_selection_opt_2, oVSSM_selection_opt_2, 0);
+    }
+    else {
+        for (var j = 1; j <= keyLength; j++) {
+            UpdateIdSelect("clockSource_Overwrite" + j, oTSSM_over_opt_1, oVSSM_over_opt_1, 0);
+        }
+        UpdateIdSelect("clockSelection_Holdover", oTSSM_selection_opt_1, oVSSM_selection_opt_1, 0);
+        UpdateIdSelect("clockSelection_Freerun", oTSSM_selection_opt_1, oVSSM_selection_opt_1, 0);
+    }
+}
+
+/*
+ * Function: resetForms
+ * ----------------------------
+ *   Discard changes done to any of the unsaved tables
+ *
+ *   Inputs: none
+ * 
+ *   Returns: none
+ */
+
+function resetForms()
+{
+    syncePortsTable.resetEvent();
+    ptpPortsTable.resetEvent();
+    csnsPortsTable.resetEvent();
+    csmsPortsTable.resetEvent();
+    stationClockTable.resetEvent();
+}
+
+/*
+ * Function: readyToUpdated
+ * ----------------------------
+ *   Checks that all JSON values has been saved
+ *
+ *   Inputs: none
+ * 
+ *   Returns:
+ *   true
+ */
+
+function readyToUpdate() 
+{
+    if (gPortStatus && gPortConfig && gClockSourceStatus && gClockSourceConfig && gClockSourcePortConfig && gClockSourceWtrConfig && gClockSelectionStatus && gClockSelectionConfig && gClockStationConfig && myPortInfo && myPtpCapabilities && mySynceCapabilities) {
+        return true;
+    }
+}
+
+/*
+ * Function: processUpdatePtpPorts
+ * ----------------------------
+ *   Creates the table for the PTP ports and update its values.
+ *
+ *   Inputs:
+ *   recv_json: The received JSON command values
+ *   name: String containing a reference name 
+ * 
+ *   Returns: none
+ */
+
+function processUpdatePtpPorts(recv_json, name)
+{
+    var table_ptpPorts = new Array();
+    var hdr, row;
+
+    ptpPortsTable.saveRecvJson("ptpPorts", recv_json);
+    hdr = {fields:[
+                {type:"disp_hdr", params:["Instance"]},
+                {type:"disp_hdr", params:["Rx SSM"]},
+                {type:"disp_hdr", params:["PTSF"]}
+                ]
+          };
+    table_ptpPorts.push(hdr);
+
+    for (index=0; index<recv_json.length; ++index) {
+        table_ptpPorts.push(
+            {fields:[
+                {type:"text",   params:[recv_json[index].key, "cr"]},
+                {type:"text",   params:[oTSSM[oKSSM.indexOf(recv_json[index].val.ssmRx)], "cr"]},
+                {type:"text",   params:[oTPtsf[oVPtsf.indexOf(recv_json[index].val.ptsf)], "cr"]}
+                     ]
+                        });
+    }
+
+    ptpPortsTable.addRows(table_ptpPorts);
+    ptpPortsTable.update();
+}
+
+/*
+ * Function: processUpdate
+ * ----------------------------
+ *   Save the values for each JSON command and when all values are received
+ *   update the tables on the web interface.
+ *   Add a header control bar to enable a multiple selection option
+ *
+ *   Inputs:
+ *   recv_json: The received JSON command values
+ *   name: String containing a reference name 
+ * 
+ *   Returns: none
+ */
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    if (name == "portInfo") {
+        myPortInfo = recv_json; 
+    }
+    
+    else if (name == "ptpCapabilities") {
+        myPtpCapabilities = recv_json;
+    }
+
+    else if (name == "synceCapabilities") {
+        mySynceCapabilities = recv_json;
+    }
+
+    else if (name == "portStatus") {
+        gPortStatus = recv_json;
+    }
+
+    else if (name == "portConfig") {
+        gPortConfig = recv_json;
+    }
+
+    else if (name == "clockSourceStatus") {
+        gClockSourceStatus = recv_json;
+    }
+
+    else if (name == "clockSourceConfig") {
+        gClockSourceConfig = recv_json;
+        keyLength = gClockSourceConfig.length;
+        oTPriority = genArrayStr(0, keyLength-1);
+        oVPriority = genArrayInt(0, keyLength-1);
+        oTSource = genArrayStr(1, keyLength);
+        oVSource = genArrayInt(1, keyLength);
+    }
+
+    else if (name == "clockSourcePortConfig") {
+        gClockSourcePortConfig = recv_json;
+    }
+    
+    else if (name == "clockSourceWtrConfig") {
+        gClockSourceWtrConfig = recv_json;
+    }
+
+    else if (name == "clockSelectionStatus") {
+        gClockSelectionStatus = recv_json;
+    }
+
+    else if (name == "clockSelectionConfig") {
+        gClockSelectionConfig = recv_json;
+    }
+
+    else if (name == "stationClockConfig") {
+        gClockStationConfig = recv_json;
+    }
+
+    if (readyToUpdate()) {
+        oTPort.length = 0;
+        oVPort.length = 0;
+        Object.each(myPortInfo, function(record, idx) {
+            oTPort.push(record.val);
+            oVPort.push(record.key);
+        });
+
+        table = "syncePort";
+        syncePortsTable.saveRecvJson("portConfig", gPortConfig);
+        syncePortsTable.addRows(addRows(table));
+        syncePortsTable.update();
+        table = "clockSelection";
+        csnsPortsTable.saveRecvJson("clockSourceConfig", gClockSourceConfig);
+        csmsPortsTable.saveRecvJson("clockSelectionConfig",gClockSelectionConfig);
+        csmsPortsTable.addRows(addRows(table));
+        csmsPortsTable.update();
+
+        document.getElementById("clockSelection_Eec").addEventListener("change", cbEecOptionChange, false);
+
+        table = "clockSource";
+        csnsPortsTable.saveRecvJson("clockSourcePortConfig", gClockSourcePortConfig);
+        csnsPortsTable.saveRecvJson("clockSourceWtrConfig", gClockSourceWtrConfig);
+        csnsPortsTable.addRows(addRows(table));
+        csnsPortsTable.update();
+        table = "stationClock";
+        stationClockTable.saveRecvJson("stationClockConfig",gClockStationConfig);
+        stationClockTable.addRows(addRows(table));
+        stationClockTable.update();
+
+        var cBar = new HeaderControlBar([
+                                        { text: "*", className: "c" },
+                                        { name: "ssm_Enable" },
+                                        "",
+                                        "",
+                                        ""
+                                        ]);
+        cBar.construct($("syncePortsTableTbody"), 'config_odd');
+    }
+}
+
+/*
+ * Function: requestUpdate
+ * ----------------------------
+ *   Get the values for each JSON command and call processUpdate 
+ *   to save the values and process them.
+ *
+ *   Inputs: none
+ * 
+ *   Returns: none
+ */
+
+function requestUpdate()
+{   
+    requestJsonDoc("port.namemap.get", null, processUpdate, "portInfo");
+    requestJsonDoc("ptp.capabilities.get", null, processUpdate, "ptpCapabilities");
+    requestJsonDoc("synce.capabilities.get", null, processUpdate, "synceCapabilities");
+    requestJsonDoc("synce.status.possibleSources.get",null, processUpdate, "clockSourcePortConfig");
+    requestJsonDoc("synce.status.ports.portStatus.get", null, processUpdate, "portStatus");
+    requestJsonDoc("synce.config.ports.portConfig.get", null, processUpdate, "portConfig"); 
+    requestJsonDoc("synce.status.sources.clockSourceNomination.get",null, processUpdate, "clockSourceStatus");
+    requestJsonDoc("synce.config.sources.clockSourceNomination.get",null, processUpdate, "clockSourceConfig");
+    requestJsonDoc("synce.control.sources.clockSource.get",null, processUpdate, "clockSourceWtrConfig");
+    requestJsonDoc("synce.status.synceStatusPtp.synceStatusPtpPortStatus.get", null, processUpdatePtpPorts, "ptpPorts");
+    requestJsonDoc("synce.status.global.clockSelectionMode.get",null, processUpdate, "clockSelectionStatus");
+    requestJsonDoc("synce.config.global.clockSelectionMode.get",null, processUpdate, "clockSelectionConfig");
+    requestJsonDoc("synce.config.global.stationClocks.get" ,null, processUpdate, "stationClockConfig");
+
+}
+
+/*
+ * Function: checkForm
+ * ----------------------------
+ *   A callback function used by JSON Dynamic table 
+ *
+ *   Inputs: none
+ * 
+ *   Returns:
+ *   true
+ */
+
+function checkForm(form)
+{
+    return true;                // Feed the chickens and go home
+}
+
+/*
+ * Function: submitForm
+ * ----------------------------
+ *   Check if any changes has been made to the tables 
+ *   and update with the new values.
+ *
+ *   Inputs: none
+ * 
+ *   Returns: none
+ */
+
+function submitForm()
+{
+
+    // --------------------Submit syncePortsTable------------------- //
+
+    // Validate row data
+    if (!syncePortsTable.validate()) {
+        return;
+    }
+
+    var recv_json = syncePortsTable.getRecvJson("portConfig");
+    // Values in this structure doesn't matter. Will be assigned values later
+    json_obj = {"ssmEnabled":false};
+
+    Object.each(recv_json, function(record) {
+        var port = record.key;
+
+        json_obj["ssmEnabled"]                 = $("ssm_Enable" + port).checked ? true : false;
+
+        if (JSON.stringify(record.val) != JSON.stringify(json_obj)) {
+            var submit_json = [record.key, json_obj];
+            // This record changed, update with new values
+            requestJsonDoc("synce.config.ports.portConfig.set", submit_json);
+        }
+
+    });
+
+    // -------------------Submit csmsPortsTable------------------- //
+    // Validate row data
+    if (!csmsPortsTable.validate()) {
+        return;
+    }
+    
+    recv_json = csmsPortsTable.getRecvJson("clockSelectionConfig");
+    // Values in this structure doesn't matter. Will be assigned values later
+    json_obj = {"selectionMode":0,"source":0,"wtrTime":0,"ssmHoldover":0,"ssmFreerun":0,"eecOption":0};
+
+    json_obj["selectionMode"]                 = $("clockSelection_Mode").value;
+    json_obj["source"]                        = parseInt($("clockSelection_Source").value,10);
+    json_obj["wtrTime"]                       = parseInt($("clockSelection_WtrTime").value,10);
+    json_obj["ssmHoldover"]                   = $("clockSelection_Holdover").value;
+    json_obj["ssmFreerun"]                    = $("clockSelection_Freerun").value;
+    json_obj["eecOption"]                     = $("clockSelection_Eec").value;
+    
+    if (JSON.stringify(recv_json) != JSON.stringify(json_obj)) {
+        var submit_json = [json_obj];
+        // This record changed, update with new values
+        requestJsonDoc("synce.config.global.clockSelectionMode.set", submit_json);
+    }
+
+    // -------------------Submit csnsPortsTable------------------- //
+
+    // Validate row data
+    if (!csnsPortsTable.validate()) {
+        return;
+    }
+
+    recv_json = csnsPortsTable.getRecvJson("clockSourceConfig");
+    // Values in this structure doesn't matter. Will be assigned values later
+    json_obj = {"nominated":false,"networkPort":0,"clkInPort":0,"priority":0,"ssmOverwrite":"qlNone","holdoffTime":0,
+               "anegMode":"none"};
+
+    Object.each(recv_json, function(record) {
+        var port = record.key;
+        json_obj["nominated"]                  = $("nominated_Enable" + port).checked ? true : false;
+        if ($("clockSource_Port" + port).value >= 128 || $("clockSource_Port" + port).value === "0") {
+            json_obj["clkInPort"]              = parseInt($("clockSource_Port" + port).value,10);
+            json_obj["networkPort"]            = "NONE";
+        } else {
+            json_obj["networkPort"]            = $("clockSource_Port" + port).value;
+            json_obj["clkInPort"]              = 0;
+        }
+        json_obj["priority"]                   = parseInt($("clockSource_Prio" + port).value,10);
+        json_obj["ssmOverwrite"]               = $("clockSource_Overwrite" + port).value;
+        json_obj["holdoffTime"]                = parseInt($("clockSource_Holdoff" + port).value,10);
+        json_obj["anegMode"]                   = $("clockSource_Aneg" + port).value;
+
+        if (JSON.stringify(record.val) != JSON.stringify(json_obj)) {
+            var submit_json = [record.key, json_obj];
+            // This record changed, update with new values
+            requestJsonDoc("synce.config.sources.clockSourceNomination.set", submit_json);
+        }
+        });
+
+    // Updating clearWtr
+
+    recv_json = csnsPortsTable.getRecvJson("clockSourceWtrConfig");
+    // Values in this structure doesn't matter. Will be assigned values later
+    json_obj = {"clearWtr":0};
+
+    Object.each(recv_json, function(record) {
+        var port = record.key; 
+        if (JSON.stringify(record.val) != JSON.stringify(json_obj)) {
+            var submit_json = [record.key, json_obj];
+            // This record changed, update with new values
+            requestJsonDoc("synce.control.sources.clockSource.set", submit_json);
+        }
+        });
+
+    // --------------------Submit stationClockTable------------------- //
+
+    // Validate row data
+    if (!stationClockTable.validate()) {
+        return;
+    }
+    recv_json = stationClockTable.getRecvJson("stationClockConfig");
+
+    // Values in this structure doesn't matter. Will be assigned values later
+    json_obj = {"stationClkOut":0,"stationClkIn":0};
+
+    json_obj["stationClkOut"]                 = $("stationClock_ClkOut").value;
+    json_obj["stationClkIn"]                  = $("stationClock_ClkIn").value;
+
+
+    if (JSON.stringify(recv_json) != JSON.stringify(json_obj)) {
+        submit_json = [json_obj];
+        // This record changed, update with new values
+        requestJsonDoc("synce.config.global.stationClocks.set", submit_json);
+    }
+    requestUpdate();
+}
+
+/*
+ * Function: window.onload
+ * ----------------------------
+ *   Creates the JSON table bodies and request a table update
+ *
+ *   Inputs: none
+ * 
+ *   Returns: none
+ */
+
+window.onload = function() {
+    // Create a from with table body for receive/transmit JSON data
+    syncePortsTable = new DynamicTable("syncePortsTable", "config", null, {func:checkForm, params:[]});
+    ptpPortsTable = new DynamicTable("ptpPortsTable", "config", null, {func:checkForm, params:[]});
+    csnsPortsTable = new DynamicTable("csnsPortsTable", "config", null, {func:checkForm, params:[]});
+    csmsPortsTable = new DynamicTable("csmsPortsTable", "config", null, {func:checkForm, params:[]});
+    stationClockTable = new DynamicTable("stationClockTable", "config", null, {func:checkForm, params:[]});
+    myPortInfo = null;
+    myPtpCapabilities = null;
+    requestUpdate();
+};
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>SyncE Configuration <span id="display_sid"></span></h1>
+
+<div class="refreshbar">
+    <form action="#">
+     <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+     <img id="update" alt="" src="images/updating.gif">
+    </form>
+   </div>
+
+<h2>Clock Source Nomination and State </h2>
+  <div id="csnsPortsTable"></div>
+
+<h2>Clock Selection Mode and State </h2>
+  <div id="csmsPortsTable"></div>
+  
+  <h2>Station Clock Configuration and Clock hardware </h2>
+  <div id="stationClockTable"></div>
+  
+  <p>
+    <input type="button" value="Save" onclick="submitForm();">
+    <input type="button" value="Reset" onclick="resetForms();">
+    </p>
+
+  <h2>SyncE Ports </h2>
+  <div id="syncePortsTable"></div>
+
+  <h2>PTP Ports (8265.1)</h2>
+  <div id="ptpPortsTable"></div>
+  <br>
+  
+<!-- IE caching bug -->
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

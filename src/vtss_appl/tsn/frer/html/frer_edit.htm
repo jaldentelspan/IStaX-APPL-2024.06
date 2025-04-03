@@ -1,0 +1,671 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>FRER Detailed Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="stream_lib.js"></script> <!-- For stream_lib_ids_to_list() and stream_lib_list_to_ids() -->
+ <script type="text/javascript" src="frer_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_frer_edit.htm";
+
+// Page arguments
+var page_args = searchArgs(window.location.search);
+
+var selected_inst = 0;
+if (page_args["frerid"]) {
+    selected_inst = parseInt(page_args["frerid"], 10);
+}
+
+// Global variables
+var configTable, ingressStreamsTable, egressPortListTable, globals, variables;
+
+/******************************************************************************/
+// on_reset_button_click()
+/******************************************************************************/
+function on_reset_button_click()
+{
+    configTable.resetEvent();
+    ingressStreamsTable.resetEvent();
+    egressPortListTable.resetEvent();
+
+    // Also update enable/disable
+    enable_disable_update();
+}
+
+/******************************************************************************/
+// on_back_button_click()
+/******************************************************************************/
+function on_back_button_click()
+{
+    document.location.href = "frer_ctrl.htm";
+}
+
+/******************************************************************************/
+// on_mode_change()
+/******************************************************************************/
+function on_mode_change()
+{
+    var mode_fld, la_fld, in_gen_mode;
+
+    mode_fld = $("Mode");
+    la_fld   = $("LaErrDetection");
+
+    if (!mode_fld || !la_fld) {
+        // Not visible yet
+        return;
+    }
+
+    in_gen_mode = mode_fld.value == "generation";
+    $("IngressOuterTagPop").disabled   = !in_gen_mode;
+    $("Algorithm").disabled            = in_gen_mode;
+    $("HistoryLen").disabled           = in_gen_mode || $("Algorithm").value == "match";
+    $("ResetTimeoutMsec").disabled     = in_gen_mode;
+    $("TakeNoSequence").disabled       = in_gen_mode;
+    $("IndividualRecovery").disabled   = in_gen_mode;
+    $("Terminate").disabled            = in_gen_mode;
+    $("LaErrDetection").disabled       = in_gen_mode;
+
+    in_gen_mode |= !la_fld.checked;
+    $("LaErrDifference").disabled      = in_gen_mode;
+    $("LaErrPeriodMsec").disabled      = in_gen_mode;
+    $("LaErrPaths").disabled           = in_gen_mode;
+    $("LaErrResetPeriodMsec").disabled = in_gen_mode;
+}
+
+/******************************************************************************/
+// on_stream_type_change()
+/******************************************************************************/
+function on_stream_type_change()
+{
+    var fld;
+
+    fld = $("StreamType");
+
+    if (!fld) {
+        // Not visible yet
+        return;
+    }
+
+    $("streams_list").disabled       = fld.value != "0";
+    $("StreamCollectionId").disabled = fld.value == "0";
+}
+
+/******************************************************************************/
+// enable_disable_update()
+/******************************************************************************/
+function enable_disable_update()
+{
+    on_mode_change();
+    on_stream_type_change();
+}
+
+/******************************************************************************/
+// field_is_hidden()
+// Found this on Stackoverflow.
+/******************************************************************************/
+function field_is_hidden(fld)
+{
+    return fld.offsetParent === null;
+}
+
+/******************************************************************************/
+// field_is_active()
+/******************************************************************************/
+function field_is_active(fld)
+{
+    return !fld.disabled && !field_is_hidden(fld);
+}
+
+/******************************************************************************/
+// validate_fld()
+// Returns 0 if fld_name not found.
+// Returns 1 if fld_name found, but is disabled.
+// Returns 2 if fld_name found and is enabled.
+/******************************************************************************/
+function validate_fld(fld_name)
+{
+    var fld;
+
+    fld = $(fld_name);
+
+    if (!fld) {
+        alert("Internal error: Unable to find field called " + fld_name);
+        return 0;
+    }
+
+    if (!field_is_active(fld)) {
+        // Don't check disabled or hidden fields, the caller's caller has made
+        // sure to set fields not used in this mode to their defaults in order
+        // not to have the JSON parser throw up.
+        return 1;
+    }
+
+    return 2;
+}
+
+/******************************************************************************/
+// validate_range()
+/******************************************************************************/
+function validate_range(fld_name, min, max, msg)
+{
+    var result = validate_fld(fld_name);
+
+    if (min == undefined || max == undefined) {
+        alert(fld_name);
+        return false;
+    }
+
+    if (result < 2) {
+        return result === 0 ? false : true;
+    }
+
+    return isWithinRange(fld_name, min, max, msg) ? true : false;
+}
+
+/******************************************************************************/
+// validate_stream_ids()
+/******************************************************************************/
+function validate_stream_ids(fld_name, stream_ids)
+{
+    var result = validate_fld(fld_name), i, stream_id_fld_name, max;
+
+    if (result === 0) {
+        // Coding error
+        return false;
+    }
+
+    // Default the stream_ids, so that all IDs that can be set are filled in
+    // before possible calling stream_lib_list_to_ids(). The thing is that if
+    // that function fails, we must still set all streamIds to their defaults.
+    // The number of stream IDs is not the same as the number that is supported
+    // by the hardware (which is EgressPortCntMax). There is no capability for
+    // the number that can be set, but we can find that from the default
+    // configuration.
+    for (i = 0; i < 1000; i++) {
+        stream_id_fld_name = "StreamId" + i;
+        if (globals.default_conf[stream_id_fld_name] == undefined) {
+            break;
+        }
+
+        stream_ids[stream_id_fld_name] = globals.default_conf[stream_id_fld_name];
+    }
+
+    max = i;
+
+    if (result === 1) {
+        // Field is disabled.
+        return true;
+    }
+
+    return stream_lib_list_to_ids(fld_name, stream_ids, globals.capabilities.StreamIdMax, max);
+}
+
+/******************************************************************************/
+// validate_egress_ports()
+/******************************************************************************/
+function validate_egress_ports(fld_name, egress_ports)
+{
+    var result = validate_fld(fld_name);
+
+    if (result < 2) {
+        return result === 0 ? false : true;
+    }
+
+    return frer_lib_egress_port_list_to_ifnames(fld_name, egress_ports);
+}
+
+/******************************************************************************/
+// validate()
+/******************************************************************************/
+function validate(new_instance, stream_ids, egress_ports)
+{
+    var fld;
+
+    // Instance #
+    // If this doesn't exist in the JSON input, it's because it's an existing
+    // FRER instance, we are updating.
+    if (new_instance) {
+        // It's a new FRER instance. Validate it.
+        if (!validate_range("frer_inst", 1, globals.capabilities.InstanceMax, "Instance #")) {
+            return false;
+        }
+
+        // If the FRER instance already exists, give the user a chance to
+        // overwrite or cancel.
+        fld = $('frer_inst');
+        if (frer_lib_inst_get(variables.conf, fld.value)) {
+            // Make the field active.
+            fld.focus();
+            if (!confirm("The chosen FRER instance already exists. Overwrite?")) {
+                return false;
+            }
+        }
+    }
+
+    if (!validate_range("FrerVlan", 1, configVlanIdMax, "FRER VLAN")) {
+        return false;
+    }
+
+    if (!validate_range("HistoryLen", globals.capabilities.HistorylenMin, globals.capabilities.HistorylenMax, "History Length")) {
+        return false;
+    }
+
+    if (!validate_range("ResetTimeoutMsec", globals.capabilities.ResetTimeoutMsecMin, globals.capabilities.ResetTimeoutMsecMax, "Reset Timeout (milliseconds)")) {
+        return false;
+    }
+
+    if (!validate_range("LaErrDifference", globals.capabilities.LaErrDifferenceMin, globals.capabilities.LaErrDifferenceMax, "Latent Error Detection Difference (milliseconds)")) {
+        return false;
+    }
+
+    if (!validate_range("LaErrPeriodMsec", globals.capabilities.LaErrPeriodMsecMin, globals.capabilities.LaErrPeriodMsecMax, "Latent Error Detection Period (milliseconds)")) {
+        return false;
+    }
+
+    if (!validate_range("LaErrPaths", globals.capabilities.LaErrPathsMin, globals.capabilities.LaErrPathsMax, "Latent Error Detection Paths")) {
+        return false;
+    }
+
+    if (!validate_range("LaErrResetPeriodMsec", globals.capabilities.LaErrResetPeriodMsecMin, globals.capabilities.LaErrResetPeriodMsecMax, "Latent Error Detection Reset Period (milliseconds)")) {
+        return false;
+    }
+
+    if (!validate_stream_ids("streams_list", stream_ids)) {
+        return false;
+    }
+
+    if (!validate_range("StreamCollectionId", 1, globals.capabilities.StreamCollectionIdMax, "Stream Collection ID")) {
+        return false;
+    }
+
+    if (!validate_egress_ports("egress_ports", egress_ports)) {
+        return false;
+    }
+
+    return true;
+}
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(inst, error_msg, last)
+{
+    if (error_msg) {
+        alert(error_msg);
+
+        // Let the user modify his configuration and try again, so don't refresh
+        // the page.
+        return;
+    }
+
+    if (last) {
+        // Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_save_button_click()
+/******************************************************************************/
+function on_save_button_click()
+{
+    var json, key, keys, v, vp, fld;
+
+    // Get the full form that we are about to submit.
+    json = html2Json(tablesForm);
+    keys = Object.keys(json);
+
+    // The JSON parser cannot handle hexadecimal numbers, so let's start by
+    // changing them to decimal numbers.
+    keys.forEach(function(key) {
+        v = json[key];
+
+        if (v.length >= 3 && v[0] == '0' && v[1].toLowerCase() == 'x') {
+            // Get chars after "0x"
+            vp = v.slice(2);
+            if (IsHex(vp, false)) {
+                json[key] = parseInt(vp, 16).toString();
+            }
+        }
+
+        // Set all disabled or hidden fields to their defaults in order not to
+        // have the JSON parser throw up and return an unusable error message.
+        // This is useful if the user has selected an option that enables the
+        // field, then changes the field's value to an invalid value, and then
+        // selects an option that disables or hides the field.
+        fld = $(key);
+        if (!fld) {
+            alert("Internal error: Unable to find " + key);
+            return;
+        }
+
+        if (!field_is_active(fld)) {
+            json[key] = globals.default_conf[key];
+        }
+    });
+
+    // Time to validate the input. If selected_inst is undefined, it's a new
+    // stream we are creating. Otherwise it's an existing stream.
+    json.EgressPorts = [];
+    if (!validate(!selected_inst, json, json.EgressPorts)) {
+        return;
+    }
+
+    // Update selected_inst, if it's not set.
+    if (!selected_inst) {
+        selected_inst = $("frer_inst").value;
+    }
+
+    // Always use frer.config.add(), because frer.config.set() starts by reading
+    // the current configuration, which might not exist.
+    // We also request to be called back unless redirecting, so that we can show
+    // a possible error code and if everything went OK, we can refresh the page.
+    frer_lib_json_submit("frer.config.add", [[selected_inst, json]], on_submit_done);
+}
+
+/******************************************************************************/
+// add_option_to_selector()
+/******************************************************************************/
+function add_option_to_selector(selector, show, val, def)
+{
+    var option;
+
+    option = document.createElement("option");
+    option.appendChild(document.createTextNode(show));
+    option.setAttribute("value", val);
+    if (def) {
+        option.setAttribute("selected", true);
+    }
+
+    selector.options.add(option);
+}
+
+/******************************************************************************/
+// update_instance_selector()
+/******************************************************************************/
+function update_instance_selector()
+{
+    var i, inst, selector, def, default_seen = false;
+
+    // Update instance selector combo box.
+    selector = $("inst_select");
+    clearChildNodes(selector);
+    for (i = 0; i < variables.conf.length; i++) {
+        inst = variables.conf[i].key;
+
+        def = inst == selected_inst;
+        if (def) {
+            default_seen = true;
+        }
+
+        add_option_to_selector(selector, "FRER Instance #" + inst, inst, def);
+    }
+
+    // Add a "New FRER Instance" option
+    add_option_to_selector(selector, "New FRER Instance", 0, !default_seen);
+}
+
+/******************************************************************************/
+// add_config_rows()
+/******************************************************************************/
+function add_config_rows(key, conf, statu)
+{
+    var table_rows = new Array(), instance_id_cell;
+
+    // 1st row (numbers are colspan, rowspan)
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Instance",               1, 2]},
+        {type: "disp_hdr", params: ["Mode",                   1, 2]},
+        {type: "disp_hdr", params: ["Enable",                 1, 2]},
+        {type: "disp_hdr", params: ["Pop Outer Tag",          1, 2]},
+        {type: "disp_hdr", params: ["FRER VLAN",              1, 2]},
+        {type: "disp_hdr", params: ["Recovery",               6, 1]},
+        {type: "disp_hdr", params: ["Latent Error Detection", 5, 1]},
+        {type: "disp_hdr", params: ["Operational State",      1, 2]}
+    ]});
+
+    // 2nd header row
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Algorithm"]},
+        {type: "disp_hdr", params: ["History Length"]},
+        {type: "disp_hdr", params: ["Reset Timeout"]},
+        {type: "disp_hdr", params: ["Take-no-sequence"]},
+        {type: "disp_hdr", params: ["Individual"]},
+        {type: "disp_hdr", params: ["Terminate"]},
+        {type: "disp_hdr", params: ["Enable"]},
+        {type: "disp_hdr", params: ["Error Diff"]},
+        {type: "disp_hdr", params: ["Period"]},
+        {type: "disp_hdr", params: ["Paths"]},
+        {type: "disp_hdr", params: ["Reset Period"]}
+    ]});
+
+    // Data
+    if (parseInt(key, 10) === 0) {
+        // New FRER instance. Allow user to change it's ID.
+        instance_id_cell = {type: "input", params:[0, "cr", "frer_inst", 3]};
+    } else {
+        instance_id_cell = {type: "digit", params:[key]};
+    }
+
+    table_rows.push({fields: [
+        instance_id_cell,
+        {type: "select", params: [Object.values(frer_lib_mode_map), Object.keys(frer_lib_mode_map), conf.Mode, "c", "Mode", undefined, undefined, undefined, on_mode_change]},
+        {type: "chkbox", params: [conf.AdminActive,          "c",  "AdminActive"]},
+        {type: "chkbox", params: [conf.IngressOuterTagPop,   "c",  "IngressOuterTagPop"]},
+        {type: "input",  params: [conf.FrerVlan,             "cr", "FrerVlan",             4, 4, "91px"]},
+        {type: "select", params: [Object.values(frer_lib_algorithm_map), Object.keys(frer_lib_algorithm_map), conf.Algorithm, "c", "Algorithm", "77px", undefined, undefined, on_mode_change]},
+        {type: "input",  params: [conf.HistoryLen,           "cr", "HistoryLen",           2, 2, "110px"]},
+        {type: "input",  params: [conf.ResetTimeoutMsec,     "cr", "ResetTimeoutMsec",     4, 4, "110px"]},
+        {type: "chkbox", params: [conf.TakeNoSequence,       "c",  "TakeNoSequence"]},
+        {type: "chkbox", params: [conf.IndividualRecovery,   "c",  "IndividualRecovery"]},
+        {type: "chkbox", params: [conf.Terminate,            "c",  "Terminate"]},
+        {type: "chkbox", params: [conf.LaErrDetection,       "c",  "LaErrDetection", on_mode_change]},
+        {type: "input",  params: [conf.LaErrDifference,      "cr", "LaErrDifference",      8, 8]},
+        {type: "input",  params: [conf.LaErrPeriodMsec,      "cr", "LaErrPeriodMsec",      8, 8]},
+        {type: "input",  params: [conf.LaErrPaths,           "cr", "LaErrPaths",           2, 2]},
+        {type: "input",  params: [conf.LaErrResetPeriodMsec, "cr", "LaErrResetPeriodMsec", 8, 8, "98px"]},
+        {type: "image",  params: ["c", frer_lib_oper_state_to_image(statu), frer_lib_oper_state_to_str(statu)]}
+    ]});
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// add_ingress_stream_rows()
+/******************************************************************************/
+function add_ingress_stream_rows(conf)
+{
+    var table_rows = new Array();
+
+    // Header
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Stream Type"]},
+        {type: "disp_hdr", params: ["List"]},
+        {type: "disp_hdr", params: ["Collection"]}
+    ]});
+
+    // Data
+    table_rows.push({fields: [
+        {type: "select", params: [["Stream ID List", "Stream Collection"], [0, 1], conf.StreamCollectionId === 0 ? 0 : 1, "cl", "StreamType", undefined, undefined, undefined, on_stream_type_change]},
+        {type: "input",  params: [stream_lib_ids_to_list(conf), "cl", "streams_list", 20, 20]},
+        {type: "input",  params: [conf.StreamCollectionId === 0 ? "" : conf.StreamCollectionId, "cr", "StreamCollectionId"]}
+    ]});
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// add_egress_ports_rows()
+/******************************************************************************/
+function add_egress_ports_rows(conf)
+{
+    var table_rows = new Array();
+
+    // Header
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Egress Port List"]}
+    ]});
+
+    // Data
+    table_rows.push({fields: [
+        {type: "input",  params:[frer_lib_egress_ifnames_to_port_list(conf.EgressPorts), "cl", "egress_ports", 20, 20]}
+    ]});
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    var record, statu, i;
+
+    update_instance_selector();
+
+    if (selected_inst) {
+        record = frer_lib_inst_get(variables.conf,  selected_inst);
+        statu  = frer_lib_inst_get(variables.statu, selected_inst);
+
+        if (!record || !statu) {
+            alert("FRER instance #" + selected_inst + " does not exist.");
+            on_back_button_click();
+            return;
+        }
+
+        statu = statu.val;
+    } else {
+        // When selected_inst is 0, it's a new entry
+        record = {"key": 0, "val": globals.default_conf};
+        statu  = undefined;
+    }
+
+    // One record spread around several tables
+    configTable.addRows(add_config_rows(record.key, record.val, statu));
+    configTable.update();
+
+    ingressStreamsTable.addRows(add_ingress_stream_rows(record.val));
+    ingressStreamsTable.update();
+
+    egressPortListTable.addRows(add_egress_ports_rows(record.val));
+    egressPortListTable.update();
+
+    enable_disable_update();
+}
+
+/******************************************************************************/
+// on_inst_select()
+/******************************************************************************/
+function on_inst_select(fld)
+{
+    selected_inst = parseInt(fld.options[fld.selectedIndex].value, 10);
+    processUpdate();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}};
+    frer_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    frer_lib_port_map = {};
+    Object.each(globals.port_name_map, function(record, idx) {
+        // This sets frer_lib_port_map to e.g. {'Gi 1/1': 1}, ..., {'Gi 1/24': 24}, ...
+        // where the key is the interface name and the value is the port_no.
+        frer_lib_port_map[record.key] = record.val;
+    });
+
+    requestUpdate();
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    configTable         = new DynamicTable("configTableContent",         "config");
+    ingressStreamsTable = new DynamicTable("ingressStreamTableContent",  "config");
+    egressPortListTable = new DynamicTable("egressPortListTableContent", "config");
+
+    frer_lib_disable_button_add("refresh_button");
+    frer_lib_disable_button_add("inst_select");
+    frer_lib_disable_button_add("save_button");
+
+    globals = {capabilities: {}, port_name_map: {}, default_conf: {}};
+    frer_lib_json_request(globals, on_globals_received);
+});
+ </script>
+</head>
+
+<body class="content">
+  <h1>FRER Configuration</h1>
+
+  <div class="refreshbar">
+    <select id="inst_select" onchange="on_inst_select(this);">
+       <option value="1">Instance #1</option>
+    </select>
+
+    <input type="button" id="refresh_button" value="Refresh" onClick="requestUpdate(); this.blur();"/>
+    <img id="frer_update" alt="" src="images/updating.gif">
+  </div>
+
+  <form id="tablesForm" action="">
+    <h2>Configuration</h2>
+    <div id="configTableContent"></div>
+
+    <h2>Ingress Streams</h2>
+    <div id="ingressStreamTableContent"></div>
+
+    <h2>Egress Ports</h2>
+    <div id="egressPortListTableContent"></div>
+  </form>
+
+<p>
+  <input type="button" id="save_button" value="Save"  onclick="on_save_button_click();"/>
+  <input type="button" value="Reset" onclick="on_reset_button_click();"/>
+  <input type="button" value="Back"  onclick="on_back_button_click();"/>
+</p>
+</body>
+</html>
+

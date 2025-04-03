@@ -1,0 +1,295 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>DHCPv6 Snooping Statistics</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+    <script type="text/javascript" src="lib/validate.js"></script>
+    <script type="text/javascript" src="lib/json_minimum.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_dhcp6_snooping_table.htm";
+
+var timerID = null;
+var tableLastUpdateTimestamp = null;
+
+function setAutoRefresh()
+{
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdateIfNeeded()', settingsRefreshInterval());
+    }
+}
+
+function enableControls(enable)
+{
+    document.getElementById("update").style.visibility = enable ? "hidden" : "visible";
+    document.getElementById("autorefresh").disabled = !enable;
+    document.getElementById("refresh").disabled = !enable;
+
+    if (enable) {
+        setAutoRefresh();
+    } else {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    }
+}
+
+function updateCellValue(cellId, newValue)
+{
+    if (newValue === null) {
+        console.log("newValue is null for id: " + cellId);
+        return;
+    }
+    var cell = document.getElementById(cellId);
+    if (!cell) {
+        // This can happen if the address table is updated after the client table has been read.
+        // Just ignore it for now - it will be handled in the next refresh.
+        //console.log("Could not get cell with id: " + cellId);
+        return;
+    }
+    
+    var currValue = cell.innerHTML;
+    if (currValue === "") {
+        cell.innerHTML = newValue;
+    } else {
+        cell.innerHTML = currValue + "<br>" + newValue;
+    }
+}
+
+function make_cell_id(clientKey, tag)
+{
+    return "d6s_cell_" + clientKey + tag;
+}
+
+function updateAddressData(clientKey, addressValues)
+{
+    updateCellValue(make_cell_id(clientKey, "_iaid"), addressValues["Iaid"]);
+    updateCellValue(make_cell_id(clientKey, "_vid"), addressValues["VlanId"]);
+    updateCellValue(make_cell_id(clientKey, "_address"), addressValues["IpAddress"]);
+    updateCellValue(make_cell_id(clientKey, "_lease"), addressValues["LeaseTime"]);
+    updateCellValue(make_cell_id(clientKey, "_serverip"), addressValues["DhcpServerIp"]);
+}
+
+function addClientCell(tr, value, style_class)
+{
+    var cell;
+
+    cell = addTextCell(tr, value, style_class);
+    cell.setAttribute('valign', 'top');
+}
+
+function addClientRow(index, frag, clientKey, clientValues)
+{
+    var tr = CreateStyledElement("tr", index % 2 ? "display_odd" : "display_even");
+
+    addClientCell(tr, clientValues["ClientDuid"], "cl");
+    addClientCell(tr, clientValues["MacAddress"], "cl");
+    addClientCell(tr, clientValues["IfIndex"], "cl");
+    
+    // Add empty cells for address data
+    var cell;
+    cell = addTextCell(tr, "", "cr");
+    cell.id = make_cell_id(clientKey, "_iaid");
+    cell = addTextCell(tr, "", "cr");
+    cell.id = make_cell_id(clientKey, "_vid");
+    cell = addTextCell(tr, "", "cr");
+    cell.id = make_cell_id(clientKey, "_address");
+    cell = addTextCell(tr, "", "cr");
+    cell.id = make_cell_id(clientKey, "_lease");
+    cell = addTextCell(tr, "", "cr");
+    cell.id = make_cell_id(clientKey, "_serverip");
+    
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+function processAddressUpdate(recv_json, name)
+{
+    //alert(recv_json.toSource());
+
+    var count = 0;
+    Object.each(recv_json, function (record) {
+        var clientKey = record.key[0];
+        var iaid = record.key[1];
+        updateAddressData(clientKey, record.val);
+
+        count++;
+    });
+
+    entryCountElement = document.getElementById("TotalEntryCount");
+    entryCountElement.innerHTML = count;
+
+    enableControls(true);
+}
+
+function processClientUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        enableControls(true);
+        return;
+    }
+
+    //alert(recv_json.toSource());
+
+    var tbody = document.getElementById('tableBodyData');
+    clearChildNodes(tbody);
+    entryCountElement = document.getElementById("TotalEntryCount");
+    entryCountElement.innerHTML = 0;
+
+    // create holder for accumulated tbody elements and text nodes
+    var frag = document.createDocumentFragment();
+    var index = 0;
+
+    Object.each(recv_json, function (record) {
+        addClientRow(index, frag, record.key, record.val);
+        index++;
+    });
+
+    if (!tbody.appendChild(frag)) { // Add Frag to table body
+        alert("This browser doesn't support dynamic tables.");
+    }
+
+    if (index > 0) {
+        requestJsonDoc("dhcp6Snooping.status.address.get", null, processAddressUpdate, "address_data");
+    } else {
+        enableControls(true);
+    }
+}
+
+function processGlobalStatus(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    var lastChange = recv_json["LastChangeTs"];
+
+    if (name === "do_check") {
+        if (tableLastUpdateTimestamp === null || lastChange != tableLastUpdateTimestamp) {
+            console.log("table has changed - requesting update");
+            requestUpdate();
+        }
+        setAutoRefresh();
+    }
+
+    tableLastUpdateTimestamp = lastChange;
+}
+
+function requestUpdateIfNeeded()
+{
+    requestJsonDoc("dhcp6Snooping.status.global.get", null, processGlobalStatus, "do_check");
+}
+
+function requestUpdate()
+{
+    enableControls(false);
+
+    var tbody = document.getElementById('tableBodyData');
+    clearChildNodes(tbody);
+
+    entryCountElement = document.getElementById("TotalEntryCount");
+    entryCountElement.innerHTML = 0;
+
+    requestJsonDoc("dhcp6Snooping.status.global.get", null, processGlobalStatus, "record_only");
+    requestJsonDoc("dhcp6Snooping.status.client.get", null, processClientUpdate, "client_data");
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        requestUpdateIfNeeded();
+    }
+}
+
+/* Initialize resores when HTML document is ready */
+window.addEvent('domready', function () {
+    requestUpdate();
+});
+
+    </script>
+</head>
+
+<body class="content" style="height: calc(100vh - 30px);">
+    <h1>DHCPv6 Snooping Table</h1>
+
+    <div class="refreshbar">
+     <form action="#">
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+        <input type="button"   id="refresh" value="Refresh" onclick="requestUpdate(); this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+     </form>
+    </div>
+
+    <p>
+        This table display the currently known DHCPv6 clients and their assigned addresses.
+    </p>
+    <p>
+        <span class="displaytext">Total entries: </span>
+        <span class="displaytext" id="TotalEntryCount">0</span>
+    </p>
+
+    <div id="myTableContainer" style="height:80vh; overflow-y:auto; display: inline-block;">
+        <table id="dhcp6SnoopingTable" summary="DHCPv6 Snooping Table" cellspacing="0" class="display"
+               style="height:auto; width:100%; margin-right:20px;">
+            <thead>
+                <tr class="display_header">
+                    <th>Client DUID</th>
+                    <th>MAC Address</th>
+                    <th>Ingress Port</th>
+                    <th>IAID</th>
+                    <th>VLAN ID</th>
+                    <th>Assigned Address</th>
+                    <th>Lease Time</th>
+                    <th>DHCP Server Address</th>
+                </tr>
+            </thead>
+          <tbody id="tableBodyData"></tbody>
+        </table>
+    </div>
+</body>
+</html>

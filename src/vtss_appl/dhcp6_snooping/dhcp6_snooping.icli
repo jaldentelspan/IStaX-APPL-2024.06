@@ -1,0 +1,696 @@
+//
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+//
+//
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_DHCP6_SNOOPING)
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include "vtss_common_iterator.hxx"
+#include "icli_porting_util.h"
+#include "misc_api.h"
+#include "topo_api.h"
+#include "vtss/appl/dhcp6_snooping.h"
+#include "dhcp6_snooping_api.h"
+INCLUDE_END
+
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+
+#define DHCP_SNOOPING_BUF_SIZE    80
+        
+/* Display DHCPv6 snooping port mode text */
+static const char *DHCP6_SNOOPING_ICLI_port_mode_txt(dhcp6_port_trust_mode_t mode)
+{
+    return (mode == DHCP6_SNOOPING_PORT_MODE_TRUSTED ? "Trusted" : "Untrusted");
+}
+
+static BOOL dhcpv6_snooping_help_print(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    uint32_t boardtype = fast_cap(MESA_CAP_MISC_CHIP_FAMILY);
+
+    switch (ask) {
+    case ICLI_ASK_HELP:
+        switch (boardtype) {
+        case MESA_CHIP_FAMILY_CARACAL:
+        case MESA_CHIP_FAMILY_OCELOT:
+            strncpy(runtime->help,
+                "Enables or disables the DHCPv6 snooping function. "
+                "Please note: For Serval1, Caracal and Ocelot based systems you will have to manually change the "
+                 "'qos qce key' type to 'mac-ip-addr' for all ports that will receive DHCPv6 packets.\n",
+                ICLI_HELP_MAX_LEN);
+            break;
+        default:
+            strncpy(runtime->help, "Enables or disables the DHCPv6 snooping function.\n", ICLI_HELP_MAX_LEN);
+            break;
+        }
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static const char *DHCP6_SNOOPING_ICLI_client_state_txt(dhcp6_address_state_t address_state)
+{
+    switch (address_state) {
+    case DHCP6_SNOOPING_ADDRESS_STATE_SOLICIT:
+        return "Soliciting";
+    case DHCP6_SNOOPING_ADDRESS_STATE_REQUEST:
+        return "Requesting";
+    case DHCP6_SNOOPING_ADDRESS_STATE_CONFIRM:
+        return "Confirming";
+    case DHCP6_SNOOPING_ADDRESS_STATE_REBIND:
+        return "Rebinding";
+    case DHCP6_SNOOPING_ADDRESS_STATE_ASSIGNED:
+        return "Address Assigned";
+    case DHCP6_SNOOPING_ADDRESS_STATE_RELEASING:
+        return "Releasing";
+    default:
+        return "State Unknown";
+    }
+}
+
+static i32 DHCP6_SNOOPING_ICLI_global_mode_set(u32 session_id, dhcp6_system_mode_t mode)
+{
+    vtss_appl_dhcp6_snooping_conf_t conf;
+    dhcp6_system_mode_t original_mode;
+
+    //get global configuration
+    ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_conf_get(&conf), "%% Failed to get DHCP snooping configuration.\n");
+
+    //set global configuration
+    original_mode = conf.snooping_mode;
+    conf.snooping_mode = mode;
+    if (mode != original_mode) {
+        ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_conf_set(&conf), "%% Failed to set DHCP snooping configuration.\n");
+    }
+
+    return ICLI_RC_OK;
+}
+
+static u32 DHCP6_SNOOPING_ICLI_nh_unknown_mode_set(u32 session_id, bool has_drop, bool has_allow)
+{
+    vtss_appl_dhcp6_snooping_conf_t conf;
+    dhcp6_nh_unknown_mode_t original_value;
+
+    //get global configuration
+    ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_conf_get(&conf), "%% Failed to get DHCP snooping configuration.\n");
+
+    original_value = conf.nh_unknown_mode;
+
+    if (has_drop) {
+        conf.nh_unknown_mode = DHCP6_SNOOPING_NH_UNKNOWN_MODE_DROP;
+    } else if (has_allow) {
+        conf.nh_unknown_mode = DHCP6_SNOOPING_NH_UNKNOWN_MODE_ALLOW;
+    }
+
+    if (conf.nh_unknown_mode != original_value) {
+        ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_conf_set(&conf), "%% Failed to set DHCP snooping configuration.\n");
+    }
+
+    return ICLI_RC_OK;
+}
+
+static i32 DHCP6_SNOOPING_ICLI_port_mode_set(u32 session_id, icli_stack_port_range_t *port_list_p, dhcp6_port_trust_mode_t mode)
+{
+    u32                         range_idx, cnt_idx;
+    vtss_usid_t                 usid;
+    mesa_port_no_t              uport;
+    vtss_appl_dhcp6_snooping_port_conf_t  port_conf;
+    vtss_ifindex_t              ifindex;
+
+    for (range_idx = 0; range_idx < port_list_p->cnt; range_idx++) {
+        usid = port_list_p->switch_range[range_idx].usid;
+
+        for (cnt_idx = 0; cnt_idx < port_list_p->switch_range[range_idx].port_cnt; cnt_idx++) {
+            uport = port_list_p->switch_range[range_idx].begin_uport + cnt_idx;
+
+            ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(usid, uport, &ifindex), "%% Failed to resolve DHCP port ifindex.\n");
+            ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_conf_get(ifindex, &port_conf), "%% Failed to get DHCP snooping port configuration.\n");
+
+            port_conf.trust_mode = mode;
+
+            ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_conf_set(ifindex, &port_conf), "%% Failed to set DHCP snooping port configuration.\n");
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+static i32 DHCP6_SNOOPING_ICLI_port_stat_show(u32 session_id, vtss_isid_t usid, mesa_port_no_t uport,
+                                              vtss_appl_dhcp6_snooping_port_statistics_t* stats_p, bool is_first)
+{
+    icli_port_header(session_id, usid, uport, "Statistics", !is_first, FALSE);
+
+    icli_stats(session_id, "Rx Solicit", "Tx Solicit", stats_p->rx.solicit, stats_p->tx.solicit);
+    icli_stats(session_id, "Rx Request", "Tx Request", stats_p->rx.request, stats_p->tx.request);
+    icli_stats(session_id, "Rx InfoRequest", "Tx InfoRequest", stats_p->rx.infoRequest, stats_p->tx.infoRequest);
+    icli_stats(session_id, "Rx Confirm", "Tx Confirm", stats_p->rx.confirm, stats_p->tx.confirm);
+    icli_stats(session_id, "Rx Renew", "Tx Renew", stats_p->rx.renew, stats_p->tx.renew);
+    icli_stats(session_id, "Rx Rebind", "Tx Rebind", stats_p->rx.rebind, stats_p->tx.rebind);
+    icli_stats(session_id, "Rx Decline", "Tx Decline", stats_p->rx.decline, stats_p->tx.decline);
+    icli_stats(session_id, "Rx Advertise", "Tx Advertise", stats_p->rx.advertise, stats_p->tx.advertise);
+    icli_stats(session_id, "Rx Reply", "Tx Reply", stats_p->rx.reply, stats_p->tx.reply);
+    icli_stats(session_id, "Rx Reconfigure", "Tx Reconfigure", stats_p->rx.reconfigure, stats_p->tx.reconfigure);
+    icli_stats(session_id, "Rx Release", "Tx Release", stats_p->rx.release, stats_p->tx.release);
+    icli_stats(session_id, "Rx DiscardUntrust", nullptr, stats_p->rxDiscardUntrust, 0);
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+//
+// Export Segment
+//   This segment contains the API declarations of the global functions in
+//   Function Segment. This will be pasted exactly to the generated H file.
+//   So, others can include the H file to use the global functions.
+//
+EXPORT_BEGIN
+EXPORT_END
+
+HELP_SNOOPINGV6  = DHCPv6 Snooping
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG     =
+
+COMMAND     = show ipv6 dhcp snooping [ interface <port_type_list> ]
+
+DOC_CMD_DESC    = Display the DHCPv6 snooping configuration.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = dhcpv6_snooping_show
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = in_interface
+CMD_VAR   = in_port_list
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = ##HELP_SNOOPINGV6
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##ICLI_HELP_PORT_TYPE_LIST
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp6_snooping_conf_t       conf;
+    vtss_appl_dhcp6_snooping_port_conf_t  port_conf;
+    vtss_ifindex_t              ifindex, prev, next;
+    bool                        is_first = true;
+    char                        str_buf[DHCP_SNOOPING_BUF_SIZE];
+    u32                         range_idx, cnt_idx;
+    vtss_usid_t                 usid;
+    mesa_port_no_t              uport;
+    vtss_ifindex_elm_t          ife;
+VARIABLE_END
+
+CODE_BEGIN
+    if (in_interface == FALSE) {
+        // show global + all ports configuraton
+
+        // get global configuration
+        ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_conf_get(&conf), "%% Failed to get DHCPv6 snooping configuration.\n");
+
+        // show global mode
+        ICLI_PRINTF("Switch DHCPv6 Configuration:\n");
+        ICLI_PRINTF("- DHCPv6 snooping is %s\n", conf.snooping_mode == DHCP6_SNOOPING_MODE_ENABLED ? "Enabled" : "Disabled");
+        ICLI_PRINTF("- IPv6 packets with unknown ext. headers will be %s\n",
+                    conf.nh_unknown_mode == DHCP6_SNOOPING_NH_UNKNOWN_MODE_DROP ? "dropped" : "allowed");
+
+        ICLI_PRINTF("\n");
+
+        //show port configuration
+        ICLI_PRINTF("DHCPv6 snooping per-port configuration:\n");
+        ICLI_PRINTF(" %-30s%s\n", "Port Name", "Trust Mode");
+        ICLI_PRINTF(" %s\n",std::string(50,'-').c_str());
+
+        while (vtss_appl_dhcp6_snooping_port_conf_itr(is_first ? nullptr : &prev, &next) == VTSS_RC_OK) {
+            ICLI_RC_CHECK(vtss_appl_ifindex_port_configurable(next, &ife), "%% Failed to resolve DHCP port ifindex.\n");
+            ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_conf_get(next, &port_conf), "%% Failed to get DHCP snooping port configuration.\n");
+
+            ICLI_PRINTF(" %-30s%s\n",
+                        icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), str_buf),
+                        DHCP6_SNOOPING_ICLI_port_mode_txt(port_conf.trust_mode));
+
+            prev = next;
+            is_first = false;
+        }
+    } else { //show specific port configuration
+        ICLI_PRINTF("DHCPv6 snooping per-port configuration:\n");
+        ICLI_PRINTF(" %-30s%s\n", "Port Name", "Trust Mode");
+        ICLI_PRINTF(" %s\n",std::string(50,'-').c_str());
+
+        for (range_idx = 0; range_idx < in_port_list->cnt; range_idx++) {
+            usid = in_port_list->switch_range[range_idx].usid;
+            for (cnt_idx = 0; cnt_idx < in_port_list->switch_range[range_idx].port_cnt; cnt_idx++) {
+                uport = in_port_list->switch_range[range_idx].begin_uport + cnt_idx;
+
+                ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(usid, uport, &ifindex), "%% Failed to resolve DHCP port ifindex.\n");
+                ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_conf_get(ifindex, &port_conf), "%% Failed to get DHCP snooping port configuration.\n");
+                ICLI_PRINTF(" %-30s%s\n",
+                            icli_port_info_txt(usid, uport, str_buf),
+                            DHCP6_SNOOPING_ICLI_port_mode_txt(port_conf.trust_mode));
+            }
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG     =
+
+COMMAND     = show ipv6 dhcp snooping table [ all ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = ##HELP_SNOOPINGV6
+HELP = Show table of known DHCP clients with assigned addresses.
+HELP = Also show clients currently acquiring an address
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_all
+
+VARIABLE_BEGIN
+    dhcp_duid_t                             *prev_duid = nullptr;
+    dhcp_duid_t                             next_duid;
+    char                                    buf[40];
+    u32                                     cnt = 0;
+    vtss_ifindex_elm_t                      ife;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        // List all known clients regardless of state
+        registered_clients_info_t client_info;
+        while (dhcp6_snooping_registered_clients_info_getnext(prev_duid, &next_duid, &client_info) == VTSS_RC_OK) {
+            vtss_ifindex_decompose(client_info.if_index, &ife);
+
+            if (cnt) {
+                ICLI_PRINTF("\n");
+            }
+            ICLI_PRINTF("Client Entry ID     : %d\n", ++cnt);
+            ICLI_PRINTF("Client DUID         : %s\n", next_duid.to_string().c_str());
+            ICLI_PRINTF("MAC Address         : %s\n", misc_mac_txt(client_info.mac.addr, buf));
+            ICLI_PRINTF("Ingress Port        : %s\n", icli_port_info_txt(topo_isid2usid(ife.isid), iport2uport(ife.ordinal), buf));
+
+            for (auto iter = client_info.if_map.begin(); iter != client_info.if_map.end(); iter++) {
+                ICLI_PRINTF("- Interface IAID    : %u\n", iter->second.iaid);
+                ICLI_PRINTF("- VLAN ID           : %d\n", iter->second.vid);
+                ICLI_PRINTF("- IAID State        : %s\n", DHCP6_SNOOPING_ICLI_client_state_txt(iter->second.address_state));
+                ICLI_PRINTF("- IP Address        : %s\n", misc_ipv6_txt(&iter->second.ip_address, buf));
+                ICLI_PRINTF("- DHCP Server       : %s\n\n", misc_ipv6_txt(&iter->second.dhcp_server_ip, buf));
+            }
+
+            prev_duid = &next_duid;
+        }
+
+    } else {
+        vtss_appl_dhcp6_snooping_client_info_t client_info;
+        vtss_appl_dhcp6_snooping_assigned_ip_t address_info;
+
+        // List all clients and their assigned addresses
+        while (vtss_appl_dhcp6_snooping_client_info_itr(prev_duid, &next_duid) == VTSS_RC_OK) {
+            vtss_appl_dhcp6_snooping_client_info_get(next_duid, &client_info);
+            vtss_ifindex_decompose(client_info.if_index, &ife);
+
+            if (cnt) {
+                ICLI_PRINTF("\n");
+            }
+            ICLI_PRINTF("Client Entry ID     : %d\n", ++cnt);
+            ICLI_PRINTF("Client DUID         : %s\n", next_duid.to_string().c_str());
+            ICLI_PRINTF("MAC Address         : %s\n", misc_mac_txt(client_info.mac.addr, buf));
+            ICLI_PRINTF("Ingress Port        : %s\n", icli_port_info_txt(topo_isid2usid(ife.isid), iport2uport(ife.ordinal), buf));
+
+            dhcp_duid_t next_duid2;
+            vtss_appl_dhcp6_snooping_iaid_t *prev_iaid = nullptr;
+            vtss_appl_dhcp6_snooping_iaid_t next_iaid;
+
+            // Find all assigned IP addresses for the current client DUID
+            while (vtss_appl_dhcp6_snooping_assigned_ip_itr(&next_duid, &next_duid2, prev_iaid, &next_iaid) == VTSS_RC_OK) {
+                if (next_duid != next_duid2) {
+                    // No more addresses for this DUID
+                    break;
+                }
+                if (vtss_appl_dhcp6_snooping_assigned_ip_get(next_duid, next_iaid, &address_info) != VTSS_RC_OK) {
+                    continue;
+                }
+                ICLI_PRINTF("- Interface IAID    : %u\n", address_info.iaid);
+                ICLI_PRINTF("- VLAN ID           : %d\n", address_info.vid);
+                ICLI_PRINTF("- IP Address        : %s\n", misc_ipv6_txt(&address_info.ip_address, buf));
+                ICLI_PRINTF("- DHCP Server       : %s\n", misc_ipv6_txt(&address_info.dhcp_server_ip, buf));
+
+                prev_iaid = &next_iaid;
+            }
+
+            prev_duid = &next_duid;
+        }
+    }
+
+    if (cnt) {
+        ICLI_PRINTF("\nTotal number of entries: %d\n", cnt);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG     =
+
+COMMAND     = show ipv6 dhcp snooping statistics [ interface <port_type_list> ] [ zero-suppress ]
+
+FUNC_NAME   = dhcpv6_snooping_show_statistics
+PRIVILEGE   = ICLI_PRIVILEGE_0
+PROPERTY    = ICLI_CMD_PROP_GREP
+
+CMD_MODE    = ICLI_CMD_MODE_EXEC
+
+CMD_VAR     =
+CMD_VAR     =
+CMD_VAR     =
+CMD_VAR     =
+CMD_VAR     =
+CMD_VAR     = in_interface
+CMD_VAR     = in_port_list
+CMD_VAR     = has_zero_suppress
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = ##HELP_SNOOPINGV6
+HELP = ##ICLI_HELP_STATISTICS
+HELP = ##ICLI_HELP_INTERFACE
+HELP = 
+HELP = Skip ports with all-zero counters
+
+VARIABLE_BEGIN
+    vtss_appl_dhcp6_snooping_conf_t conf;
+    u32                             range_idx, cnt_idx;
+    vtss_appl_dhcp6_snooping_port_statistics_t stats;
+    vtss_usid_t                     usid;
+    mesa_port_no_t                  uport;
+    bool                            is_first = true;
+    vtss_ifindex_t                  *prev_ifindex = nullptr;
+    vtss_ifindex_t                  next_ifindex;
+    vtss_ifindex_elm_t              ife;
+    static vtss_appl_dhcp6_snooping_port_statistics_t zero_stats = { 0 };
+VARIABLE_END
+
+CODE_BEGIN
+    // get global configuration
+    ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_conf_get(&conf), "%% Failed to get DHCPv6 snooping configuration.\n");
+
+    if (conf.snooping_mode != DHCP6_SNOOPING_MODE_ENABLED) {
+        ICLI_PRINTF("%% DHCPv6 snooping is not enabled\n");
+        return ICLI_RC_OK;
+    }
+
+    if (in_interface == FALSE) { //show all port statistics
+        while (vtss_appl_dhcp6_snooping_port_statistics_itr(prev_ifindex, &next_ifindex) == VTSS_RC_OK) {
+            prev_ifindex = &next_ifindex;
+
+            ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_statistics_get(next_ifindex, &stats), "%% Failed to get DHCP snooping port statistics.\n");
+
+            if (has_zero_suppress && (memcmp(&stats, &zero_stats, sizeof(stats)) == 0)) {
+                // don't show pports with all-zero stats
+                continue;
+            }
+
+            vtss_ifindex_decompose(next_ifindex, &ife);
+            DHCP6_SNOOPING_ICLI_port_stat_show(session_id, ife.usid, iport2uport(ife.ordinal), &stats, is_first);
+            if (is_first) {
+                is_first = false;
+            }
+        }
+    } else { //show specific port statistics
+        (void)icli_cmd_port_range_exist(session_id, in_port_list, TRUE, TRUE);
+
+        for (range_idx = 0; range_idx < in_port_list->cnt; range_idx++) {
+            usid = in_port_list->switch_range[range_idx].usid;
+            for (cnt_idx = 0; cnt_idx < in_port_list->switch_range[range_idx].port_cnt; cnt_idx++) {
+                uport = in_port_list->switch_range[range_idx].begin_uport + cnt_idx;
+
+                ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(usid, uport, &next_ifindex), "%% Failed to resolve DHCP port ifindex.\n");
+                ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_statistics_get(next_ifindex, &stats), "%% Failed to get DHCP snooping port statistics.\n");
+
+                if (has_zero_suppress && (memcmp(&stats, &zero_stats, sizeof(stats)) == 0)) {
+                    // don't show pports with all-zero stats
+                    continue;
+                }
+
+                DHCP6_SNOOPING_ICLI_port_stat_show(session_id, usid, uport, &stats, is_first);
+                if (is_first) {
+                    is_first = false;
+                }
+            }
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG   =
+
+COMMAND         = clear ipv6 dhcp snooping statistics [ interface <port_type_list> ]
+
+FUNC_NAME = dhcp6_snooping_clear_stat
+PRIVILEGE = ICLI_PRIVILEGE_10
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = in_interface
+CMD_VAR   = in_port_list
+
+HELP = ##ICLI_HELP_CLEAR
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = ##HELP_SNOOPINGV6
+HELP = ##ICLI_HELP_STATISTICS
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##ICLI_HELP_PORT_TYPE_LIST
+
+VARIABLE_BEGIN
+    u32                                         range_idx, cnt_idx;
+    vtss_appl_dhcp6_snooping_port_statistics_t  stats;
+    vtss_usid_t                                 usid;
+    mesa_port_no_t                              uport;
+    vtss_ifindex_t                              *prev_ifindex = nullptr;
+    vtss_ifindex_t                              next_ifindex;
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_clear(stats);
+    stats.clear_stats = true;
+
+    if (in_interface == FALSE) { //clear all port statistics
+        while (vtss_appl_dhcp6_snooping_port_statistics_itr(prev_ifindex, &next_ifindex) == VTSS_RC_OK) {
+            prev_ifindex = &next_ifindex;
+            ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_statistics_set(next_ifindex, &stats), "%% Failed to clear DHCP port statistics.\n");
+        }
+    } else { //clear specific port statistics
+        (void)icli_cmd_port_range_exist(session_id, in_port_list, TRUE, TRUE);
+
+        for (range_idx = 0; range_idx < in_port_list->cnt; range_idx++) {
+            usid = in_port_list->switch_range[range_idx].usid;
+            for (cnt_idx = 0; cnt_idx < in_port_list->switch_range[range_idx].port_cnt; cnt_idx++) {
+                uport = in_port_list->switch_range[range_idx].begin_uport + cnt_idx;
+
+                ICLI_RC_CHECK(vtss_ifindex_from_usid_uport(usid, uport, &next_ifindex), "%% Failed to resolve DHCP port ifindex.\n");
+                ICLI_RC_CHECK(vtss_appl_dhcp6_snooping_port_statistics_set(next_ifindex, &stats), "%% Failed to clear DHCP port statistics.\n");
+            }
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG   =
+
+COMMAND   = ipv6 dhcp snooping
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+NO_FORM_DOC_CMD_DESC    = Use the no ip dhcp snooping global configuration command to \
+                          globally disable DHCP snooping.
+NO_FORM_DOC_CMD_DEFAULT = DHCP snooping is disabled.
+NO_FORM_DOC_CMD_USAGE   = Disable DHCP snooping global mode.
+NO_FORM_DOC_CMD_EXAMPLE = This example shows how to disable DHCP snooping:
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# no ip dhcp snooping
+NO_FORM_DOC_CMD_EXAMPLE = You can verify your settings by entering the show ip dhcp snooping user EXEC command.
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP =
+
+RUNTIME =
+RUNTIME =
+RUNTIME = dhcpv6_snooping_help_print
+
+CODE_BEGIN
+    /* enable global mode */
+    (void) DHCP6_SNOOPING_ICLI_global_mode_set(session_id, DHCP6_SNOOPING_MODE_ENABLED);
+CODE_END
+
+// (Optional)
+// The no form of this command
+NO_FORM_CODE_BEGIN
+    /* disable global mode */
+    (void) DHCP6_SNOOPING_ICLI_global_mode_set(session_id, DHCP6_SNOOPING_MODE_DISABLED);
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG   =
+
+COMMAND   = ipv6 dhcp snooping nh-unknown { drop | allow }
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_drop
+CMD_VAR   = has_allow
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = ##HELP_SNOOPINGV6
+HELP = Control how packets with unknown IPv6 extension headers are treated.
+HELP = Drop packets with unknown IPv6 extension headers.
+HELP = Allow packets with unknown IPv6 extension headers.
+
+CODE_BEGIN
+    DHCP6_SNOOPING_ICLI_nh_unknown_mode_set(session_id, has_drop, has_allow);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG   =
+
+COMMAND         = ipv6 dhcp snooping trust
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = mode_port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+NO_FORM_DOC_CMD_DESC    = Use the no ip dhcp snooping trust interface configuration command \
+                          to configure a port as untrusted for DHCP snooping purposes.
+NO_FORM_DOC_CMD_DEFAULT = DHCP snooping trust is enabled.
+NO_FORM_DOC_CMD_USAGE   = Configure ports that are connected to DHCP clients as untrusted.
+NO_FORM_DOC_CMD_EXAMPLE = This example shows how to disable DHCP snooping trust on a port:
+NO_FORM_DOC_CMD_EXAMPLE = Switch(if-port)# no ip dhcp snooping trust
+NO_FORM_DOC_CMD_EXAMPLE = You can verify your settings by entering the show ip dhcp snooping user EXEC command.
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_DHCPV6
+HELP = ##HELP_SNOOPINGV6
+HELP = DHCP Snooping trust configuration
+
+CODE_BEGIN
+    /* set port mode trust */
+    (void) DHCP6_SNOOPING_ICLI_port_mode_set(session_id, mode_port_list, DHCP6_SNOOPING_PORT_MODE_TRUSTED);
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    /* set port mode untrust */
+    (void) DHCP6_SNOOPING_ICLI_port_mode_set(session_id, mode_port_list, DHCP6_SNOOPING_PORT_MODE_UNTRUSTED);
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================

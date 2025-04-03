@@ -1,0 +1,219 @@
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_FRR)
+
+INCLUDE_BEGIN
+#include "frr_daemon.hxx"
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include FRR's trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "frr_trace.hxx"
+
+/******************************************************************************/
+// FRR_DAEMON_ICLI_has_staticd()
+/******************************************************************************/
+static BOOL FRR_DAEMON_ICLI_has_staticd(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = frr_has_staticd();
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRR_DAEMON_ICLI_has_ospfd()
+/******************************************************************************/
+static BOOL FRR_DAEMON_ICLI_has_ospfd(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = frr_has_ospfd();
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRR_DAEMON_ICLI_has_ospf6d()
+/******************************************************************************/
+static BOOL FRR_DAEMON_ICLI_has_ospf6d(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = frr_has_ospf6d();
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRR_DAEMON_ICLI_has_ripd()
+/******************************************************************************/
+static BOOL FRR_DAEMON_ICLI_has_ripd(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    runtime->present = frr_has_ripd();
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRR_DAEMON_ICLI_split_cmd()
+/******************************************************************************/
+static vtss::Vector<std::string> FRR_DAEMON_ICLI_split_cmd(const char *cmds)
+{
+    vtss::Vector<std::string> vec_cmds;
+    char                      *saveptr;
+    char                      *token= strtok_r((char *)cmds, ";", &saveptr);
+
+    while (token) {
+        vec_cmds.push_back(std::string(token));
+        token = strtok_r(NULL, ";", &saveptr);
+    }
+
+    return vec_cmds;
+}
+
+/******************************************************************************/
+// FRR_DAEMON_ICLI_to_hex()
+/******************************************************************************/
+static std::string FRR_DAEMON_ICLI_to_hex(const unsigned char *p, size_t size)
+{
+    vtss::StringStream buffer;
+    size_t             i = 0, j;
+
+    while (i < size) {
+        j = 0;
+        buffer << p + i << "/" << vtss::hex_fixed<4>(i) << ": ";
+        while (i + j < size && j < 16) {
+            buffer << " ";
+            buffer << vtss::hex_fixed<2>(p[i + j]);
+            j++;
+        }
+
+        buffer << "\n";
+        i += 16;
+    }
+
+    return buffer.cstring();
+}
+
+/******************************************************************************/
+// FRR_DAEMON_ICLI_cmd()
+/******************************************************************************/
+static mesa_rc FRR_DAEMON_ICLI_cmd(int32_t session_id, frr_daemon_type_t type, const char *cmds, bool hex)
+{
+    vtss::Vector<std::string> vec_cmds = FRR_DAEMON_ICLI_split_cmd(cmds);
+    std::string               result;
+
+    T_IG(FRR_TRACE_GRP_ICLI, "Invoking %d with cmd = %s", type, cmds);
+    VTSS_RC(frr_daemon_cmd(type, vec_cmds, result));
+
+    (void)icli_session_printf_lstr(session_id, result.c_str());
+
+    if (hex) {
+        std::string result_hex = FRR_DAEMON_ICLI_to_hex((unsigned char *)result.c_str(), result.size());
+        (void)icli_session_printf_lstr(session_id, result_hex.c_str());
+    }
+
+    (void)ICLI_PRINTF("\n");
+    return VTSS_RC_OK;
+}
+
+FUNCTION_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND = debug frr {zebra | staticd | ospfd | ospf6d | ripd} [hex] cmd <line>
+
+FUNC_NAME = icli_frr_debug_cmd
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_zebra
+CMD_VAR = has_staticd
+CMD_VAR = has_ospfd
+CMD_VAR = has_ospf6d
+CMD_VAR =
+CMD_VAR = b_hex
+CMD_VAR =
+CMD_VAR = cmds
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = FRR_DAEMON_ICLI_has_staticd
+RUNTIME = FRR_DAEMON_ICLI_has_ospfd
+RUNTIME = FRR_DAEMON_ICLI_has_ospf6d
+RUNTIME = FRR_DAEMON_ICLI_has_ripd
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Free Range Router(FRR)
+HELP = Zebra VTY
+HELP = Staticd VTY
+HELP = OSPFd VTY
+HELP = OSPF6d VTY
+HELP = RIPd VTY
+HELP = In addition to showing the result as plain text, also show result as a hex-dump
+HELP = command
+HELP = input command(s). Use a semicolon (';') to separate multiple commands
+
+CODE_BEGIN
+    frr_daemon_type_t type;
+    mesa_rc           rc;
+
+    if (has_zebra) {
+        type = FRR_DAEMON_TYPE_ZEBRA;
+    } else if (has_staticd) {
+        type = FRR_DAEMON_TYPE_STATIC;
+    } else if (has_ospfd) {
+        type = FRR_DAEMON_TYPE_OSPF;
+    } else if (has_ospf6d) {
+        type = FRR_DAEMON_TYPE_OSPF6;
+    } else {
+        type = FRR_DAEMON_TYPE_RIP;
+    }
+
+    if ((rc = FRR_DAEMON_ICLI_cmd(session_id, type, cmds, b_hex)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+

@@ -1,0 +1,397 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>TAS Configuration Parameters </title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="tsn_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_tsn_port_tas_config.htm";
+
+var myDynamicTable, myDynamicGlobalTable, myPortInfo, myCapabilities;
+var oTPort = Array(), oVPort = Array();
+var oTGuard       = Array("Enabled","Disabled");
+var oVGuard       = Array("true","false");
+
+var oTDenum       = Array("MilliSeconds","MicroSeconds", "NanoSeconds");
+var oVDenum       = Array("1000","1000000", "1000000000");
+
+function isValidPtpTime(field, maxlen) {
+    if (typeof (field) == "string") {
+        field = document.getElementById(field);
+    }
+
+    if (field.value.length > maxlen) {
+        return GiveAlert(what + " must not exceed " + maxlen + " characters", field);
+    }
+
+    return true;
+}
+
+function addHeader(table_rows)
+{
+    var row;
+
+    row = {fields:[
+                   {type:"disp_hdr", params:["Port", 1, 3]},
+                   {type:"disp_hdr", params:["Gate", 9]},
+                   {type:"disp_hdr", params:["GCL Length", 1, 3]},
+                   {type:"disp_hdr", params:["GCL", 1, 3]},
+                   {type:"disp_hdr", params:["Cycle Time", 3]},
+                   {type:"disp_hdr", params:["Base Time", 1,3]},
+                   {type:"disp_hdr", params:["Config Change", 1, 3]}
+                  ]
+          };
+    table_rows.push(row);
+
+    row = {fields:[
+                   {type:"disp_hdr", params:["Enabled", 1, 2]},
+                   {type:"disp_hdr", params:["States", 8]},
+                   {type:"disp_hdr", params:["Value", 1, 2]},
+                   {type:"disp_hdr", params:["Unit", 1, 2]},
+                   {type:"disp_hdr", params:["Extension, ns", 1, 2]}
+                  ]
+          };
+    table_rows.push(row);
+
+    row = {fields:[
+                   {type:"disp_hdr", params:["Q0"]},
+                   {type:"disp_hdr", params:["Q1"]},
+                   {type:"disp_hdr", params:["Q2"]},
+                   {type:"disp_hdr", params:["Q3"]},
+                   {type:"disp_hdr", params:["Q4"]},
+                   {type:"disp_hdr", params:["Q5"]},
+                   {type:"disp_hdr", params:["Q6"]},
+                   {type:"disp_hdr", params:["Q7"]}
+                  ]
+          };
+    table_rows.push(row);
+}
+
+function addRow(key, val)
+{
+    var bits = new Array();
+    var gateStates = parseInt(val.AdminGateStates, 16);
+    stringToBits(gateStates, bits);
+    var row = {fields:[
+                       {type:"text",   params:[oTPort[oVPort.indexOf(key)], "cr"]},
+                       {type:"chkbox", params:[val.GateEnabled, "c", "gate_Enable" + key]},
+                       {type:"chkbox", params:[bits[0], "cr", "gate_statesq0" + key, 8, 8]},
+                       {type:"chkbox", params:[bits[1], "cr", "gate_statesq1" + key, 8, 8]},
+                       {type:"chkbox", params:[bits[2], "cr", "gate_statesq2" + key, 8, 8]},
+                       {type:"chkbox", params:[bits[3], "cr", "gate_statesq3" + key, 8, 8]},
+                       {type:"chkbox", params:[bits[4], "cr", "gate_statesq4" + key, 8, 8]},
+                       {type:"chkbox", params:[bits[5], "cr", "gate_statesq5" + key, 8, 8]},
+                       {type:"chkbox", params:[bits[6], "cr", "gate_statesq6" + key, 8, 8]},
+                       {type:"chkbox", params:[bits[7], "cr", "gate_statesq7" + key, 8, 8]},
+                       {type:"input",  params:[val.AdminControlListLength, "cr", "gcl_length" + key, 3, 3],
+                                       validate:{func:isWithinRange, params:["gcl_length" + key, 0, myCapabilities.TasMaxGceCnt, "GCL Length"]}},
+                       {type:"link",   params:["cr", "tsn_port_tas_gcl.htm?port=" + key, "Configure"]},
+                       {type:"input",  params:[val.AdminCycleTimeNumerator, "cr", "cycle_timeN" + key, 9, 9],
+                                       validate:{func:isWithinRange, params:["cycle_timeN" + key, 0, 999999999, "Cycle Time Numerator"]}},
+                       {type:"select", params:[oTDenum, oVDenum, val.AdminCycleTimeDenominator, "c", "cycle_timeD" + key]},
+                       {type:"input",  params:[val.AdminCycleTimeExtension, "cr", "cycle_timeExt" + key, 9, 9],
+                                       validate:{func:isWithinRange, params:["cycle_timeExt" + key, 0, myCapabilities.TasMaxCycleTime, "Cycle Time Extension"]}},
+                       {type:"input",  params:[val.AdminBaseTimeTxt, "cr", "AdminBaseTimeTxt" + key, 20, 30],
+                                       validate:{func:isValidPtpTime, params:["AdminBaseTimeTxt" + key, 29]} },
+                       {type:"chkbox", params:[val.ConfigChange, "c", "config_change" + key]}
+                      ]
+              };
+
+    return row;
+}
+
+function addGlobalRow(val)
+{
+    var row = {fields:[
+        {type:"conf_hdr", params:["Always Guard Band option"]},
+        {type:"select",   params:[oTGuard, oVGuard, val.AlwaysGuardBand ? "true" : "false", "c", "AlwaysGuardBand"]}
+    ]
+    };
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var table_rows = new Array();
+    addHeader(table_rows);
+    Object.each(recv_json, function(record) {
+        table_rows.push(addRow(record.key, record.val));
+    });
+    return table_rows;
+}
+
+function addGlobalRows(recv_json)
+{
+    var table_rows = new Array();
+    table_rows.push(addGlobalRow(recv_json));
+    return table_rows;
+}
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    if (name == "globalConfig") {
+        myDynamicGlobalTable.saveRecvJson(name, recv_json);
+        myDynamicGlobalTable.addRows(addGlobalRows(recv_json));
+        myDynamicGlobalTable.update();
+    } else if (name == "config") {
+        myDynamicTable.saveRecvJson(name, recv_json);
+        myDynamicTable.addRows(addRows(recv_json));
+        myDynamicTable.update();
+        // Add header control bar
+        var cBar = new HeaderControlBar([
+                                        { text: "*", className: "c" },
+                                        { name: "gate_Enable" },
+                                        { name: "gate_statesq0" },
+                                        { name: "gate_statesq1" },
+                                        { name: "gate_statesq2" },
+                                        { name: "gate_statesq3" },
+                                        { name: "gate_statesq4" },
+                                        { name: "gate_statesq5" },
+                                        { name: "gate_statesq6" },
+                                        { name: "gate_statesq7" },
+                                        { name: "gcl_length" },
+                                         "",
+                                        { name: "cycle_timeN"},
+                                        { name: "cycle_timeD"},
+                                        { name: "cycle_timeExt"},
+                                        { name: "AdminBaseTimeTxt"},
+                                        // { name: "AdminBaseTimeNanoSecs"},
+                                        { name: "config_change" }
+                                        ]);
+
+        cBar.construct($("myTableContentTbody"), 'config_odd');
+    } else {
+        alert("Unexpected configuration name:", name);
+        return;
+    }
+}
+
+function isConsistent()
+{
+    var i, cycle_timeN_fld, cycle_timeD_fld, cycle_timeN_val, cycle_timeD_val;
+    var gcl_length_fld, gcl_length_val, gate_Enable_fld, config_change_fld;
+
+    for (i = 0; i < oTPort.length; i++) {
+        key = oVPort[i];
+        cycle_timeN_fld = $("cycle_timeN" + key);
+        if (!cycle_timeN_fld) {
+            continue;
+        }
+
+        cycle_timeD_fld = $("cycle_timeD" + key);
+        if (!cycle_timeD_fld) {
+            continue;
+        }
+
+        cycle_timeN_val = parseInt(cycle_timeN_fld.value,10);
+        cycle_timeD_val = parseInt(cycle_timeD_fld.value,10);
+        cycleTime = cycle_timeN_val/cycle_timeD_val * 1000000000; // in nano seconds
+
+        if ( cycleTime < myCapabilities.TasMinCycleTime ) {
+            return GiveAlert("The Cycle Time " + cycleTime + " nano seconds must not be smaller than " + myCapabilities.TasMinCycleTime + " nano seconds", cycle_timeN_fld);
+        }
+
+        if ( cycleTime > myCapabilities.TasMaxCycleTime ) {
+            return GiveAlert("The Cycle Time " + cycleTime + " nano seconds must not be larger than " + myCapabilities.TasMaxCycleTime + " nano seconds", cycle_timeN_fld);
+        }
+
+        gcl_length_fld = $("gcl_length" + key);
+        gcl_length_val = parseInt(gcl_length_fld.value,10);
+
+    }
+
+    return true;
+}
+
+
+function checkForm()
+{
+    // Check if duplicated row key
+    if (!isConsistent()) {
+        return false;
+    }
+
+    return true;
+}
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicGlobalTable.restore();
+    myDynamicTable.restore();
+
+    requestJsonDoc("tsn.config.tas.get", null, processUpdate, "globalConfig");
+    requestJsonDoc("tsn.config.interface.tas.params.get", null, processUpdate, "config");
+}
+
+function resetForms()
+{
+    myDynamicGlobalTable.resetEvent();
+    myDynamicTable.resetEvent();
+}
+
+function submitForms()
+{
+    // Validate row data
+    if (!myDynamicTable.validate()) {
+        return;
+    }
+
+    var recv_json = myDynamicTable.getRecvJson("config");
+    var val = 0, val_hex;
+    var queueNo;
+    var bit = new Array();
+    // Values in this structure doesn't matter. Will be assigned values later
+    json_obj = {"GateEnabled":false,"AdminGateStates":"ff","AdminControlListLength":0,"AdminCycleTimeNumerator":1,"AdminCycleTimeDenominator":10,
+                "AdminCycleTimeExtension":0,"AdminBaseTimeTxt":"1972/01/01 00:00:00","ConfigChange":false};
+
+    resetPending();
+
+    Object.each(recv_json, function(record) {
+        var port = record.key;
+        // Convert internal fields value
+        val = 0;
+        for( queueNo = 0; queueNo < 8; queueNo ++) {
+            bit[queueNo] = $("gate_statesq" + queueNo + port).checked ? 1 : 0;
+            val = val + (bit[queueNo] * Math.pow(2, queueNo));
+        }
+        val_hex = val.toString(16);
+        if (val_hex.length < 2) {
+            val_hex = "0" + val_hex; // Must be mapping to OctetString of length 1 byte, i.e. : "xx"
+        }
+
+        json_obj["GateEnabled"]                 = $("gate_Enable" + port).checked ? true : false;
+        json_obj["AdminGateStates"]             = val_hex;
+        json_obj["AdminControlListLength"]      = parseInt($("gcl_length" + port).value,10);
+        json_obj["AdminCycleTimeNumerator"]     = parseInt($("cycle_timeN" + port).value,10);
+        json_obj["AdminCycleTimeDenominator"]   = parseInt($("cycle_timeD" + port).value,10);
+        json_obj["AdminCycleTimeExtension"]     = parseInt($("cycle_timeExt" + port).value,10);
+        json_obj["AdminBaseTimeTxt"]            = $("AdminBaseTimeTxt" + port).value;
+        json_obj["ConfigChange"]                = $("config_change" + port).checked ? true : false;
+
+        // Only submit tsn.config.interface.tas.params.set if there are changes.
+        // record.val is the value retrieved by the latest get command
+        // json_obj is calculated based on the values on Web page
+        if (JSON.stringify(record.val) != JSON.stringify(json_obj)) {
+            var submit_json = [record.key, json_obj];
+            // This record changed, update with new values
+            incrementPending();
+            requestJsonDoc("tsn.config.interface.tas.params.set", submit_json, decrementPending);
+        }
+
+    });
+
+    var old_param = myDynamicGlobalTable.getRecvJson("globalConfig");
+    var new_param = {"AlwaysGuardBand":$("AlwaysGuardBand").value=="false" ? false : true};
+
+    if (JSON.stringify(old_param) != JSON.stringify(new_param)) {
+        // This record changed, update with new values
+        incrementPending();
+        requestJsonDoc("tsn.config.tas.set", new_param, decrementPending);
+    }
+    // Wait until all json requests have returned, but max 500 ms.
+    requestUpdateWhenDone(500);
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    } else if (name == "capabilities") {
+        myCapabilities = recv_json;
+    }
+     // This table requires two JSON data.
+    if (myPortInfo && myCapabilities) {
+        requestUpdate();
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a from with table body for receive/transmit JSON data
+    myDynamicGlobalTable = new DynamicTable("myTableGlobalContent", "config");
+    myDynamicTable = new DynamicTable("myTableContent", "config", null, {func:checkForm, params:[]});
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+    requestJsonDoc("tsn.capabilities.get", null, requestUpdateGlobals, "capabilities");
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>TAS Configuration Parameters </h1>
+
+<div class="refreshbar">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableGlobalContent"></div>
+
+<h1>TAS Port Configuration Parameters </h1>
+<div id="myTableContent"></div>
+
+<p>
+<input type="button" value="Save" onclick="submitForms();">
+<input type="button" value="Reset" onclick="resetForms();">
+</p>
+
+</body>
+</html>

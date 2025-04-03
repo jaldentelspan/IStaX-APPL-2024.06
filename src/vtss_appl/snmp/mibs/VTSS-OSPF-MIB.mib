@@ -1,0 +1,4460 @@
+-- *****************************************************************
+-- OSPF-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-OSPF-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Counter64 FROM SNMPv2-SMI
+    Integer32 FROM SNMPv2-SMI
+    IpAddress FROM SNMPv2-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    TruthValue FROM SNMPv2-TC
+    VTSSDisplayString FROM VTSS-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    ;
+
+vtssOspfMib MODULE-IDENTITY
+    LAST-UPDATED "202402090000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "This is a private version of the OSPF MIB."
+    REVISION    "202402090000Z"
+    DESCRIPTION
+        "Add MtuIgnore"
+    REVISION    "201807090000Z"
+    DESCRIPTION
+        "Add RIP redistributed, database support, and correct the key length
+         from 160 to 128 according to the cryptography."
+    REVISION    "201805160000Z"
+    DESCRIPTION
+        "Update OSPF capabilities."
+    REVISION    "201805140000Z"
+    DESCRIPTION
+        "Add stub router, NSSA, default route redistribution and passive
+         interface support."
+    REVISION    "201711110000Z"
+    DESCRIPTION
+        "Initial version."
+    ::= { vtssSwitchMgmt 154 }
+
+
+VTSSOspfAreaType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The area type."
+    SYNTAX      INTEGER { normalArea(0), stubArea(1),
+                          totallyStubArea(2), nssa(3), areaUnknown(4) }
+
+VTSSOspfAuthType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration indicates OSPF authentication type."
+    SYNTAX      INTEGER { nullAuth(0), simplePasswordAuth(1),
+                          md5Auth(2), areaConfigAuth(3) }
+
+VTSSOspfBorderRouterType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The border router type of the OSPF route entry."
+    SYNTAX      INTEGER { abr(0), asbrIntra(1), asbrInter(2),
+                          abrAsbr(3), none(4) }
+
+VTSSOspfInterfaceState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The state of the link."
+    SYNTAX      INTEGER { down(1), loopback(2), waiting(3),
+                          pointToPoint(4), drOther(5), bdr(6), dr(7),
+                          unknown(8) }
+
+VTSSOspfLsdbType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    SYNTAX      INTEGER { none(0), router(1), network(2), summary(3),
+                          asbrSummary(4), external(5),
+                          nssaExternal(7) }
+
+VTSSOspfNeighborState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The state of the neighbor node."
+    SYNTAX      INTEGER { dependupon(0), deleted(1), down(2),
+                          attempt(3), init(4), twoWay(5), exstart(6),
+                          exchange(7), loading(8), full(9),
+                          unknown(10) }
+
+VTSSOspfNssaTranslatorRole ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The OSPF NSSA translator role."
+    SYNTAX      INTEGER { candidate(0), never(1), always(2) }
+
+VTSSOspfNssaTranslatorState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The OSPF NSSA translator state."
+    SYNTAX      INTEGER { disabled(0), elected(1), enabled(2) }
+
+VTSSOspfRedistributedMetricType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The OSPF redistributed metric type."
+    SYNTAX      INTEGER { metricTypeNone(0), metricType1(1),
+                          metricType2(2) }
+
+VTSSOspfRouteType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The OSPF route type."
+    SYNTAX      INTEGER { intraArea(0), interArea(1), borderRouter(2),
+                          externalType1(3), externalType2(4),
+                          unknown(5) }
+
+vtssOspfMibObjects OBJECT IDENTIFIER
+    ::= { vtssOspfMib 1 }
+
+vtssOspfCapabilities OBJECT IDENTIFIER
+    ::= { vtssOspfMibObjects 1 }
+
+vtssOspfCapabilitiesMinInstanceId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "OSPF minimum instance ID"
+    ::= { vtssOspfCapabilities 1 }
+
+vtssOspfCapabilitiesMaxInstanceId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "OSPF maximum instance ID"
+    ::= { vtssOspfCapabilities 2 }
+
+vtssOspfCapabilitiesMinRouterId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF router ID"
+    ::= { vtssOspfCapabilities 3 }
+
+vtssOspfCapabilitiesMaxRouterId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF router ID"
+    ::= { vtssOspfCapabilities 4 }
+
+vtssOspfCapabilitiesMinPriority OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF priority"
+    ::= { vtssOspfCapabilities 5 }
+
+vtssOspfCapabilitiesMaxPriority OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF priority"
+    ::= { vtssOspfCapabilities 6 }
+
+vtssOspfCapabilitiesMinGeneralCost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF interface cost"
+    ::= { vtssOspfCapabilities 7 }
+
+vtssOspfCapabilitiesMaxGeneralCost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF interface cost"
+    ::= { vtssOspfCapabilities 8 }
+
+vtssOspfCapabilitiesMinInterfaceCost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF interface cost"
+    ::= { vtssOspfCapabilities 9 }
+
+vtssOspfCapabilitiesMaxInterfaceCost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF interface cost"
+    ::= { vtssOspfCapabilities 10 }
+
+vtssOspfCapabilitiesMinRedistributeCost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF redistribute cost"
+    ::= { vtssOspfCapabilities 11 }
+
+vtssOspfCapabilitiesMaxRedistributeCost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF redistribute cost"
+    ::= { vtssOspfCapabilities 12 }
+
+vtssOspfCapabilitiesMinHelloInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF hello interval"
+    ::= { vtssOspfCapabilities 13 }
+
+vtssOspfCapabilitiesMaxHelloInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF hello interval"
+    ::= { vtssOspfCapabilities 14 }
+
+vtssOspfCapabilitiesMinFastHelloPackets OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF fast hello packets"
+    ::= { vtssOspfCapabilities 15 }
+
+vtssOspfCapabilitiesMaxFastHelloPackets OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF fast hello packets"
+    ::= { vtssOspfCapabilities 16 }
+
+vtssOspfCapabilitiesMinRetransmitInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF retransmit interval"
+    ::= { vtssOspfCapabilities 17 }
+
+vtssOspfCapabilitiesMaxRetransmitInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF retransmit interval"
+    ::= { vtssOspfCapabilities 18 }
+
+vtssOspfCapabilitiesMinDeadInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF dead interval"
+    ::= { vtssOspfCapabilities 19 }
+
+vtssOspfCapabilitiesMaxDeadInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF dead interval"
+    ::= { vtssOspfCapabilities 20 }
+
+vtssOspfCapabilitiesMinRouterLsaOnStartup OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF router LSA on startup stage"
+    ::= { vtssOspfCapabilities 21 }
+
+vtssOspfCapabilitiesMaxRouterLsaOnStartup OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF router LSA on startup stage"
+    ::= { vtssOspfCapabilities 22 }
+
+vtssOspfCapabilitiesMinRouterLsaOnShutdown OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of router LSA on shutdown stage"
+    ::= { vtssOspfCapabilities 23 }
+
+vtssOspfCapabilitiesMaxRouterLsaOnShutdown OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF router LSA on shutdown stage"
+    ::= { vtssOspfCapabilities 24 }
+
+vtssOspfCapabilitiesMinMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF authentication message digest key ID"
+    ::= { vtssOspfCapabilities 25 }
+
+vtssOspfCapabilitiesMaxMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF authentication message digest key ID"
+    ::= { vtssOspfCapabilities 26 }
+
+vtssOspfCapabilitiesMinSimplePwdLen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum vlength of OSPF authentication simple password length"
+    ::= { vtssOspfCapabilities 27 }
+
+vtssOspfCapabilitiesMaxSimplePwdLen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum length of OSPF authentication simple password length"
+    ::= { vtssOspfCapabilities 28 }
+
+vtssOspfCapabilitiesMinMdKeyLen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum length of OSPF authentication message digest key length"
+    ::= { vtssOspfCapabilities 29 }
+
+vtssOspfCapabilitiesMaxMdKeyLen OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum length of OSPF authentication message digest key length"
+    ::= { vtssOspfCapabilities 30 }
+
+vtssOspfCapabilitiesIsRipRedistributedSupported OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate if RIP redistributed is supported or not"
+    ::= { vtssOspfCapabilities 31 }
+
+vtssOspfCapabilitiesMinAdminDistance OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum value of OSPF administrative distance value"
+    ::= { vtssOspfCapabilities 32 }
+
+vtssOspfCapabilitiesMaxAdminDistance OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum value of OSPF administrative distance value"
+    ::= { vtssOspfCapabilities 33 }
+
+vtssOspfConfig OBJECT IDENTIFIER
+    ::= { vtssOspfMibObjects 2 }
+
+vtssOspfConfigProcessTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigProcessEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF process configuration table. It is used to enable or
+         disable the routing process on a specific process ID."
+    ::= { vtssOspfConfig 1 }
+
+vtssOspfConfigProcessEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigProcessEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF routing process."
+    INDEX       { vtssOspfConfigProcessInstanceId }
+    ::= { vtssOspfConfigProcessTable 1 }
+
+VTSSOspfConfigProcessEntry ::= SEQUENCE {
+    vtssOspfConfigProcessInstanceId  Integer32,
+    vtssOspfConfigProcessAction      VTSSRowEditorState
+}
+
+vtssOspfConfigProcessInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigProcessEntry 1 }
+
+vtssOspfConfigProcessAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigProcessEntry 100 }
+
+vtssOspfConfigProcessTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 2 }
+
+vtssOspfConfigProcessTableRowEditorInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigProcessTableRowEditor 1 }
+
+vtssOspfConfigProcessTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigProcessTableRowEditor 100 }
+
+vtssOspfConfigRouterTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigRouterEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF router configuration table. It is a general group to
+         configure the OSPF common router parameters."
+    ::= { vtssOspfConfig 3 }
+
+vtssOspfConfigRouterEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigRouterEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents the OSPF router interface
+         configuration."
+    INDEX       { vtssOspfConfigRouterInstanceId }
+    ::= { vtssOspfConfigRouterTable 1 }
+
+VTSSOspfConfigRouterEntry ::= SEQUENCE {
+    vtssOspfConfigRouterInstanceId                          Integer32,
+    vtssOspfConfigRouterIsSpecificRouterId                  TruthValue,
+    vtssOspfConfigRouterRouterId                            IpAddress,
+    vtssOspfConfigRouterDefPassiveInterface                 TruthValue,
+    vtssOspfConfigRouterIsSpecificDefMetric                 TruthValue,
+    vtssOspfConfigRouterDefMetricVal                        Unsigned32,
+    vtssOspfConfigRouterConnectedRedistMetricType           VTSSOspfRedistributedMetricType,
+    vtssOspfConfigRouterConnectedRedistIsSpecificMetric     TruthValue,
+    vtssOspfConfigRouterConnectedRedistMetricVal            Unsigned32,
+    vtssOspfConfigRouterStaticRedistMetricType              VTSSOspfRedistributedMetricType,
+    vtssOspfConfigRouterStaticRedistIsSpecificMetric        TruthValue,
+    vtssOspfConfigRouterStaticRedistMetricVal               Unsigned32,
+    vtssOspfConfigRouterRipRedistMetricType                 VTSSOspfRedistributedMetricType,
+    vtssOspfConfigRouterRipRedistIsSpecificMetric           TruthValue,
+    vtssOspfConfigRouterRipRedistMetricVal                  Unsigned32,
+    vtssOspfConfigRouterIsOnStartup                         TruthValue,
+    vtssOspfConfigRouterOnStartupInterval                   Unsigned32,
+    vtssOspfConfigRouterIsOnShutdown                        TruthValue,
+    vtssOspfConfigRouterOnShutdownInterval                  Unsigned32,
+    vtssOspfConfigRouterIsAdministrative                    TruthValue,
+    vtssOspfConfigRouterDefaultRouteRedistMetricType        VTSSOspfRedistributedMetricType,
+    vtssOspfConfigRouterDefaultRouteRedistIsSpecificMetric  TruthValue,
+    vtssOspfConfigRouterDefaultRouteRedistMetricVal         Unsigned32,
+    vtssOspfConfigRouterDefaultRouteRedistAlways            TruthValue,
+    vtssOspfConfigRouterAdminDistance                       VTSSUnsigned8
+}
+
+vtssOspfConfigRouterInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigRouterEntry 1 }
+
+vtssOspfConfigRouterIsSpecificRouterId OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the 'RouterId' argument is a specific configured value or not."
+    ::= { vtssOspfConfigRouterEntry 2 }
+
+vtssOspfConfigRouterRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID"
+    ::= { vtssOspfConfigRouterEntry 3 }
+
+vtssOspfConfigRouterDefPassiveInterface OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Configure all interfaces as passive-interface by default."
+    ::= { vtssOspfConfigRouterEntry 4 }
+
+vtssOspfConfigRouterIsSpecificDefMetric OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the default metric is a specific configured value or not."
+    ::= { vtssOspfConfigRouterEntry 5 }
+
+vtssOspfConfigRouterDefMetricVal OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777214)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified default metric value for the OSPF routing protocol. The
+         field is significant only when the arugment 'IsSpecificDefMetric' is
+         TRUE"
+    ::= { vtssOspfConfigRouterEntry 6 }
+
+vtssOspfConfigRouterConnectedRedistMetricType OBJECT-TYPE
+    SYNTAX      VTSSOspfRedistributedMetricType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF redistributed metric type for the connected interfaces."
+    ::= { vtssOspfConfigRouterEntry 7 }
+
+vtssOspfConfigRouterConnectedRedistIsSpecificMetric OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the metric value of connected interfaces redistribution is a
+         specific configured value or not."
+    ::= { vtssOspfConfigRouterEntry 8 }
+
+vtssOspfConfigRouterConnectedRedistMetricVal OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777214)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified metric value for the connected interfaces. The field is
+         significant only when the argument 'ConnectedRedistIsSpecificMetric' is
+         TRUE"
+    ::= { vtssOspfConfigRouterEntry 9 }
+
+vtssOspfConfigRouterStaticRedistMetricType OBJECT-TYPE
+    SYNTAX      VTSSOspfRedistributedMetricType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF redistributed metric type for the static routes."
+    ::= { vtssOspfConfigRouterEntry 10 }
+
+vtssOspfConfigRouterStaticRedistIsSpecificMetric OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the metric value if static route redistribution is a specific
+         configured value or not."
+    ::= { vtssOspfConfigRouterEntry 11 }
+
+vtssOspfConfigRouterStaticRedistMetricVal OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777214)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified metric value for the static routes. The field is
+         significant only when the argument 'StaticRedistIsSpecificMetric' is
+         TRUE"
+    ::= { vtssOspfConfigRouterEntry 12 }
+
+vtssOspfConfigRouterRipRedistMetricType OBJECT-TYPE
+    SYNTAX      VTSSOspfRedistributedMetricType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF redistributed metric type for the RIP routes. The field is
+         significant only when the RIP protocol is supported on the device."
+    ::= { vtssOspfConfigRouterEntry 13 }
+
+vtssOspfConfigRouterRipRedistIsSpecificMetric OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the metric value if RIP route redistribution is a specific
+         configured value or not.The field is significant only when the RIP
+         protocol is supported on the device."
+    ::= { vtssOspfConfigRouterEntry 14 }
+
+vtssOspfConfigRouterRipRedistMetricVal OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777214)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified metric value for the RIP routes. The field is
+         significant only when the RIP protocol is supported on the device and
+         argument 'RipRedistIsSpecificMetric' is TRUE."
+    ::= { vtssOspfConfigRouterEntry 15 }
+
+vtssOspfConfigRouterIsOnStartup OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Configures OSPF to advertise a maximum metric during startup for a
+         configured period of time."
+    ::= { vtssOspfConfigRouterEntry 16 }
+
+vtssOspfConfigRouterOnStartupInterval OBJECT-TYPE
+    SYNTAX      Unsigned32 (5..86400)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified time interval (seconds) to advertise itself as stub
+         area. The field is significant only when the on-startup mode is
+         enabled."
+    ::= { vtssOspfConfigRouterEntry 17 }
+
+vtssOspfConfigRouterIsOnShutdown OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Configures OSPF to advertise a maximum metric during shutdown for a
+         configured period of time. The device advertises a maximum metric when
+         the OSPF router mode is disabled and notice that the mechanism also
+         works when the device reboots but not for the'reload default' case."
+    ::= { vtssOspfConfigRouterEntry 18 }
+
+vtssOspfConfigRouterOnShutdownInterval OBJECT-TYPE
+    SYNTAX      Unsigned32 (5..100)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified time interval (seconds) to wait till shutdown completed.
+         The field is significant only when the on-shutdown mode is enabled."
+    ::= { vtssOspfConfigRouterEntry 19 }
+
+vtssOspfConfigRouterIsAdministrative OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Configures OSPF stub router mode administratively applied, for an
+         indefinite period."
+    ::= { vtssOspfConfigRouterEntry 20 }
+
+vtssOspfConfigRouterDefaultRouteRedistMetricType OBJECT-TYPE
+    SYNTAX      VTSSOspfRedistributedMetricType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF redistributed metric type for a default route."
+    ::= { vtssOspfConfigRouterEntry 21 }
+
+vtssOspfConfigRouterDefaultRouteRedistIsSpecificMetric OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the metric value of a default route redistribution is a
+         specific configured value or not."
+    ::= { vtssOspfConfigRouterEntry 22 }
+
+vtssOspfConfigRouterDefaultRouteRedistMetricVal OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777214)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified metric value for a default route. The field is
+         significant only when the argument 'DefaultRouteRedistIsSpecificMetric'
+         is TRUE"
+    ::= { vtssOspfConfigRouterEntry 23 }
+
+vtssOspfConfigRouterDefaultRouteRedistAlways OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Specifies to always advertise a default route into all external-routing
+         capable areas. Otherwise, the router only to advertise the default
+         route when the advertising router already has a default route."
+    ::= { vtssOspfConfigRouterEntry 24 }
+
+vtssOspfConfigRouterAdminDistance OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8 (1..255)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF administrative distance."
+    ::= { vtssOspfConfigRouterEntry 25 }
+
+vtssOspfConfigRouterInterfaceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigRouterInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF router interface configuration table."
+    ::= { vtssOspfConfig 4 }
+
+vtssOspfConfigRouterInterfaceEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigRouterInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each router interface has a set of parameters."
+    INDEX       { vtssOspfConfigRouterInterfaceInstanceId,
+                  vtssOspfConfigRouterInterfaceIfIndex }
+    ::= { vtssOspfConfigRouterInterfaceTable 1 }
+
+VTSSOspfConfigRouterInterfaceEntry ::= SEQUENCE {
+    vtssOspfConfigRouterInterfaceInstanceId        Integer32,
+    vtssOspfConfigRouterInterfaceIfIndex           VTSSInterfaceIndex,
+    vtssOspfConfigRouterInterfacePassiveInterface  TruthValue
+}
+
+vtssOspfConfigRouterInterfaceInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigRouterInterfaceEntry 1 }
+
+vtssOspfConfigRouterInterfaceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssOspfConfigRouterInterfaceEntry 2 }
+
+vtssOspfConfigRouterInterfacePassiveInterface OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Enable the interface as OSPF passive-interface."
+    ::= { vtssOspfConfigRouterInterfaceEntry 3 }
+
+vtssOspfConfigAreaTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigAreaEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF area configuration table. It is used to specify the OSPF
+         enabled interface(s). When OSPF is enabled on the specific
+         interface(s), the router can provide the network information to the
+         other OSPF routers via those interfaces."
+    ::= { vtssOspfConfig 5 }
+
+vtssOspfConfigAreaEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigAreaEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents the OSPF enabled interface(s) and
+         its area ID."
+    INDEX       { vtssOspfConfigAreaInstanceId,
+                  vtssOspfConfigAreaNetwork,
+                  vtssOspfConfigAreaIpSubnetMaskLength }
+    ::= { vtssOspfConfigAreaTable 1 }
+
+VTSSOspfConfigAreaEntry ::= SEQUENCE {
+    vtssOspfConfigAreaInstanceId          Integer32,
+    vtssOspfConfigAreaNetwork             IpAddress,
+    vtssOspfConfigAreaIpSubnetMaskLength  Integer32,
+    vtssOspfConfigAreaAreaId              IpAddress,
+    vtssOspfConfigAreaAction              VTSSRowEditorState
+}
+
+vtssOspfConfigAreaInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigAreaEntry 1 }
+
+vtssOspfConfigAreaNetwork OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network address."
+    ::= { vtssOspfConfigAreaEntry 2 }
+
+vtssOspfConfigAreaIpSubnetMaskLength OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network mask length."
+    ::= { vtssOspfConfigAreaEntry 3 }
+
+vtssOspfConfigAreaAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigAreaEntry 4 }
+
+vtssOspfConfigAreaAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigAreaEntry 100 }
+
+vtssOspfConfigAreaTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 6 }
+
+vtssOspfConfigAreaTableRowEditorInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigAreaTableRowEditor 1 }
+
+vtssOspfConfigAreaTableRowEditorNetwork OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network address."
+    ::= { vtssOspfConfigAreaTableRowEditor 2 }
+
+vtssOspfConfigAreaTableRowEditorIpSubnetMaskLength OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network mask length."
+    ::= { vtssOspfConfigAreaTableRowEditor 3 }
+
+vtssOspfConfigAreaTableRowEditorAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigAreaTableRowEditor 4 }
+
+vtssOspfConfigAreaTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigAreaTableRowEditor 100 }
+
+vtssOspfConfigAreaAuthTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigAreaAuthEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF area authentication configuration table. It is used to
+         applied the authentication to all the interfaces belong to the area."
+    ::= { vtssOspfConfig 7 }
+
+vtssOspfConfigAreaAuthEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigAreaAuthEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF area authentication
+         configuration. Notice that the authentication type setting on the
+         sepecific interface overrides the area's setting."
+    INDEX       { vtssOspfConfigAreaAuthInstanceId,
+                  vtssOspfConfigAreaAuthAreaId }
+    ::= { vtssOspfConfigAreaAuthTable 1 }
+
+VTSSOspfConfigAreaAuthEntry ::= SEQUENCE {
+    vtssOspfConfigAreaAuthInstanceId    Integer32,
+    vtssOspfConfigAreaAuthAreaId        IpAddress,
+    vtssOspfConfigAreaAuthAreaAuthType  VTSSOspfAuthType,
+    vtssOspfConfigAreaAuthAction        VTSSRowEditorState
+}
+
+vtssOspfConfigAreaAuthInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigAreaAuthEntry 1 }
+
+vtssOspfConfigAreaAuthAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigAreaAuthEntry 2 }
+
+vtssOspfConfigAreaAuthAreaAuthType OBJECT-TYPE
+    SYNTAX      VTSSOspfAuthType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF authentication type."
+    ::= { vtssOspfConfigAreaAuthEntry 3 }
+
+vtssOspfConfigAreaAuthAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigAreaAuthEntry 100 }
+
+vtssOspfConfigAreaAuthTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 8 }
+
+vtssOspfConfigAreaAuthTableRowEditorInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigAreaAuthTableRowEditor 1 }
+
+vtssOspfConfigAreaAuthTableRowEditorAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigAreaAuthTableRowEditor 2 }
+
+vtssOspfConfigAreaAuthTableRowEditorAreaAuthType OBJECT-TYPE
+    SYNTAX      VTSSOspfAuthType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF authentication type."
+    ::= { vtssOspfConfigAreaAuthTableRowEditor 3 }
+
+vtssOspfConfigAreaAuthTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigAreaAuthTableRowEditor 100 }
+
+vtssOspfConfigAreaRangeTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigAreaRangeEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF area range configuration table. It is used to summarize
+         the intra area paths from a specific address range in one
+         summary-LSA(Type-3) and advertised to other areas or configure the
+         address range status as 'DoNotAdvertise' which the summary-LSA(Type-3)
+         is suppressed.
+         
+         The area range configuration is used for Area Border Routers (ABRs) and
+         only router-LSAs(Type-1) and network-LSAs (Type-2) can be summarized.
+         The AS-external-LSAs(Type-5) cannot be summarized because the scope is
+         OSPF autonomous system (AS). The AS-external-LSAs(Type-7) cannot be
+         summarized because the feature is not supported yet."
+    ::= { vtssOspfConfig 9 }
+
+vtssOspfConfigAreaRangeEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigAreaRangeEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF area range configuration. The
+         overlap configuration of address range is not allowed in order to avoid
+         the conflict."
+    INDEX       { vtssOspfConfigAreaRangeInstanceId,
+                  vtssOspfConfigAreaRangeAreaId,
+                  vtssOspfConfigAreaRangeNetwork,
+                  vtssOspfConfigAreaRangeIpSubnetMaskLength }
+    ::= { vtssOspfConfigAreaRangeTable 1 }
+
+VTSSOspfConfigAreaRangeEntry ::= SEQUENCE {
+    vtssOspfConfigAreaRangeInstanceId          Integer32,
+    vtssOspfConfigAreaRangeAreaId              IpAddress,
+    vtssOspfConfigAreaRangeNetwork             IpAddress,
+    vtssOspfConfigAreaRangeIpSubnetMaskLength  Integer32,
+    vtssOspfConfigAreaRangeAdvertised          TruthValue,
+    vtssOspfConfigAreaRangeIsSpecificCost      TruthValue,
+    vtssOspfConfigAreaRangeCost                Unsigned32,
+    vtssOspfConfigAreaRangeAction              VTSSRowEditorState
+}
+
+vtssOspfConfigAreaRangeInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigAreaRangeEntry 1 }
+
+vtssOspfConfigAreaRangeAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigAreaRangeEntry 2 }
+
+vtssOspfConfigAreaRangeNetwork OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network address."
+    ::= { vtssOspfConfigAreaRangeEntry 3 }
+
+vtssOspfConfigAreaRangeIpSubnetMaskLength OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network mask length."
+    ::= { vtssOspfConfigAreaRangeEntry 4 }
+
+vtssOspfConfigAreaRangeAdvertised OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When the value is true, it summarizes intra area paths from the address
+         range in one summary-LSA(Type-3) and advertised to other areas.
+         
+         Otherwise, the intra area paths from the address range are not
+         advertised to other areas."
+    ::= { vtssOspfConfigAreaRangeEntry 5 }
+
+vtssOspfConfigAreaRangeIsSpecificCost OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the 'cost' argument is a specific configured value or not."
+    ::= { vtssOspfConfigAreaRangeEntry 6 }
+
+vtssOspfConfigAreaRangeCost OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777215)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified cost (or metric) for this summary route. The field is
+         significant only when 'IsSpecificCost' is TRUE."
+    ::= { vtssOspfConfigAreaRangeEntry 7 }
+
+vtssOspfConfigAreaRangeAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigAreaRangeEntry 100 }
+
+vtssOspfConfigAreaRangeTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 10 }
+
+vtssOspfConfigAreaRangeTableRowEditorInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 1 }
+
+vtssOspfConfigAreaRangeTableRowEditorAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 2 }
+
+vtssOspfConfigAreaRangeTableRowEditorNetwork OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network address."
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 3 }
+
+vtssOspfConfigAreaRangeTableRowEditorIpSubnetMaskLength OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network mask length."
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 4 }
+
+vtssOspfConfigAreaRangeTableRowEditorAdvertised OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When the value is true, it summarizes intra area paths from the address
+         range in one summary-LSA(Type-3) and advertised to other areas.
+         
+         Otherwise, the intra area paths from the address range are not
+         advertised to other areas."
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 5 }
+
+vtssOspfConfigAreaRangeTableRowEditorIsSpecificCost OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the 'cost' argument is a specific configured value or not."
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 6 }
+
+vtssOspfConfigAreaRangeTableRowEditorCost OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777215)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified cost (or metric) for this summary route. The field is
+         significant only when 'IsSpecificCost' is TRUE."
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 7 }
+
+vtssOspfConfigAreaRangeTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigAreaRangeTableRowEditor 100 }
+
+vtssOspfConfigInterfaceMdKeyTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigInterfaceMdKeyEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is interface authentication message digest key configuration able."
+    ::= { vtssOspfConfig 11 }
+
+vtssOspfConfigInterfaceMdKeyEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigInterfaceMdKeyEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each interface has a set of parameters."
+    INDEX       { vtssOspfConfigInterfaceMdKeyIfIndex,
+                  vtssOspfConfigInterfaceMdKeyMdKeyId }
+    ::= { vtssOspfConfigInterfaceMdKeyTable 1 }
+
+VTSSOspfConfigInterfaceMdKeyEntry ::= SEQUENCE {
+    vtssOspfConfigInterfaceMdKeyIfIndex      VTSSInterfaceIndex,
+    vtssOspfConfigInterfaceMdKeyMdKeyId      VTSSUnsigned8,
+    vtssOspfConfigInterfaceMdKeyIsEncrypted  TruthValue,
+    vtssOspfConfigInterfaceMdKeyMdKey        VTSSDisplayString,
+    vtssOspfConfigInterfaceMdKeyAction       VTSSRowEditorState
+}
+
+vtssOspfConfigInterfaceMdKeyIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssOspfConfigInterfaceMdKeyEntry 1 }
+
+vtssOspfConfigInterfaceMdKeyMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The key ID for message digest authentication."
+    ::= { vtssOspfConfigInterfaceMdKeyEntry 2 }
+
+vtssOspfConfigInterfaceMdKeyIsEncrypted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The flag indicates themessage digest key is encrypted or not. TRUE
+         means the message digest key is encrypted. FALSE means the message
+         digest key is plain text."
+    ::= { vtssOspfConfigInterfaceMdKeyEntry 3 }
+
+vtssOspfConfigInterfaceMdKeyMdKey OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..128))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The message digest key."
+    ::= { vtssOspfConfigInterfaceMdKeyEntry 4 }
+
+vtssOspfConfigInterfaceMdKeyAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigInterfaceMdKeyEntry 100 }
+
+vtssOspfConfigInterfaceMdKeyTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 12 }
+
+vtssOspfConfigInterfaceMdKeyTableRowEditorIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssOspfConfigInterfaceMdKeyTableRowEditor 1 }
+
+vtssOspfConfigInterfaceMdKeyTableRowEditorMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The key ID for message digest authentication."
+    ::= { vtssOspfConfigInterfaceMdKeyTableRowEditor 2 }
+
+vtssOspfConfigInterfaceMdKeyTableRowEditorIsEncrypted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The flag indicates themessage digest key is encrypted or not. TRUE
+         means the message digest key is encrypted. FALSE means the message
+         digest key is plain text."
+    ::= { vtssOspfConfigInterfaceMdKeyTableRowEditor 3 }
+
+vtssOspfConfigInterfaceMdKeyTableRowEditorMdKey OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..128))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The message digest key."
+    ::= { vtssOspfConfigInterfaceMdKeyTableRowEditor 4 }
+
+vtssOspfConfigInterfaceMdKeyTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigInterfaceMdKeyTableRowEditor 100 }
+
+vtssOspfConfigVlinkTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigVlinkEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF virtual link configuration table. The virtual link is
+         established between 2 ABRs to overcome that all the areas have to be
+         connected directly to the backbone area."
+    ::= { vtssOspfConfig 13 }
+
+vtssOspfConfigVlinkEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigVlinkEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF virtual link configuration."
+    INDEX       { vtssOspfConfigVlinkInstanceId,
+                  vtssOspfConfigVlinkAreaId,
+                  vtssOspfConfigVlinkRouterId }
+    ::= { vtssOspfConfigVlinkTable 1 }
+
+VTSSOspfConfigVlinkEntry ::= SEQUENCE {
+    vtssOspfConfigVlinkInstanceId          Integer32,
+    vtssOspfConfigVlinkAreaId              IpAddress,
+    vtssOspfConfigVlinkRouterId            IpAddress,
+    vtssOspfConfigVlinkHelloInterval       Unsigned32,
+    vtssOspfConfigVlinkDeadInterval        Unsigned32,
+    vtssOspfConfigVlinkRetransmitInterval  Unsigned32,
+    vtssOspfConfigVlinkAuthType            VTSSOspfAuthType,
+    vtssOspfConfigVlinkIsEncrypted         TruthValue,
+    vtssOspfConfigVlinkSimplePwd           VTSSDisplayString,
+    vtssOspfConfigVlinkAction              VTSSRowEditorState
+}
+
+vtssOspfConfigVlinkInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigVlinkEntry 1 }
+
+vtssOspfConfigVlinkAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigVlinkEntry 2 }
+
+vtssOspfConfigVlinkRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID."
+    ::= { vtssOspfConfigVlinkEntry 3 }
+
+vtssOspfConfigVlinkHelloInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The time interval (in seconds) between hello packets."
+    ::= { vtssOspfConfigVlinkEntry 4 }
+
+vtssOspfConfigVlinkDeadInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of seconds to wait until the neighbor is declared to be
+         dead."
+    ::= { vtssOspfConfigVlinkEntry 5 }
+
+vtssOspfConfigVlinkRetransmitInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The time interval (in seconds) between link-state advertisement(LSA)
+         retransmissions for adjacencies."
+    ::= { vtssOspfConfigVlinkEntry 6 }
+
+vtssOspfConfigVlinkAuthType OBJECT-TYPE
+    SYNTAX      VTSSOspfAuthType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The authentication type on an area."
+    ::= { vtssOspfConfigVlinkEntry 7 }
+
+vtssOspfConfigVlinkIsEncrypted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The flag indicates the simple password is encrypted or not. TRUE means
+         the simple password is encrypted. FALSE means the simple password is
+         plain text."
+    ::= { vtssOspfConfigVlinkEntry 8 }
+
+vtssOspfConfigVlinkSimplePwd OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..128))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The simple password."
+    ::= { vtssOspfConfigVlinkEntry 9 }
+
+vtssOspfConfigVlinkAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigVlinkEntry 100 }
+
+vtssOspfConfigVlinkTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 14 }
+
+vtssOspfConfigVlinkTableRowEditorInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigVlinkTableRowEditor 1 }
+
+vtssOspfConfigVlinkTableRowEditorAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigVlinkTableRowEditor 2 }
+
+vtssOspfConfigVlinkTableRowEditorRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID."
+    ::= { vtssOspfConfigVlinkTableRowEditor 3 }
+
+vtssOspfConfigVlinkTableRowEditorHelloInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The time interval (in seconds) between hello packets."
+    ::= { vtssOspfConfigVlinkTableRowEditor 4 }
+
+vtssOspfConfigVlinkTableRowEditorDeadInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of seconds to wait until the neighbor is declared to be
+         dead."
+    ::= { vtssOspfConfigVlinkTableRowEditor 5 }
+
+vtssOspfConfigVlinkTableRowEditorRetransmitInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The time interval (in seconds) between link-state advertisement(LSA)
+         retransmissions for adjacencies."
+    ::= { vtssOspfConfigVlinkTableRowEditor 6 }
+
+vtssOspfConfigVlinkTableRowEditorAuthType OBJECT-TYPE
+    SYNTAX      VTSSOspfAuthType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The authentication type on an area."
+    ::= { vtssOspfConfigVlinkTableRowEditor 7 }
+
+vtssOspfConfigVlinkTableRowEditorIsEncrypted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The flag indicates the simple password is encrypted or not. TRUE means
+         the simple password is encrypted. FALSE means the simple password is
+         plain text."
+    ::= { vtssOspfConfigVlinkTableRowEditor 8 }
+
+vtssOspfConfigVlinkTableRowEditorSimplePwd OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..128))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The simple password."
+    ::= { vtssOspfConfigVlinkTableRowEditor 9 }
+
+vtssOspfConfigVlinkTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigVlinkTableRowEditor 100 }
+
+vtssOspfConfigVlinkMdKeyTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigVlinkMdKeyEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is virtual link authentication message digest key configuration
+         able."
+    ::= { vtssOspfConfig 15 }
+
+vtssOspfConfigVlinkMdKeyEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigVlinkMdKeyEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each virtual link entry has a set of parameters."
+    INDEX       { vtssOspfConfigVlinkMdKeyInstanceId,
+                  vtssOspfConfigVlinkMdKeyAreaId,
+                  vtssOspfConfigVlinkMdKeyRouterId,
+                  vtssOspfConfigVlinkMdKeyMdKeyId }
+    ::= { vtssOspfConfigVlinkMdKeyTable 1 }
+
+VTSSOspfConfigVlinkMdKeyEntry ::= SEQUENCE {
+    vtssOspfConfigVlinkMdKeyInstanceId   Integer32,
+    vtssOspfConfigVlinkMdKeyAreaId       IpAddress,
+    vtssOspfConfigVlinkMdKeyRouterId     IpAddress,
+    vtssOspfConfigVlinkMdKeyMdKeyId      VTSSUnsigned8,
+    vtssOspfConfigVlinkMdKeyIsEncrypted  TruthValue,
+    vtssOspfConfigVlinkMdKeyMdKey        VTSSDisplayString,
+    vtssOspfConfigVlinkMdKeyAction       VTSSRowEditorState
+}
+
+vtssOspfConfigVlinkMdKeyInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigVlinkMdKeyEntry 1 }
+
+vtssOspfConfigVlinkMdKeyAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigVlinkMdKeyEntry 2 }
+
+vtssOspfConfigVlinkMdKeyRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID."
+    ::= { vtssOspfConfigVlinkMdKeyEntry 3 }
+
+vtssOspfConfigVlinkMdKeyMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The key ID for message digest authentication."
+    ::= { vtssOspfConfigVlinkMdKeyEntry 4 }
+
+vtssOspfConfigVlinkMdKeyIsEncrypted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The flag indicates themessage digest key is encrypted or not. TRUE
+         means the message digest key is encrypted. FALSE means the message
+         digest key is plain text."
+    ::= { vtssOspfConfigVlinkMdKeyEntry 5 }
+
+vtssOspfConfigVlinkMdKeyMdKey OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..128))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The message digest key."
+    ::= { vtssOspfConfigVlinkMdKeyEntry 6 }
+
+vtssOspfConfigVlinkMdKeyAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigVlinkMdKeyEntry 100 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 16 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigVlinkTableMdKeyRowEditor 1 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigVlinkTableMdKeyRowEditor 2 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID."
+    ::= { vtssOspfConfigVlinkTableMdKeyRowEditor 3 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The key ID for message digest authentication."
+    ::= { vtssOspfConfigVlinkTableMdKeyRowEditor 4 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorIsEncrypted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The flag indicates themessage digest key is encrypted or not. TRUE
+         means the message digest key is encrypted. FALSE means the message
+         digest key is plain text."
+    ::= { vtssOspfConfigVlinkTableMdKeyRowEditor 5 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorMdKey OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..128))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The message digest key."
+    ::= { vtssOspfConfigVlinkTableMdKeyRowEditor 6 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigVlinkTableMdKeyRowEditor 100 }
+
+vtssOspfConfigStubAreaTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigStubAreaEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF stub area configuration table. The configuration is used
+         to reduce the link-state database size and therefore the memory and CPU
+         requirement by forbidding some LSAs."
+    ::= { vtssOspfConfig 17 }
+
+vtssOspfConfigStubAreaEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigStubAreaEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF stub area configuration."
+    INDEX       { vtssOspfConfigStubAreaInstanceId,
+                  vtssOspfConfigStubAreaAreaId }
+    ::= { vtssOspfConfigStubAreaTable 1 }
+
+VTSSOspfConfigStubAreaEntry ::= SEQUENCE {
+    vtssOspfConfigStubAreaInstanceId          Integer32,
+    vtssOspfConfigStubAreaAreaId              IpAddress,
+    vtssOspfConfigStubAreaIsNssa              TruthValue,
+    vtssOspfConfigStubAreaNoSummary           TruthValue,
+    vtssOspfConfigStubAreaNssaTranslatorRole  VTSSOspfNssaTranslatorRole,
+    vtssOspfConfigStubAreaAction              VTSSRowEditorState
+}
+
+vtssOspfConfigStubAreaInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigStubAreaEntry 1 }
+
+vtssOspfConfigStubAreaAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigStubAreaEntry 2 }
+
+vtssOspfConfigStubAreaIsNssa OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF stub configured type."
+    ::= { vtssOspfConfigStubAreaEntry 3 }
+
+vtssOspfConfigStubAreaNoSummary OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The value is true to configure the inter-area routes do not inject into
+         this stub area."
+    ::= { vtssOspfConfigStubAreaEntry 4 }
+
+vtssOspfConfigStubAreaNssaTranslatorRole OBJECT-TYPE
+    SYNTAX      VTSSOspfNssaTranslatorRole
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF NSSA translator role."
+    ::= { vtssOspfConfigStubAreaEntry 5 }
+
+vtssOspfConfigStubAreaAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigStubAreaEntry 100 }
+
+vtssOspfConfigStubAreaTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 18 }
+
+vtssOspfConfigStubAreaTableRowEditorInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfConfigStubAreaTableRowEditor 1 }
+
+vtssOspfConfigStubAreaTableRowEditorAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfConfigStubAreaTableRowEditor 2 }
+
+vtssOspfConfigStubAreaTableRowEditorIsNssa OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF stub configured type."
+    ::= { vtssOspfConfigStubAreaTableRowEditor 3 }
+
+vtssOspfConfigStubAreaTableRowEditorNoSummary OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The value is true to configure the inter-area routes do not inject into
+         this stub area."
+    ::= { vtssOspfConfigStubAreaTableRowEditor 4 }
+
+vtssOspfConfigStubAreaTableRowEditorNssaTranslatorRole OBJECT-TYPE
+    SYNTAX      VTSSOspfNssaTranslatorRole
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The OSPF NSSA translator role."
+    ::= { vtssOspfConfigStubAreaTableRowEditor 5 }
+
+vtssOspfConfigStubAreaTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssOspfConfigStubAreaTableRowEditor 100 }
+
+vtssOspfConfigInterfaceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfConfigInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is interface configuration parameter table."
+    ::= { vtssOspfConfig 19 }
+
+vtssOspfConfigInterfaceEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfConfigInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each interface has a set of parameters."
+    INDEX       { vtssOspfConfigInterfaceIfIndex }
+    ::= { vtssOspfConfigInterfaceTable 1 }
+
+VTSSOspfConfigInterfaceEntry ::= SEQUENCE {
+    vtssOspfConfigInterfaceIfIndex             VTSSInterfaceIndex,
+    vtssOspfConfigInterfacePriority            Unsigned32,
+    vtssOspfConfigInterfaceIsSpecificCost      TruthValue,
+    vtssOspfConfigInterfaceCost                Unsigned32,
+    vtssOspfConfigInterfaceIsFastHelloEnabled  TruthValue,
+    vtssOspfConfigInterfaceFastHelloPackets    Unsigned32,
+    vtssOspfConfigInterfaceDeadInterval        Unsigned32,
+    vtssOspfConfigInterfaceHelloInterval       Unsigned32,
+    vtssOspfConfigInterfaceRetransmitInterval  Unsigned32,
+    vtssOspfConfigInterfaceAuthType            VTSSOspfAuthType,
+    vtssOspfConfigInterfaceIsEncrypted         TruthValue,
+    vtssOspfConfigInterfaceSimplePwd           VTSSDisplayString,
+    vtssOspfConfigInterfaceMtuIgnore           TruthValue
+}
+
+vtssOspfConfigInterfaceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssOspfConfigInterfaceEntry 1 }
+
+vtssOspfConfigInterfacePriority OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..255)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified router priority for the interface."
+    ::= { vtssOspfConfigInterfaceEntry 2 }
+
+vtssOspfConfigInterfaceIsSpecificCost OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicate the 'cost' argument is a specific configured value or not."
+    ::= { vtssOspfConfigInterfaceEntry 3 }
+
+vtssOspfConfigInterfaceCost OBJECT-TYPE
+    SYNTAX      Unsigned32 (1..65535)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "User specified cost for this interface. It's link state metric for the
+         interface. The field is significant only when 'IsSpecificCost' is TRUE."
+    ::= { vtssOspfConfigInterfaceEntry 4 }
+
+vtssOspfConfigInterfaceIsFastHelloEnabled OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Enable the feature of fast hello packets or not."
+    ::= { vtssOspfConfigInterfaceEntry 5 }
+
+vtssOspfConfigInterfaceFastHelloPackets OBJECT-TYPE
+    SYNTAX      Unsigned32 (1..10)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "How many Hello packets will be sent per second."
+    ::= { vtssOspfConfigInterfaceEntry 6 }
+
+vtssOspfConfigInterfaceDeadInterval OBJECT-TYPE
+    SYNTAX      Unsigned32 (1..65535)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The time interval (in seconds) between hello packets."
+    ::= { vtssOspfConfigInterfaceEntry 7 }
+
+vtssOspfConfigInterfaceHelloInterval OBJECT-TYPE
+    SYNTAX      Unsigned32 (1..65535)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "How many Hello packets will be sent per second."
+    ::= { vtssOspfConfigInterfaceEntry 8 }
+
+vtssOspfConfigInterfaceRetransmitInterval OBJECT-TYPE
+    SYNTAX      Unsigned32 (3..65535)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The time interval (in seconds) between link-state advertisement(LSA)
+         retransmissions for adjacencies."
+    ::= { vtssOspfConfigInterfaceEntry 9 }
+
+vtssOspfConfigInterfaceAuthType OBJECT-TYPE
+    SYNTAX      VTSSOspfAuthType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The authentication type."
+    ::= { vtssOspfConfigInterfaceEntry 10 }
+
+vtssOspfConfigInterfaceIsEncrypted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The flag indicates the simple password is encrypted or not. TRUE means
+         the simple password is encrypted. FALSE means the simple password is
+         plain text."
+    ::= { vtssOspfConfigInterfaceEntry 11 }
+
+vtssOspfConfigInterfaceSimplePwd OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..128))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The simple password."
+    ::= { vtssOspfConfigInterfaceEntry 12 }
+
+vtssOspfConfigInterfaceMtuIgnore OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When false (default), the interface MTU of received OSPF database
+         description (DBD) packets will be checked against our own MTU, and if
+         the remote MTU is greater than our own, the DBD will be ignored. When
+         true, the interface MTU of the received OSPF DBD packets will be
+         ignored."
+    ::= { vtssOspfConfigInterfaceEntry 13 }
+
+vtssOspfConfigInterface OBJECT IDENTIFIER
+    ::= { vtssOspfConfig 100 }
+
+vtssOspfStatus OBJECT IDENTIFIER
+    ::= { vtssOspfMibObjects 3 }
+
+vtssOspfStatusRouterTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusRouterEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF router status table. It is used to provide the OSPF router
+         status information."
+    ::= { vtssOspfStatus 1 }
+
+vtssOspfStatusRouterEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusRouterEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF router status information."
+    INDEX       { vtssOspfStatusRouterInstanceId }
+    ::= { vtssOspfStatusRouterTable 1 }
+
+VTSSOspfStatusRouterEntry ::= SEQUENCE {
+    vtssOspfStatusRouterInstanceId           Integer32,
+    vtssOspfStatusRouterRouterId             IpAddress,
+    vtssOspfStatusRouterSpfDelay             Unsigned32,
+    vtssOspfStatusRouterSpfHoldTime          Unsigned32,
+    vtssOspfStatusRouterSpfMaxWaitTime       Unsigned32,
+    vtssOspfStatusRouterLastExcutedSpfTs     Counter64,
+    vtssOspfStatusRouterMinLsaInterval       Unsigned32,
+    vtssOspfStatusRouterMinLsaArrival        Unsigned32,
+    vtssOspfStatusRouterExternalLsaCount     Unsigned32,
+    vtssOspfStatusRouterExternalLsaChecksum  Unsigned32,
+    vtssOspfStatusRouterAttachedAreaCount    Unsigned32
+}
+
+vtssOspfStatusRouterInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusRouterEntry 1 }
+
+vtssOspfStatusRouterRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "OSPF router ID"
+    ::= { vtssOspfStatusRouterEntry 2 }
+
+vtssOspfStatusRouterSpfDelay OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Delay time (in seconds)of SPF calculations."
+    ::= { vtssOspfStatusRouterEntry 3 }
+
+vtssOspfStatusRouterSpfHoldTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum hold time (in milliseconds) between consecutive SPF
+         calculations."
+    ::= { vtssOspfStatusRouterEntry 4 }
+
+vtssOspfStatusRouterSpfMaxWaitTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum wait time (in milliseconds) between consecutive SPF
+         calculations."
+    ::= { vtssOspfStatusRouterEntry 5 }
+
+vtssOspfStatusRouterLastExcutedSpfTs OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Time (in milliseconds) that has passed between the start of the SPF
+         algorithm execution and the current time."
+    ::= { vtssOspfStatusRouterEntry 6 }
+
+vtssOspfStatusRouterMinLsaInterval OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum interval (in seconds) between link-state advertisements."
+    ::= { vtssOspfStatusRouterEntry 7 }
+
+vtssOspfStatusRouterMinLsaArrival OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum arrival time (in milliseconds) of link-state advertisements."
+    ::= { vtssOspfStatusRouterEntry 8 }
+
+vtssOspfStatusRouterExternalLsaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of external link-state advertisements."
+    ::= { vtssOspfStatusRouterEntry 9 }
+
+vtssOspfStatusRouterExternalLsaChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of external link-state checksum."
+    ::= { vtssOspfStatusRouterEntry 10 }
+
+vtssOspfStatusRouterAttachedAreaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of areas attached for the router."
+    ::= { vtssOspfStatusRouterEntry 11 }
+
+vtssOspfStatusRouteAreaTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusRouteAreaEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF network area status table. It is used to provide the OSPF
+         network area status information."
+    ::= { vtssOspfStatus 2 }
+
+vtssOspfStatusRouteAreaEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusRouteAreaEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF network area status
+         information."
+    INDEX       { vtssOspfStatusRouteAreaInstanceId,
+                  vtssOspfStatusRouteAreaAreaId }
+    ::= { vtssOspfStatusRouteAreaTable 1 }
+
+VTSSOspfStatusRouteAreaEntry ::= SEQUENCE {
+    vtssOspfStatusRouteAreaInstanceId               Integer32,
+    vtssOspfStatusRouteAreaAreaId                   IpAddress,
+    vtssOspfStatusRouteAreaIsBackbone               TruthValue,
+    vtssOspfStatusRouteAreaAreaType                 VTSSOspfAreaType,
+    vtssOspfStatusRouteAreaAttachedIntfActiveCount  Unsigned32,
+    vtssOspfStatusRouteAreaAuthType                 VTSSOspfAuthType,
+    vtssOspfStatusRouteAreaSpfExecutedCount         Unsigned32,
+    vtssOspfStatusRouteAreaLsaCount                 Unsigned32,
+    vtssOspfStatusRouteAreaRouterLsaCount           Unsigned32,
+    vtssOspfStatusRouteAreaRouterLsaChecksum        Unsigned32,
+    vtssOspfStatusRouteAreaNetworkLsaCount          Unsigned32,
+    vtssOspfStatusRouteAreaNetworkLsaChecksum       Unsigned32,
+    vtssOspfStatusRouteAreaSummaryLsaCount          Unsigned32,
+    vtssOspfStatusRouteAreaSummaryLsaChecksum       Unsigned32,
+    vtssOspfStatusRouteAreaAsbrSummaryLsaCount      Unsigned32,
+    vtssOspfStatusRouteAreaAsbrSummaryLsaChecksum   Unsigned32,
+    vtssOspfStatusRouteAreaNssaLsaCount             Unsigned32,
+    vtssOspfStatusRouteAreaNssaLsaChecksum          Unsigned32,
+    vtssOspfStatusRouteAreaNssaTranslatorState      VTSSOspfNssaTranslatorState
+}
+
+vtssOspfStatusRouteAreaInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusRouteAreaEntry 1 }
+
+vtssOspfStatusRouteAreaAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusRouteAreaEntry 2 }
+
+vtssOspfStatusRouteAreaIsBackbone OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate if it's backbone area or not."
+    ::= { vtssOspfStatusRouteAreaEntry 3 }
+
+vtssOspfStatusRouteAreaAreaType OBJECT-TYPE
+    SYNTAX      VTSSOspfAreaType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The area type."
+    ::= { vtssOspfStatusRouteAreaEntry 4 }
+
+vtssOspfStatusRouteAreaAttachedIntfActiveCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of active interfaces attached in the area."
+    ::= { vtssOspfStatusRouteAreaEntry 5 }
+
+vtssOspfStatusRouteAreaAuthType OBJECT-TYPE
+    SYNTAX      VTSSOspfAuthType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The authentication type in the area."
+    ::= { vtssOspfStatusRouteAreaEntry 6 }
+
+vtssOspfStatusRouteAreaSpfExecutedCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of times SPF algorithm has been executed for the particular
+         area."
+    ::= { vtssOspfStatusRouteAreaEntry 7 }
+
+vtssOspfStatusRouteAreaLsaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of the total LSAs for the particular area."
+    ::= { vtssOspfStatusRouteAreaEntry 8 }
+
+vtssOspfStatusRouteAreaRouterLsaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of the router-LSAs(Type-1) of a given type for the particular
+         area."
+    ::= { vtssOspfStatusRouteAreaEntry 9 }
+
+vtssOspfStatusRouteAreaRouterLsaChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The the router-LSAs(Type-1) checksum."
+    ::= { vtssOspfStatusRouteAreaEntry 10 }
+
+vtssOspfStatusRouteAreaNetworkLsaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of the network-LSAs(Type-2) of a given type for the particular
+         area."
+    ::= { vtssOspfStatusRouteAreaEntry 11 }
+
+vtssOspfStatusRouteAreaNetworkLsaChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The the network-LSAs(Type-2) checksum."
+    ::= { vtssOspfStatusRouteAreaEntry 12 }
+
+vtssOspfStatusRouteAreaSummaryLsaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of the summary-LSAs(Type-3) of a given type for the particular
+         area."
+    ::= { vtssOspfStatusRouteAreaEntry 13 }
+
+vtssOspfStatusRouteAreaSummaryLsaChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The the summary-LSAs(Type-3) checksum."
+    ::= { vtssOspfStatusRouteAreaEntry 14 }
+
+vtssOspfStatusRouteAreaAsbrSummaryLsaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of the ASBR-summary-LSAs(Type-4) of a given type for the
+         particular area."
+    ::= { vtssOspfStatusRouteAreaEntry 15 }
+
+vtssOspfStatusRouteAreaAsbrSummaryLsaChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The the ASBR-summary-LSAs(Type-4) checksum."
+    ::= { vtssOspfStatusRouteAreaEntry 16 }
+
+vtssOspfStatusRouteAreaNssaLsaCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of the NSSA LSAs of a given type for the particular area."
+    ::= { vtssOspfStatusRouteAreaEntry 17 }
+
+vtssOspfStatusRouteAreaNssaLsaChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The the NSSA LSAs checksum."
+    ::= { vtssOspfStatusRouteAreaEntry 18 }
+
+vtssOspfStatusRouteAreaNssaTranslatorState OBJECT-TYPE
+    SYNTAX      VTSSOspfNssaTranslatorState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate the current state of the NSSA-ABR translator which the router
+         uses to translate Type-7 LSAs in the NSSA to Type-5 LSAs in backbone
+         area."
+    ::= { vtssOspfStatusRouteAreaEntry 19 }
+
+vtssOspfStatusInterfaceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF interface status table. It is used to provide the OSPF
+         interface status information."
+    ::= { vtssOspfStatus 5 }
+
+vtssOspfStatusInterfaceEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF interface status information."
+    INDEX       { vtssOspfStatusInterfaceIfIndex }
+    ::= { vtssOspfStatusInterfaceTable 1 }
+
+VTSSOspfStatusInterfaceEntry ::= SEQUENCE {
+    vtssOspfStatusInterfaceIfIndex             VTSSInterfaceIndex,
+    vtssOspfStatusInterfaceStatus              TruthValue,
+    vtssOspfStatusInterfacePassive             TruthValue,
+    vtssOspfStatusInterfaceNetwork             IpAddress,
+    vtssOspfStatusInterfaceIpSubnetMaskLength  Integer32,
+    vtssOspfStatusInterfaceAreaId              IpAddress,
+    vtssOspfStatusInterfaceRouterId            IpAddress,
+    vtssOspfStatusInterfaceCost                Integer32,
+    vtssOspfStatusInterfaceState               VTSSOspfInterfaceState,
+    vtssOspfStatusInterfacePriority            Integer32,
+    vtssOspfStatusInterfaceDrId                IpAddress,
+    vtssOspfStatusInterfaceDrAddr              IpAddress,
+    vtssOspfStatusInterfaceBdrId               IpAddress,
+    vtssOspfStatusInterfaceBdrAddr             IpAddress,
+    vtssOspfStatusInterfaceHelloTime           Unsigned32,
+    vtssOspfStatusInterfaceDeadTime            Unsigned32,
+    vtssOspfStatusInterfaceWaitTime            Unsigned32,
+    vtssOspfStatusInterfaceRetransmitTime      Unsigned32,
+    vtssOspfStatusInterfaceHelloDueTime        Unsigned32,
+    vtssOspfStatusInterfaceNeighborCount       Unsigned32,
+    vtssOspfStatusInterfaceAdjNeighborCount    Unsigned32,
+    vtssOspfStatusInterfaceTransmitDelay       Unsigned32
+}
+
+vtssOspfStatusInterfaceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssOspfStatusInterfaceEntry 1 }
+
+vtssOspfStatusInterfaceStatus OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "It's used to indicate if the interface is up or down."
+    ::= { vtssOspfStatusInterfaceEntry 2 }
+
+vtssOspfStatusInterfacePassive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicate if the interface is passive interface."
+    ::= { vtssOspfStatusInterfaceEntry 3 }
+
+vtssOspfStatusInterfaceNetwork OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network address."
+    ::= { vtssOspfStatusInterfaceEntry 4 }
+
+vtssOspfStatusInterfaceIpSubnetMaskLength OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network mask length."
+    ::= { vtssOspfStatusInterfaceEntry 5 }
+
+vtssOspfStatusInterfaceAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusInterfaceEntry 6 }
+
+vtssOspfStatusInterfaceRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID."
+    ::= { vtssOspfStatusInterfaceEntry 7 }
+
+vtssOspfStatusInterfaceCost OBJECT-TYPE
+    SYNTAX      Integer32 (0..16777214)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The cost of the interface."
+    ::= { vtssOspfStatusInterfaceEntry 8 }
+
+vtssOspfStatusInterfaceState OBJECT-TYPE
+    SYNTAX      VTSSOspfInterfaceState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The state of the link."
+    ::= { vtssOspfStatusInterfaceEntry 9 }
+
+vtssOspfStatusInterfacePriority OBJECT-TYPE
+    SYNTAX      Integer32 (0..255)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF priority. It helps determine the DR and BDR on the network to
+         which this interface is connected."
+    ::= { vtssOspfStatusInterfaceEntry 10 }
+
+vtssOspfStatusInterfaceDrId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The router ID of DR."
+    ::= { vtssOspfStatusInterfaceEntry 11 }
+
+vtssOspfStatusInterfaceDrAddr OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The IP address of DR."
+    ::= { vtssOspfStatusInterfaceEntry 12 }
+
+vtssOspfStatusInterfaceBdrId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The router ID of BDR."
+    ::= { vtssOspfStatusInterfaceEntry 13 }
+
+vtssOspfStatusInterfaceBdrAddr OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The IP address of BDR."
+    ::= { vtssOspfStatusInterfaceEntry 14 }
+
+vtssOspfStatusInterfaceHelloTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Hello timer. A time interval that a router sends an OSPF hello packet."
+    ::= { vtssOspfStatusInterfaceEntry 15 }
+
+vtssOspfStatusInterfaceDeadTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Dead timer. Dead timer is a time interval to wait before declaring a
+         neighbor dead. The unit of time is the second."
+    ::= { vtssOspfStatusInterfaceEntry 16 }
+
+vtssOspfStatusInterfaceWaitTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "This interval is used in Wait Timer. Wait timer is a single shot timer
+         that causes the interface to exit waiting and select a DR on the
+         network. Wait Time interval is the same as Dead time interval."
+    ::= { vtssOspfStatusInterfaceEntry 17 }
+
+vtssOspfStatusInterfaceRetransmitTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Retransmit timer. A time interval to wait before retransmitting a
+         database description packet when it has not been acknowledged."
+    ::= { vtssOspfStatusInterfaceEntry 18 }
+
+vtssOspfStatusInterfaceHelloDueTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Hello due timer. An OSPF hello packet will be sent on this interface
+         after this due time."
+    ::= { vtssOspfStatusInterfaceEntry 19 }
+
+vtssOspfStatusInterfaceNeighborCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Neighbor count. This is the number of OSPF neighbors discovered on this
+         interface."
+    ::= { vtssOspfStatusInterfaceEntry 20 }
+
+vtssOspfStatusInterfaceAdjNeighborCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Adjacent neighbor count. This is the number of routers running OSPF
+         that are fully adjacent with this router."
+    ::= { vtssOspfStatusInterfaceEntry 21 }
+
+vtssOspfStatusInterfaceTransmitDelay OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The estimated time to transmit a link-state update packet on the
+         interface."
+    ::= { vtssOspfStatusInterfaceEntry 22 }
+
+vtssOspfStatusNeighborIpv4Table OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusNeighborIpv4Entry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF IPv4 neighbor status table. It is used to provide the OSPF
+         neighbor status information."
+    ::= { vtssOspfStatus 6 }
+
+vtssOspfStatusNeighborIpv4Entry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusNeighborIpv4Entry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF IPv4 neighbor status
+         information."
+    INDEX       { vtssOspfStatusNeighborIpv4InstanceId,
+                  vtssOspfStatusNeighborIpv4RouterId,
+                  vtssOspfStatusNeighborIpv4Ipv4Addr,
+                  vtssOspfStatusNeighborIpv4IfIndex }
+    ::= { vtssOspfStatusNeighborIpv4Table 1 }
+
+VTSSOspfStatusNeighborIpv4Entry ::= SEQUENCE {
+    vtssOspfStatusNeighborIpv4InstanceId     Integer32,
+    vtssOspfStatusNeighborIpv4RouterId       IpAddress,
+    vtssOspfStatusNeighborIpv4Ipv4Addr       IpAddress,
+    vtssOspfStatusNeighborIpv4IfIndex        VTSSInterfaceIndex,
+    vtssOspfStatusNeighborIpv4IpAddr         IpAddress,
+    vtssOspfStatusNeighborIpv4AreaId         IpAddress,
+    vtssOspfStatusNeighborIpv4Priority       Integer32,
+    vtssOspfStatusNeighborIpv4State          VTSSOspfNeighborState,
+    vtssOspfStatusNeighborIpv4DrId           IpAddress,
+    vtssOspfStatusNeighborIpv4DrAddr         IpAddress,
+    vtssOspfStatusNeighborIpv4BdrId          IpAddress,
+    vtssOspfStatusNeighborIpv4BdrAddr        IpAddress,
+    vtssOspfStatusNeighborIpv4Options        VTSSUnsigned8,
+    vtssOspfStatusNeighborIpv4DeadTime       Unsigned32,
+    vtssOspfStatusNeighborIpv4TransitAreaId  IpAddress
+}
+
+vtssOspfStatusNeighborIpv4InstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusNeighborIpv4Entry 1 }
+
+vtssOspfStatusNeighborIpv4RouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID."
+    ::= { vtssOspfStatusNeighborIpv4Entry 2 }
+
+vtssOspfStatusNeighborIpv4Ipv4Addr OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The IPv4 address."
+    ::= { vtssOspfStatusNeighborIpv4Entry 3 }
+
+vtssOspfStatusNeighborIpv4IfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssOspfStatusNeighborIpv4Entry 4 }
+
+vtssOspfStatusNeighborIpv4IpAddr OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The IP address."
+    ::= { vtssOspfStatusNeighborIpv4Entry 5 }
+
+vtssOspfStatusNeighborIpv4AreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusNeighborIpv4Entry 6 }
+
+vtssOspfStatusNeighborIpv4Priority OBJECT-TYPE
+    SYNTAX      Integer32 (0..255)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The priority of OSPF neighbor. It indicates the priority of the
+         neighbor router. This item is used when selecting the DR for the
+         network. The router with the highest priority becomes the DR."
+    ::= { vtssOspfStatusNeighborIpv4Entry 7 }
+
+vtssOspfStatusNeighborIpv4State OBJECT-TYPE
+    SYNTAX      VTSSOspfNeighborState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The state of OSPF neighbor. It indicates the functional state of the
+         neighbor router."
+    ::= { vtssOspfStatusNeighborIpv4Entry 8 }
+
+vtssOspfStatusNeighborIpv4DrId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The router ID of DR."
+    ::= { vtssOspfStatusNeighborIpv4Entry 9 }
+
+vtssOspfStatusNeighborIpv4DrAddr OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The IP address of DR."
+    ::= { vtssOspfStatusNeighborIpv4Entry 10 }
+
+vtssOspfStatusNeighborIpv4BdrId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The router ID of BDR."
+    ::= { vtssOspfStatusNeighborIpv4Entry 11 }
+
+vtssOspfStatusNeighborIpv4BdrAddr OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The IP address of BDR."
+    ::= { vtssOspfStatusNeighborIpv4Entry 12 }
+
+vtssOspfStatusNeighborIpv4Options OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF option field which is present in OSPF hello packets, which
+         enables OSPF routers to support (or not support) optional capabilities,
+         and to communicate their capability level to other OSPF routers."
+    ::= { vtssOspfStatusNeighborIpv4Entry 13 }
+
+vtssOspfStatusNeighborIpv4DeadTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Dead timer. It indicates the amount of time remaining that the router
+         waits to receive an OSPF hello packet from the neighbor before
+         declaring the neighbor down."
+    ::= { vtssOspfStatusNeighborIpv4Entry 14 }
+
+vtssOspfStatusNeighborIpv4TransitAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF transit area ID for the neighbor on virtual link interface."
+    ::= { vtssOspfStatusNeighborIpv4Entry 15 }
+
+vtssOspfStatusInterfaceMdKeyPrecedenceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusInterfaceMdKeyPrecedenceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is virtual link authentication message digest key
+         precedenceconfiguration able."
+    ::= { vtssOspfStatus 8 }
+
+vtssOspfStatusInterfaceMdKeyPrecedenceEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusInterfaceMdKeyPrecedenceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding message digest key ID."
+    INDEX       { vtssOspfStatusInterfaceMdKeyPrecedenceIfIndex,
+                  vtssOspfStatusInterfaceMdKeyPrecedencePrecedence }
+    ::= { vtssOspfStatusInterfaceMdKeyPrecedenceTable 1 }
+
+VTSSOspfStatusInterfaceMdKeyPrecedenceEntry ::= SEQUENCE {
+    vtssOspfStatusInterfaceMdKeyPrecedenceIfIndex     VTSSInterfaceIndex,
+    vtssOspfStatusInterfaceMdKeyPrecedencePrecedence  Unsigned32,
+    vtssOspfStatusInterfaceMdKeyPrecedenceMdKeyId     VTSSUnsigned8
+}
+
+vtssOspfStatusInterfaceMdKeyPrecedenceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number."
+    ::= { vtssOspfStatusInterfaceMdKeyPrecedenceEntry 1 }
+
+vtssOspfStatusInterfaceMdKeyPrecedencePrecedence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The precedence of message digest key."
+    ::= { vtssOspfStatusInterfaceMdKeyPrecedenceEntry 2 }
+
+vtssOspfStatusInterfaceMdKeyPrecedenceMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The key ID for message digest authentication."
+    ::= { vtssOspfStatusInterfaceMdKeyPrecedenceEntry 3 }
+
+vtssOspfStatusVlinkMdkeyPrecedenceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusVlinkMdkeyPrecedenceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is virtual link authentication message digest key
+         precedenceconfiguration able."
+    ::= { vtssOspfStatus 9 }
+
+vtssOspfStatusVlinkMdkeyPrecedenceEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusVlinkMdkeyPrecedenceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding message digest key ID."
+    INDEX       { vtssOspfStatusVlinkMdkeyPrecedenceInstanceId,
+                  vtssOspfStatusVlinkMdkeyPrecedenceAreaId,
+                  vtssOspfStatusVlinkMdkeyPrecedenceRouterId,
+                  vtssOspfStatusVlinkMdkeyPrecedencePrecedence }
+    ::= { vtssOspfStatusVlinkMdkeyPrecedenceTable 1 }
+
+VTSSOspfStatusVlinkMdkeyPrecedenceEntry ::= SEQUENCE {
+    vtssOspfStatusVlinkMdkeyPrecedenceInstanceId  Integer32,
+    vtssOspfStatusVlinkMdkeyPrecedenceAreaId      IpAddress,
+    vtssOspfStatusVlinkMdkeyPrecedenceRouterId    IpAddress,
+    vtssOspfStatusVlinkMdkeyPrecedencePrecedence  Unsigned32,
+    vtssOspfStatusVlinkMdkeyPrecedenceMdKeyId     VTSSUnsigned8
+}
+
+vtssOspfStatusVlinkMdkeyPrecedenceInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusVlinkMdkeyPrecedenceEntry 1 }
+
+vtssOspfStatusVlinkMdkeyPrecedenceAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusVlinkMdkeyPrecedenceEntry 2 }
+
+vtssOspfStatusVlinkMdkeyPrecedenceRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF router ID."
+    ::= { vtssOspfStatusVlinkMdkeyPrecedenceEntry 3 }
+
+vtssOspfStatusVlinkMdkeyPrecedencePrecedence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The precedence of message digest key."
+    ::= { vtssOspfStatusVlinkMdkeyPrecedenceEntry 4 }
+
+vtssOspfStatusVlinkMdkeyPrecedenceMdKeyId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The key ID for message digest authentication."
+    ::= { vtssOspfStatusVlinkMdkeyPrecedenceEntry 5 }
+
+vtssOspfStatusRouteIpv4Table OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusRouteIpv4Entry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is OSPF routing status table. It is used to provide the OSPF
+         routing status information."
+    ::= { vtssOspfStatus 10 }
+
+vtssOspfStatusRouteIpv4Entry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusRouteIpv4Entry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents OSPF routing status information."
+    INDEX       { vtssOspfStatusRouteIpv4InstanceId,
+                  vtssOspfStatusRouteIpv4RouteType,
+                  vtssOspfStatusRouteIpv4Network,
+                  vtssOspfStatusRouteIpv4IpSubnetMaskLength,
+                  vtssOspfStatusRouteIpv4AreaId,
+                  vtssOspfStatusRouteIpv4NextHop }
+    ::= { vtssOspfStatusRouteIpv4Table 1 }
+
+VTSSOspfStatusRouteIpv4Entry ::= SEQUENCE {
+    vtssOspfStatusRouteIpv4InstanceId          Integer32,
+    vtssOspfStatusRouteIpv4RouteType           VTSSOspfRouteType,
+    vtssOspfStatusRouteIpv4Network             IpAddress,
+    vtssOspfStatusRouteIpv4IpSubnetMaskLength  Integer32,
+    vtssOspfStatusRouteIpv4AreaId              IpAddress,
+    vtssOspfStatusRouteIpv4NextHop             IpAddress,
+    vtssOspfStatusRouteIpv4Cost                Unsigned32,
+    vtssOspfStatusRouteIpv4AsCost              Unsigned32,
+    vtssOspfStatusRouteIpv4BorderRouterType    VTSSOspfBorderRouterType,
+    vtssOspfStatusRouteIpv4Ifindex             VTSSInterfaceIndex,
+    vtssOspfStatusRouteIpv4IsConnected         TruthValue
+}
+
+vtssOspfStatusRouteIpv4InstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusRouteIpv4Entry 1 }
+
+vtssOspfStatusRouteIpv4RouteType OBJECT-TYPE
+    SYNTAX      VTSSOspfRouteType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF route type."
+    ::= { vtssOspfStatusRouteIpv4Entry 2 }
+
+vtssOspfStatusRouteIpv4Network OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network address."
+    ::= { vtssOspfStatusRouteIpv4Entry 3 }
+
+vtssOspfStatusRouteIpv4IpSubnetMaskLength OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IPv4 network mask length."
+    ::= { vtssOspfStatusRouteIpv4Entry 4 }
+
+vtssOspfStatusRouteIpv4AreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "It indicates which area the route or router can be reached via/to."
+    ::= { vtssOspfStatusRouteIpv4Entry 5 }
+
+vtssOspfStatusRouteIpv4NextHop OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The nexthop to the route."
+    ::= { vtssOspfStatusRouteIpv4Entry 6 }
+
+vtssOspfStatusRouteIpv4Cost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The cost of the route."
+    ::= { vtssOspfStatusRouteIpv4Entry 7 }
+
+vtssOspfStatusRouteIpv4AsCost OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The cost of the route within the OSPF network. It is valid for external
+         Type-2 route and always '0' for other route type."
+    ::= { vtssOspfStatusRouteIpv4Entry 8 }
+
+vtssOspfStatusRouteIpv4BorderRouterType OBJECT-TYPE
+    SYNTAX      VTSSOspfBorderRouterType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The border router type of the OSPF route entry."
+    ::= { vtssOspfStatusRouteIpv4Entry 9 }
+
+vtssOspfStatusRouteIpv4Ifindex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The interface where the ip packet is outgoing."
+    ::= { vtssOspfStatusRouteIpv4Entry 10 }
+
+vtssOspfStatusRouteIpv4IsConnected OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The destination is connected directly or not."
+    ::= { vtssOspfStatusRouteIpv4Entry 11 }
+
+vtssOspfStatusDbTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusDbEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The OSPF LSA link state database information table."
+    ::= { vtssOspfStatus 11 }
+
+vtssOspfStatusDbEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusDbEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding information of a single link state
+         advertisement."
+    INDEX       { vtssOspfStatusDbInstanceId, vtssOspfStatusDbAreaId,
+                  vtssOspfStatusDbLsdbType,
+                  vtssOspfStatusDbLinkStateId,
+                  vtssOspfStatusDbAdvRouterId }
+    ::= { vtssOspfStatusDbTable 1 }
+
+VTSSOspfStatusDbEntry ::= SEQUENCE {
+    vtssOspfStatusDbInstanceId       Integer32,
+    vtssOspfStatusDbAreaId           IpAddress,
+    vtssOspfStatusDbLsdbType         VTSSOspfLsdbType,
+    vtssOspfStatusDbLinkStateId      IpAddress,
+    vtssOspfStatusDbAdvRouterId      IpAddress,
+    vtssOspfStatusDbAge              Unsigned32,
+    vtssOspfStatusDbSequence         Unsigned32,
+    vtssOspfStatusDbChecksum         Unsigned32,
+    vtssOspfStatusDbRouterLinkCount  Unsigned32
+}
+
+vtssOspfStatusDbInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusDbEntry 1 }
+
+vtssOspfStatusDbAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusDbEntry 2 }
+
+vtssOspfStatusDbLsdbType OBJECT-TYPE
+    SYNTAX      VTSSOspfLsdbType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    ::= { vtssOspfStatusDbEntry 3 }
+
+vtssOspfStatusDbLinkStateId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF link state ID."
+    ::= { vtssOspfStatusDbEntry 4 }
+
+vtssOspfStatusDbAdvRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The advertising router ID which originated the LSA."
+    ::= { vtssOspfStatusDbEntry 5 }
+
+vtssOspfStatusDbAge OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The time in seconds since the LSA was originated."
+    ::= { vtssOspfStatusDbEntry 6 }
+
+vtssOspfStatusDbSequence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The LS sequence number of the LSA."
+    ::= { vtssOspfStatusDbEntry 7 }
+
+vtssOspfStatusDbChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The checksum of the LSA contents."
+    ::= { vtssOspfStatusDbEntry 8 }
+
+vtssOspfStatusDbRouterLinkCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The link count of the LSA. The field is significant only when the link
+         state type is 'Router Link State' (Type 1)."
+    ::= { vtssOspfStatusDbEntry 9 }
+
+vtssOspfStatusDbRouterTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusDbRouterEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The OSPF LSA Router link state database information table."
+    ::= { vtssOspfStatus 12 }
+
+vtssOspfStatusDbRouterEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusDbRouterEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding information of a single link state
+         advertisement."
+    INDEX       { vtssOspfStatusDbRouterInstanceId,
+                  vtssOspfStatusDbRouterAreaId,
+                  vtssOspfStatusDbRouterLsdbType,
+                  vtssOspfStatusDbRouterLinkStateId,
+                  vtssOspfStatusDbRouterAdvRouterId }
+    ::= { vtssOspfStatusDbRouterTable 1 }
+
+VTSSOspfStatusDbRouterEntry ::= SEQUENCE {
+    vtssOspfStatusDbRouterInstanceId       Integer32,
+    vtssOspfStatusDbRouterAreaId           IpAddress,
+    vtssOspfStatusDbRouterLsdbType         VTSSOspfLsdbType,
+    vtssOspfStatusDbRouterLinkStateId      IpAddress,
+    vtssOspfStatusDbRouterAdvRouterId      IpAddress,
+    vtssOspfStatusDbRouterAge              Unsigned32,
+    vtssOspfStatusDbRouterOptions          VTSSUnsigned8,
+    vtssOspfStatusDbRouterSequence         Unsigned32,
+    vtssOspfStatusDbRouterChecksum         Unsigned32,
+    vtssOspfStatusDbRouterLength           Unsigned32,
+    vtssOspfStatusDbRouterRouterLinkCount  Unsigned32
+}
+
+vtssOspfStatusDbRouterInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusDbRouterEntry 1 }
+
+vtssOspfStatusDbRouterAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusDbRouterEntry 2 }
+
+vtssOspfStatusDbRouterLsdbType OBJECT-TYPE
+    SYNTAX      VTSSOspfLsdbType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    ::= { vtssOspfStatusDbRouterEntry 3 }
+
+vtssOspfStatusDbRouterLinkStateId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF link state ID."
+    ::= { vtssOspfStatusDbRouterEntry 4 }
+
+vtssOspfStatusDbRouterAdvRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The advertising router ID which originated the LSA."
+    ::= { vtssOspfStatusDbRouterEntry 5 }
+
+vtssOspfStatusDbRouterAge OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The time in seconds since the LSA was originated."
+    ::= { vtssOspfStatusDbRouterEntry 6 }
+
+vtssOspfStatusDbRouterOptions OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF option field which is present in OSPF hello packets, which
+         enables OSPF routers to support (or not support) optional capabilities,
+         and to communicate their capability level to other OSPF routers."
+    ::= { vtssOspfStatusDbRouterEntry 7 }
+
+vtssOspfStatusDbRouterSequence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The LS sequence number of the LSA."
+    ::= { vtssOspfStatusDbRouterEntry 8 }
+
+vtssOspfStatusDbRouterChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The checksum of the LSA contents."
+    ::= { vtssOspfStatusDbRouterEntry 9 }
+
+vtssOspfStatusDbRouterLength OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Length in bytes of the LSA."
+    ::= { vtssOspfStatusDbRouterEntry 10 }
+
+vtssOspfStatusDbRouterRouterLinkCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The link count of the LSA. The field is significant only when the link
+         state type is 'Router Link State' (Type 1)."
+    ::= { vtssOspfStatusDbRouterEntry 11 }
+
+vtssOspfStatusDbNetworkTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusDbNetworkEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The OSPF LSA Network link state database information table."
+    ::= { vtssOspfStatus 13 }
+
+vtssOspfStatusDbNetworkEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusDbNetworkEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding information of a single link state
+         advertisement."
+    INDEX       { vtssOspfStatusDbNetworkInstanceId,
+                  vtssOspfStatusDbNetworkAreaId,
+                  vtssOspfStatusDbNetworkLsdbType,
+                  vtssOspfStatusDbNetworkLinkStateId,
+                  vtssOspfStatusDbNetworkAdvRouterId }
+    ::= { vtssOspfStatusDbNetworkTable 1 }
+
+VTSSOspfStatusDbNetworkEntry ::= SEQUENCE {
+    vtssOspfStatusDbNetworkInstanceId           Integer32,
+    vtssOspfStatusDbNetworkAreaId               IpAddress,
+    vtssOspfStatusDbNetworkLsdbType             VTSSOspfLsdbType,
+    vtssOspfStatusDbNetworkLinkStateId          IpAddress,
+    vtssOspfStatusDbNetworkAdvRouterId          IpAddress,
+    vtssOspfStatusDbNetworkAge                  Unsigned32,
+    vtssOspfStatusDbNetworkOptions              VTSSUnsigned8,
+    vtssOspfStatusDbNetworkSequence             Unsigned32,
+    vtssOspfStatusDbNetworkChecksum             Unsigned32,
+    vtssOspfStatusDbNetworkLength               Unsigned32,
+    vtssOspfStatusDbNetworkNetworkMask          Integer32,
+    vtssOspfStatusDbNetworkAttachedRouterCount  Unsigned32
+}
+
+vtssOspfStatusDbNetworkInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusDbNetworkEntry 1 }
+
+vtssOspfStatusDbNetworkAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusDbNetworkEntry 2 }
+
+vtssOspfStatusDbNetworkLsdbType OBJECT-TYPE
+    SYNTAX      VTSSOspfLsdbType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    ::= { vtssOspfStatusDbNetworkEntry 3 }
+
+vtssOspfStatusDbNetworkLinkStateId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF link state ID."
+    ::= { vtssOspfStatusDbNetworkEntry 4 }
+
+vtssOspfStatusDbNetworkAdvRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The advertising router ID which originated the LSA."
+    ::= { vtssOspfStatusDbNetworkEntry 5 }
+
+vtssOspfStatusDbNetworkAge OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The time in seconds since the LSA was originated."
+    ::= { vtssOspfStatusDbNetworkEntry 6 }
+
+vtssOspfStatusDbNetworkOptions OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF option field which is present in OSPF hello packets, which
+         enables OSPF routers to support (or not support) optional capabilities,
+         and to communicate their capability level to other OSPF routers."
+    ::= { vtssOspfStatusDbNetworkEntry 7 }
+
+vtssOspfStatusDbNetworkSequence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The LS sequence number of the LSA."
+    ::= { vtssOspfStatusDbNetworkEntry 8 }
+
+vtssOspfStatusDbNetworkChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The checksum of the LSA contents."
+    ::= { vtssOspfStatusDbNetworkEntry 9 }
+
+vtssOspfStatusDbNetworkLength OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Length in bytes of the LSA."
+    ::= { vtssOspfStatusDbNetworkEntry 10 }
+
+vtssOspfStatusDbNetworkNetworkMask OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Network mask length. The field is significant only when the link state
+         type is 'Network Link State' (Type 2)."
+    ::= { vtssOspfStatusDbNetworkEntry 11 }
+
+vtssOspfStatusDbNetworkAttachedRouterCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The attached router count of the LSA. The field is significant only
+         when the link state type is 'Network Link State' (Type 2)."
+    ::= { vtssOspfStatusDbNetworkEntry 12 }
+
+vtssOspfStatusDbSummaryTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusDbSummaryEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The OSPF LSA Summary link state database information table."
+    ::= { vtssOspfStatus 14 }
+
+vtssOspfStatusDbSummaryEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusDbSummaryEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding information of a single link state
+         advertisement."
+    INDEX       { vtssOspfStatusDbSummaryInstanceId,
+                  vtssOspfStatusDbSummaryAreaId,
+                  vtssOspfStatusDbSummaryLsdbType,
+                  vtssOspfStatusDbSummaryLinkStateId,
+                  vtssOspfStatusDbSummaryAdvRouterId }
+    ::= { vtssOspfStatusDbSummaryTable 1 }
+
+VTSSOspfStatusDbSummaryEntry ::= SEQUENCE {
+    vtssOspfStatusDbSummaryInstanceId   Integer32,
+    vtssOspfStatusDbSummaryAreaId       IpAddress,
+    vtssOspfStatusDbSummaryLsdbType     VTSSOspfLsdbType,
+    vtssOspfStatusDbSummaryLinkStateId  IpAddress,
+    vtssOspfStatusDbSummaryAdvRouterId  IpAddress,
+    vtssOspfStatusDbSummaryAge          Unsigned32,
+    vtssOspfStatusDbSummaryOptions      VTSSUnsigned8,
+    vtssOspfStatusDbSummarySequence     Unsigned32,
+    vtssOspfStatusDbSummaryChecksum     Unsigned32,
+    vtssOspfStatusDbSummaryLength       Unsigned32,
+    vtssOspfStatusDbSummaryNetworkMask  Integer32,
+    vtssOspfStatusDbSummaryMetric       Unsigned32
+}
+
+vtssOspfStatusDbSummaryInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusDbSummaryEntry 1 }
+
+vtssOspfStatusDbSummaryAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusDbSummaryEntry 2 }
+
+vtssOspfStatusDbSummaryLsdbType OBJECT-TYPE
+    SYNTAX      VTSSOspfLsdbType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    ::= { vtssOspfStatusDbSummaryEntry 3 }
+
+vtssOspfStatusDbSummaryLinkStateId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF link state ID."
+    ::= { vtssOspfStatusDbSummaryEntry 4 }
+
+vtssOspfStatusDbSummaryAdvRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The advertising router ID which originated the LSA."
+    ::= { vtssOspfStatusDbSummaryEntry 5 }
+
+vtssOspfStatusDbSummaryAge OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The time in seconds since the LSA was originated."
+    ::= { vtssOspfStatusDbSummaryEntry 6 }
+
+vtssOspfStatusDbSummaryOptions OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF option field which is present in OSPF hello packets, which
+         enables OSPF routers to support (or not support) optional capabilities,
+         and to communicate their capability level to other OSPF routers."
+    ::= { vtssOspfStatusDbSummaryEntry 7 }
+
+vtssOspfStatusDbSummarySequence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The LS sequence number of the LSA."
+    ::= { vtssOspfStatusDbSummaryEntry 8 }
+
+vtssOspfStatusDbSummaryChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The checksum of the LSA contents."
+    ::= { vtssOspfStatusDbSummaryEntry 9 }
+
+vtssOspfStatusDbSummaryLength OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Length in bytes of the LSA."
+    ::= { vtssOspfStatusDbSummaryEntry 10 }
+
+vtssOspfStatusDbSummaryNetworkMask OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Network mask length. The field is significant only when the link state
+         type is 'Summary/ASBR Summary Link State' (Type 3, 4)."
+    ::= { vtssOspfStatusDbSummaryEntry 11 }
+
+vtssOspfStatusDbSummaryMetric OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777215)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "User specified metric for this summary route. The field is significant
+         only when the link state type is 'Summary/ASBR Summary Link State'
+         (Type 3, 4)."
+    ::= { vtssOspfStatusDbSummaryEntry 12 }
+
+vtssOspfStatusDbASBRSummaryTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusDbASBRSummaryEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The OSPF LSA ASBR Summary link state database information table."
+    ::= { vtssOspfStatus 15 }
+
+vtssOspfStatusDbASBRSummaryEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusDbASBRSummaryEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding information of a single link state
+         advertisement."
+    INDEX       { vtssOspfStatusDbASBRSummaryInstanceId,
+                  vtssOspfStatusDbASBRSummaryAreaId,
+                  vtssOspfStatusDbASBRSummaryLsdbType,
+                  vtssOspfStatusDbASBRSummaryLinkStateId,
+                  vtssOspfStatusDbASBRSummaryAdvRouterId }
+    ::= { vtssOspfStatusDbASBRSummaryTable 1 }
+
+VTSSOspfStatusDbASBRSummaryEntry ::= SEQUENCE {
+    vtssOspfStatusDbASBRSummaryInstanceId   Integer32,
+    vtssOspfStatusDbASBRSummaryAreaId       IpAddress,
+    vtssOspfStatusDbASBRSummaryLsdbType     VTSSOspfLsdbType,
+    vtssOspfStatusDbASBRSummaryLinkStateId  IpAddress,
+    vtssOspfStatusDbASBRSummaryAdvRouterId  IpAddress,
+    vtssOspfStatusDbASBRSummaryAge          Unsigned32,
+    vtssOspfStatusDbASBRSummaryOptions      VTSSUnsigned8,
+    vtssOspfStatusDbASBRSummarySequence     Unsigned32,
+    vtssOspfStatusDbASBRSummaryChecksum     Unsigned32,
+    vtssOspfStatusDbASBRSummaryLength       Unsigned32,
+    vtssOspfStatusDbASBRSummaryNetworkMask  Integer32,
+    vtssOspfStatusDbASBRSummaryMetric       Unsigned32
+}
+
+vtssOspfStatusDbASBRSummaryInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 1 }
+
+vtssOspfStatusDbASBRSummaryAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 2 }
+
+vtssOspfStatusDbASBRSummaryLsdbType OBJECT-TYPE
+    SYNTAX      VTSSOspfLsdbType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 3 }
+
+vtssOspfStatusDbASBRSummaryLinkStateId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF link state ID."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 4 }
+
+vtssOspfStatusDbASBRSummaryAdvRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The advertising router ID which originated the LSA."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 5 }
+
+vtssOspfStatusDbASBRSummaryAge OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The time in seconds since the LSA was originated."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 6 }
+
+vtssOspfStatusDbASBRSummaryOptions OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF option field which is present in OSPF hello packets, which
+         enables OSPF routers to support (or not support) optional capabilities,
+         and to communicate their capability level to other OSPF routers."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 7 }
+
+vtssOspfStatusDbASBRSummarySequence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The LS sequence number of the LSA."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 8 }
+
+vtssOspfStatusDbASBRSummaryChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The checksum of the LSA contents."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 9 }
+
+vtssOspfStatusDbASBRSummaryLength OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Length in bytes of the LSA."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 10 }
+
+vtssOspfStatusDbASBRSummaryNetworkMask OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Network mask length. The field is significant only when the link state
+         type is 'Summary/ASBR Summary Link State' (Type 3, 4)."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 11 }
+
+vtssOspfStatusDbASBRSummaryMetric OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777215)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "User specified metric for this summary route. The field is significant
+         only when the link state type is 'Summary/ASBR Summary Link State'
+         (Type 3, 4)."
+    ::= { vtssOspfStatusDbASBRSummaryEntry 12 }
+
+vtssOspfStatusDbExternalTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusDbExternalEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The OSPF LSA External link state database information table."
+    ::= { vtssOspfStatus 16 }
+
+vtssOspfStatusDbExternalEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusDbExternalEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding information of a single link state
+         advertisement."
+    INDEX       { vtssOspfStatusDbExternalInstanceId,
+                  vtssOspfStatusDbExternalAreaId,
+                  vtssOspfStatusDbExternalLsdbType,
+                  vtssOspfStatusDbExternalLinkStateId,
+                  vtssOspfStatusDbExternalAdvRouterId }
+    ::= { vtssOspfStatusDbExternalTable 1 }
+
+VTSSOspfStatusDbExternalEntry ::= SEQUENCE {
+    vtssOspfStatusDbExternalInstanceId      Integer32,
+    vtssOspfStatusDbExternalAreaId          IpAddress,
+    vtssOspfStatusDbExternalLsdbType        VTSSOspfLsdbType,
+    vtssOspfStatusDbExternalLinkStateId     IpAddress,
+    vtssOspfStatusDbExternalAdvRouterId     IpAddress,
+    vtssOspfStatusDbExternalAge             Unsigned32,
+    vtssOspfStatusDbExternalOptions         VTSSUnsigned8,
+    vtssOspfStatusDbExternalSequence        Unsigned32,
+    vtssOspfStatusDbExternalChecksum        Unsigned32,
+    vtssOspfStatusDbExternalLength          Unsigned32,
+    vtssOspfStatusDbExternalNetworkMask     Integer32,
+    vtssOspfStatusDbExternalMetric          Unsigned32,
+    vtssOspfStatusDbExternalMetricType      Unsigned32,
+    vtssOspfStatusDbExternalForwardAddress  IpAddress
+}
+
+vtssOspfStatusDbExternalInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusDbExternalEntry 1 }
+
+vtssOspfStatusDbExternalAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID of the link state advertisement. For type 5 and type
+         7, the value is always 255.255.255.255 since it is not required for
+         these two types."
+    ::= { vtssOspfStatusDbExternalEntry 2 }
+
+vtssOspfStatusDbExternalLsdbType OBJECT-TYPE
+    SYNTAX      VTSSOspfLsdbType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    ::= { vtssOspfStatusDbExternalEntry 3 }
+
+vtssOspfStatusDbExternalLinkStateId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF link state ID."
+    ::= { vtssOspfStatusDbExternalEntry 4 }
+
+vtssOspfStatusDbExternalAdvRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The advertising router ID which originated the LSA."
+    ::= { vtssOspfStatusDbExternalEntry 5 }
+
+vtssOspfStatusDbExternalAge OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The time in seconds since the LSA was originated."
+    ::= { vtssOspfStatusDbExternalEntry 6 }
+
+vtssOspfStatusDbExternalOptions OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF option field which is present in OSPF hello packets, which
+         enables OSPF routers to support (or not support) optional capabilities,
+         and to communicate their capability level to other OSPF routers."
+    ::= { vtssOspfStatusDbExternalEntry 7 }
+
+vtssOspfStatusDbExternalSequence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The LS sequence number of the LSA."
+    ::= { vtssOspfStatusDbExternalEntry 8 }
+
+vtssOspfStatusDbExternalChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The checksum of the LSA contents."
+    ::= { vtssOspfStatusDbExternalEntry 9 }
+
+vtssOspfStatusDbExternalLength OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Length in bytes of the LSA."
+    ::= { vtssOspfStatusDbExternalEntry 10 }
+
+vtssOspfStatusDbExternalNetworkMask OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Network mask length. The field is significant only when the link state
+         type is 'External/NSSA External Link State' (Type 5, 7)."
+    ::= { vtssOspfStatusDbExternalEntry 11 }
+
+vtssOspfStatusDbExternalMetric OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777215)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "User specified metric for this summary route. The field is significant
+         only when the link state type is 'External/NSSA External Link State'
+         (Type 5, 7)."
+    ::= { vtssOspfStatusDbExternalEntry 12 }
+
+vtssOspfStatusDbExternalMetricType OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The External type of the LSA. The field is significant only when the
+         link state type is 'External/NSSA External Link State' (Type 5, 7)."
+    ::= { vtssOspfStatusDbExternalEntry 13 }
+
+vtssOspfStatusDbExternalForwardAddress OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The IP address of forward address. The field is significant only when
+         the link state type is 'External/NSSA External Link State' (Type 5, 7)."
+    ::= { vtssOspfStatusDbExternalEntry 14 }
+
+vtssOspfStatusDbNSSAExternalTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSOspfStatusDbNSSAExternalEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The OSPF LSA NSSA External link state database information table."
+    ::= { vtssOspfStatus 17 }
+
+vtssOspfStatusDbNSSAExternalEntry OBJECT-TYPE
+    SYNTAX      VTSSOspfStatusDbNSSAExternalEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the corresponding information of a single link state
+         advertisement."
+    INDEX       { vtssOspfStatusDbNSSAExternalInstanceId,
+                  vtssOspfStatusDbNSSAExternalAreaId,
+                  vtssOspfStatusDbNSSAExternalLsdbType,
+                  vtssOspfStatusDbNSSAExternalLinkStateId,
+                  vtssOspfStatusDbNSSAExternalAdvRouterId }
+    ::= { vtssOspfStatusDbNSSAExternalTable 1 }
+
+VTSSOspfStatusDbNSSAExternalEntry ::= SEQUENCE {
+    vtssOspfStatusDbNSSAExternalInstanceId      Integer32,
+    vtssOspfStatusDbNSSAExternalAreaId          IpAddress,
+    vtssOspfStatusDbNSSAExternalLsdbType        VTSSOspfLsdbType,
+    vtssOspfStatusDbNSSAExternalLinkStateId     IpAddress,
+    vtssOspfStatusDbNSSAExternalAdvRouterId     IpAddress,
+    vtssOspfStatusDbNSSAExternalAge             Unsigned32,
+    vtssOspfStatusDbNSSAExternalOptions         VTSSUnsigned8,
+    vtssOspfStatusDbNSSAExternalSequence        Unsigned32,
+    vtssOspfStatusDbNSSAExternalChecksum        Unsigned32,
+    vtssOspfStatusDbNSSAExternalLength          Unsigned32,
+    vtssOspfStatusDbNSSAExternalNetworkMask     Integer32,
+    vtssOspfStatusDbNSSAExternalMetric          Unsigned32,
+    vtssOspfStatusDbNSSAExternalMetricType      Unsigned32,
+    vtssOspfStatusDbNSSAExternalForwardAddress  IpAddress
+}
+
+vtssOspfStatusDbNSSAExternalInstanceId OBJECT-TYPE
+    SYNTAX      Integer32 (1..1)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF process instance ID."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 1 }
+
+vtssOspfStatusDbNSSAExternalAreaId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF area ID of the link state advertisement. For type 5 and type
+         7, the value is always 255.255.255.255 since it is not required for
+         these two types."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 2 }
+
+vtssOspfStatusDbNSSAExternalLsdbType OBJECT-TYPE
+    SYNTAX      VTSSOspfLsdbType
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The type of the link state advertisement."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 3 }
+
+vtssOspfStatusDbNSSAExternalLinkStateId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The OSPF link state ID."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 4 }
+
+vtssOspfStatusDbNSSAExternalAdvRouterId OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The advertising router ID which originated the LSA."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 5 }
+
+vtssOspfStatusDbNSSAExternalAge OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The time in seconds since the LSA was originated."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 6 }
+
+vtssOspfStatusDbNSSAExternalOptions OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The OSPF option field which is present in OSPF hello packets, which
+         enables OSPF routers to support (or not support) optional capabilities,
+         and to communicate their capability level to other OSPF routers."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 7 }
+
+vtssOspfStatusDbNSSAExternalSequence OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The LS sequence number of the LSA."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 8 }
+
+vtssOspfStatusDbNSSAExternalChecksum OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The checksum of the LSA contents."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 9 }
+
+vtssOspfStatusDbNSSAExternalLength OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Length in bytes of the LSA."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 10 }
+
+vtssOspfStatusDbNSSAExternalNetworkMask OBJECT-TYPE
+    SYNTAX      Integer32 (0..32)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Network mask length. The field is significant only when the link state
+         type is 'External/NSSA External Link State' (Type 5, 7)."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 11 }
+
+vtssOspfStatusDbNSSAExternalMetric OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..16777215)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "User specified metric for this summary route. The field is significant
+         only when the link state type is 'External/NSSA External Link State'
+         (Type 5, 7)."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 12 }
+
+vtssOspfStatusDbNSSAExternalMetricType OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The External type of the LSA. The field is significant only when the
+         link state type is 'External/NSSA External Link State' (Type 5, 7)."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 13 }
+
+vtssOspfStatusDbNSSAExternalForwardAddress OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The IP address of forward address. The field is significant only when
+         the link state type is 'External/NSSA External Link State' (Type 5, 7)."
+    ::= { vtssOspfStatusDbNSSAExternalEntry 14 }
+
+vtssOspfControl OBJECT IDENTIFIER
+    ::= { vtssOspfMibObjects 4 }
+
+vtssOspfControlGlobals OBJECT IDENTIFIER
+    ::= { vtssOspfControl 4 }
+
+vtssOspfControlGlobalsReloadProcess OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set true to reload OSPF process."
+    ::= { vtssOspfControlGlobals 1 }
+
+vtssOspfMibConformance OBJECT IDENTIFIER
+    ::= { vtssOspfMib 2 }
+
+vtssOspfMibCompliances OBJECT IDENTIFIER
+    ::= { vtssOspfMibConformance 1 }
+
+vtssOspfMibGroups OBJECT IDENTIFIER
+    ::= { vtssOspfMibConformance 2 }
+
+vtssOspfCapabilitiesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfCapabilitiesMinInstanceId,
+                  vtssOspfCapabilitiesMaxInstanceId,
+                  vtssOspfCapabilitiesMinRouterId,
+                  vtssOspfCapabilitiesMaxRouterId,
+                  vtssOspfCapabilitiesMinPriority,
+                  vtssOspfCapabilitiesMaxPriority,
+                  vtssOspfCapabilitiesMinGeneralCost,
+                  vtssOspfCapabilitiesMaxGeneralCost,
+                  vtssOspfCapabilitiesMinInterfaceCost,
+                  vtssOspfCapabilitiesMaxInterfaceCost,
+                  vtssOspfCapabilitiesMinRedistributeCost,
+                  vtssOspfCapabilitiesMaxRedistributeCost,
+                  vtssOspfCapabilitiesMinHelloInterval,
+                  vtssOspfCapabilitiesMaxHelloInterval,
+                  vtssOspfCapabilitiesMinFastHelloPackets,
+                  vtssOspfCapabilitiesMaxFastHelloPackets,
+                  vtssOspfCapabilitiesMinRetransmitInterval,
+                  vtssOspfCapabilitiesMaxRetransmitInterval,
+                  vtssOspfCapabilitiesMinDeadInterval,
+                  vtssOspfCapabilitiesMaxDeadInterval,
+                  vtssOspfCapabilitiesMinRouterLsaOnStartup,
+                  vtssOspfCapabilitiesMaxRouterLsaOnStartup,
+                  vtssOspfCapabilitiesMinRouterLsaOnShutdown,
+                  vtssOspfCapabilitiesMaxRouterLsaOnShutdown,
+                  vtssOspfCapabilitiesMinMdKeyId,
+                  vtssOspfCapabilitiesMaxMdKeyId,
+                  vtssOspfCapabilitiesMinSimplePwdLen,
+                  vtssOspfCapabilitiesMaxSimplePwdLen,
+                  vtssOspfCapabilitiesMinMdKeyLen,
+                  vtssOspfCapabilitiesMaxMdKeyLen,
+                  vtssOspfCapabilitiesIsRipRedistributedSupported,
+                  vtssOspfCapabilitiesMinAdminDistance,
+                  vtssOspfCapabilitiesMaxAdminDistance }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 1 }
+
+vtssOspfConfigProcessTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigProcessInstanceId,
+                  vtssOspfConfigProcessAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 2 }
+
+vtssOspfConfigProcessTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigProcessTableRowEditorInstanceId,
+                  vtssOspfConfigProcessTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 3 }
+
+vtssOspfConfigRouterTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigRouterInstanceId,
+                  vtssOspfConfigRouterIsSpecificRouterId,
+                  vtssOspfConfigRouterRouterId,
+                  vtssOspfConfigRouterDefPassiveInterface,
+                  vtssOspfConfigRouterIsSpecificDefMetric,
+                  vtssOspfConfigRouterDefMetricVal,
+                  vtssOspfConfigRouterConnectedRedistMetricType,
+                  vtssOspfConfigRouterConnectedRedistIsSpecificMetric,
+                  vtssOspfConfigRouterConnectedRedistMetricVal,
+                  vtssOspfConfigRouterStaticRedistMetricType,
+                  vtssOspfConfigRouterStaticRedistIsSpecificMetric,
+                  vtssOspfConfigRouterStaticRedistMetricVal,
+                  vtssOspfConfigRouterRipRedistMetricType,
+                  vtssOspfConfigRouterRipRedistIsSpecificMetric,
+                  vtssOspfConfigRouterRipRedistMetricVal,
+                  vtssOspfConfigRouterIsOnStartup,
+                  vtssOspfConfigRouterOnStartupInterval,
+                  vtssOspfConfigRouterIsOnShutdown,
+                  vtssOspfConfigRouterOnShutdownInterval,
+                  vtssOspfConfigRouterIsAdministrative,
+                  vtssOspfConfigRouterDefaultRouteRedistMetricType,
+                  vtssOspfConfigRouterDefaultRouteRedistIsSpecificMetric,
+                  vtssOspfConfigRouterDefaultRouteRedistMetricVal,
+                  vtssOspfConfigRouterDefaultRouteRedistAlways,
+                  vtssOspfConfigRouterAdminDistance }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 4 }
+
+vtssOspfConfigRouterInterfaceTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigRouterInterfaceInstanceId,
+                  vtssOspfConfigRouterInterfaceIfIndex,
+                  vtssOspfConfigRouterInterfacePassiveInterface }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 5 }
+
+vtssOspfConfigAreaTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigAreaInstanceId,
+                  vtssOspfConfigAreaNetwork,
+                  vtssOspfConfigAreaIpSubnetMaskLength,
+                  vtssOspfConfigAreaAreaId, vtssOspfConfigAreaAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 6 }
+
+vtssOspfConfigAreaTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigAreaTableRowEditorInstanceId,
+                  vtssOspfConfigAreaTableRowEditorNetwork,
+                  vtssOspfConfigAreaTableRowEditorIpSubnetMaskLength,
+                  vtssOspfConfigAreaTableRowEditorAreaId,
+                  vtssOspfConfigAreaTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 7 }
+
+vtssOspfConfigAreaAuthTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigAreaAuthInstanceId,
+                  vtssOspfConfigAreaAuthAreaId,
+                  vtssOspfConfigAreaAuthAreaAuthType,
+                  vtssOspfConfigAreaAuthAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 8 }
+
+vtssOspfConfigAreaAuthTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigAreaAuthTableRowEditorInstanceId,
+                  vtssOspfConfigAreaAuthTableRowEditorAreaId,
+                  vtssOspfConfigAreaAuthTableRowEditorAreaAuthType,
+                  vtssOspfConfigAreaAuthTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 9 }
+
+vtssOspfConfigAreaRangeTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigAreaRangeInstanceId,
+                  vtssOspfConfigAreaRangeAreaId,
+                  vtssOspfConfigAreaRangeNetwork,
+                  vtssOspfConfigAreaRangeIpSubnetMaskLength,
+                  vtssOspfConfigAreaRangeAdvertised,
+                  vtssOspfConfigAreaRangeIsSpecificCost,
+                  vtssOspfConfigAreaRangeCost,
+                  vtssOspfConfigAreaRangeAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 10 }
+
+vtssOspfConfigAreaRangeTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigAreaRangeTableRowEditorInstanceId,
+                  vtssOspfConfigAreaRangeTableRowEditorAreaId,
+                  vtssOspfConfigAreaRangeTableRowEditorNetwork,
+                  vtssOspfConfigAreaRangeTableRowEditorIpSubnetMaskLength,
+                  vtssOspfConfigAreaRangeTableRowEditorAdvertised,
+                  vtssOspfConfigAreaRangeTableRowEditorIsSpecificCost,
+                  vtssOspfConfigAreaRangeTableRowEditorCost,
+                  vtssOspfConfigAreaRangeTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 11 }
+
+vtssOspfConfigInterfaceMdKeyTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigInterfaceMdKeyIfIndex,
+                  vtssOspfConfigInterfaceMdKeyMdKeyId,
+                  vtssOspfConfigInterfaceMdKeyIsEncrypted,
+                  vtssOspfConfigInterfaceMdKeyMdKey,
+                  vtssOspfConfigInterfaceMdKeyAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 12 }
+
+vtssOspfConfigInterfaceMdKeyTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigInterfaceMdKeyTableRowEditorIfIndex,
+                  vtssOspfConfigInterfaceMdKeyTableRowEditorMdKeyId,
+                  vtssOspfConfigInterfaceMdKeyTableRowEditorIsEncrypted,
+                  vtssOspfConfigInterfaceMdKeyTableRowEditorMdKey,
+                  vtssOspfConfigInterfaceMdKeyTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 13 }
+
+vtssOspfConfigVlinkTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigVlinkInstanceId,
+                  vtssOspfConfigVlinkAreaId,
+                  vtssOspfConfigVlinkRouterId,
+                  vtssOspfConfigVlinkHelloInterval,
+                  vtssOspfConfigVlinkDeadInterval,
+                  vtssOspfConfigVlinkRetransmitInterval,
+                  vtssOspfConfigVlinkAuthType,
+                  vtssOspfConfigVlinkIsEncrypted,
+                  vtssOspfConfigVlinkSimplePwd,
+                  vtssOspfConfigVlinkAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 14 }
+
+vtssOspfConfigVlinkTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigVlinkTableRowEditorInstanceId,
+                  vtssOspfConfigVlinkTableRowEditorAreaId,
+                  vtssOspfConfigVlinkTableRowEditorRouterId,
+                  vtssOspfConfigVlinkTableRowEditorHelloInterval,
+                  vtssOspfConfigVlinkTableRowEditorDeadInterval,
+                  vtssOspfConfigVlinkTableRowEditorRetransmitInterval,
+                  vtssOspfConfigVlinkTableRowEditorAuthType,
+                  vtssOspfConfigVlinkTableRowEditorIsEncrypted,
+                  vtssOspfConfigVlinkTableRowEditorSimplePwd,
+                  vtssOspfConfigVlinkTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 15 }
+
+vtssOspfConfigVlinkMdKeyTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigVlinkMdKeyInstanceId,
+                  vtssOspfConfigVlinkMdKeyAreaId,
+                  vtssOspfConfigVlinkMdKeyRouterId,
+                  vtssOspfConfigVlinkMdKeyMdKeyId,
+                  vtssOspfConfigVlinkMdKeyIsEncrypted,
+                  vtssOspfConfigVlinkMdKeyMdKey,
+                  vtssOspfConfigVlinkMdKeyAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 16 }
+
+vtssOspfConfigVlinkTableMdKeyRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigVlinkTableMdKeyRowEditorInstanceId,
+                  vtssOspfConfigVlinkTableMdKeyRowEditorAreaId,
+                  vtssOspfConfigVlinkTableMdKeyRowEditorRouterId,
+                  vtssOspfConfigVlinkTableMdKeyRowEditorMdKeyId,
+                  vtssOspfConfigVlinkTableMdKeyRowEditorIsEncrypted,
+                  vtssOspfConfigVlinkTableMdKeyRowEditorMdKey,
+                  vtssOspfConfigVlinkTableMdKeyRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 17 }
+
+vtssOspfConfigStubAreaTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigStubAreaInstanceId,
+                  vtssOspfConfigStubAreaAreaId,
+                  vtssOspfConfigStubAreaIsNssa,
+                  vtssOspfConfigStubAreaNoSummary,
+                  vtssOspfConfigStubAreaNssaTranslatorRole,
+                  vtssOspfConfigStubAreaAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 18 }
+
+vtssOspfConfigStubAreaTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigStubAreaTableRowEditorInstanceId,
+                  vtssOspfConfigStubAreaTableRowEditorAreaId,
+                  vtssOspfConfigStubAreaTableRowEditorIsNssa,
+                  vtssOspfConfigStubAreaTableRowEditorNoSummary,
+                  vtssOspfConfigStubAreaTableRowEditorNssaTranslatorRole,
+                  vtssOspfConfigStubAreaTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 19 }
+
+vtssOspfConfigInterfaceTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfConfigInterfaceIfIndex,
+                  vtssOspfConfigInterfacePriority,
+                  vtssOspfConfigInterfaceIsSpecificCost,
+                  vtssOspfConfigInterfaceCost,
+                  vtssOspfConfigInterfaceIsFastHelloEnabled,
+                  vtssOspfConfigInterfaceFastHelloPackets,
+                  vtssOspfConfigInterfaceDeadInterval,
+                  vtssOspfConfigInterfaceHelloInterval,
+                  vtssOspfConfigInterfaceRetransmitInterval,
+                  vtssOspfConfigInterfaceAuthType,
+                  vtssOspfConfigInterfaceIsEncrypted,
+                  vtssOspfConfigInterfaceSimplePwd,
+                  vtssOspfConfigInterfaceMtuIgnore }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 20 }
+
+vtssOspfStatusRouterTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusRouterInstanceId,
+                  vtssOspfStatusRouterRouterId,
+                  vtssOspfStatusRouterSpfDelay,
+                  vtssOspfStatusRouterSpfHoldTime,
+                  vtssOspfStatusRouterSpfMaxWaitTime,
+                  vtssOspfStatusRouterLastExcutedSpfTs,
+                  vtssOspfStatusRouterMinLsaInterval,
+                  vtssOspfStatusRouterMinLsaArrival,
+                  vtssOspfStatusRouterExternalLsaCount,
+                  vtssOspfStatusRouterExternalLsaChecksum,
+                  vtssOspfStatusRouterAttachedAreaCount }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 21 }
+
+vtssOspfStatusRouteAreaTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusRouteAreaInstanceId,
+                  vtssOspfStatusRouteAreaAreaId,
+                  vtssOspfStatusRouteAreaIsBackbone,
+                  vtssOspfStatusRouteAreaAreaType,
+                  vtssOspfStatusRouteAreaAttachedIntfActiveCount,
+                  vtssOspfStatusRouteAreaAuthType,
+                  vtssOspfStatusRouteAreaSpfExecutedCount,
+                  vtssOspfStatusRouteAreaLsaCount,
+                  vtssOspfStatusRouteAreaRouterLsaCount,
+                  vtssOspfStatusRouteAreaRouterLsaChecksum,
+                  vtssOspfStatusRouteAreaNetworkLsaCount,
+                  vtssOspfStatusRouteAreaNetworkLsaChecksum,
+                  vtssOspfStatusRouteAreaSummaryLsaCount,
+                  vtssOspfStatusRouteAreaSummaryLsaChecksum,
+                  vtssOspfStatusRouteAreaAsbrSummaryLsaCount,
+                  vtssOspfStatusRouteAreaAsbrSummaryLsaChecksum,
+                  vtssOspfStatusRouteAreaNssaLsaCount,
+                  vtssOspfStatusRouteAreaNssaLsaChecksum,
+                  vtssOspfStatusRouteAreaNssaTranslatorState }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 22 }
+
+vtssOspfStatusInterfaceTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusInterfaceIfIndex,
+                  vtssOspfStatusInterfaceStatus,
+                  vtssOspfStatusInterfacePassive,
+                  vtssOspfStatusInterfaceNetwork,
+                  vtssOspfStatusInterfaceIpSubnetMaskLength,
+                  vtssOspfStatusInterfaceAreaId,
+                  vtssOspfStatusInterfaceRouterId,
+                  vtssOspfStatusInterfaceCost,
+                  vtssOspfStatusInterfaceState,
+                  vtssOspfStatusInterfacePriority,
+                  vtssOspfStatusInterfaceDrId,
+                  vtssOspfStatusInterfaceDrAddr,
+                  vtssOspfStatusInterfaceBdrId,
+                  vtssOspfStatusInterfaceBdrAddr,
+                  vtssOspfStatusInterfaceHelloTime,
+                  vtssOspfStatusInterfaceDeadTime,
+                  vtssOspfStatusInterfaceWaitTime,
+                  vtssOspfStatusInterfaceRetransmitTime,
+                  vtssOspfStatusInterfaceHelloDueTime,
+                  vtssOspfStatusInterfaceNeighborCount,
+                  vtssOspfStatusInterfaceAdjNeighborCount,
+                  vtssOspfStatusInterfaceTransmitDelay }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 23 }
+
+vtssOspfStatusNeighborIpv4TableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusNeighborIpv4InstanceId,
+                  vtssOspfStatusNeighborIpv4RouterId,
+                  vtssOspfStatusNeighborIpv4Ipv4Addr,
+                  vtssOspfStatusNeighborIpv4IfIndex,
+                  vtssOspfStatusNeighborIpv4IpAddr,
+                  vtssOspfStatusNeighborIpv4AreaId,
+                  vtssOspfStatusNeighborIpv4Priority,
+                  vtssOspfStatusNeighborIpv4State,
+                  vtssOspfStatusNeighborIpv4DrId,
+                  vtssOspfStatusNeighborIpv4DrAddr,
+                  vtssOspfStatusNeighborIpv4BdrId,
+                  vtssOspfStatusNeighborIpv4BdrAddr,
+                  vtssOspfStatusNeighborIpv4Options,
+                  vtssOspfStatusNeighborIpv4DeadTime,
+                  vtssOspfStatusNeighborIpv4TransitAreaId }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 24 }
+
+vtssOspfStatusInterfaceMdKeyPrecedenceTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusInterfaceMdKeyPrecedenceIfIndex,
+                  vtssOspfStatusInterfaceMdKeyPrecedencePrecedence,
+                  vtssOspfStatusInterfaceMdKeyPrecedenceMdKeyId }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 25 }
+
+vtssOspfStatusVlinkMdkeyPrecedenceTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusVlinkMdkeyPrecedenceInstanceId,
+                  vtssOspfStatusVlinkMdkeyPrecedenceAreaId,
+                  vtssOspfStatusVlinkMdkeyPrecedenceRouterId,
+                  vtssOspfStatusVlinkMdkeyPrecedencePrecedence,
+                  vtssOspfStatusVlinkMdkeyPrecedenceMdKeyId }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 26 }
+
+vtssOspfStatusRouteIpv4TableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusRouteIpv4InstanceId,
+                  vtssOspfStatusRouteIpv4RouteType,
+                  vtssOspfStatusRouteIpv4Network,
+                  vtssOspfStatusRouteIpv4IpSubnetMaskLength,
+                  vtssOspfStatusRouteIpv4AreaId,
+                  vtssOspfStatusRouteIpv4NextHop,
+                  vtssOspfStatusRouteIpv4Cost,
+                  vtssOspfStatusRouteIpv4AsCost,
+                  vtssOspfStatusRouteIpv4BorderRouterType,
+                  vtssOspfStatusRouteIpv4Ifindex,
+                  vtssOspfStatusRouteIpv4IsConnected }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 27 }
+
+vtssOspfStatusDbTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusDbInstanceId, vtssOspfStatusDbAreaId,
+                  vtssOspfStatusDbLsdbType,
+                  vtssOspfStatusDbLinkStateId,
+                  vtssOspfStatusDbAdvRouterId, vtssOspfStatusDbAge,
+                  vtssOspfStatusDbSequence, vtssOspfStatusDbChecksum,
+                  vtssOspfStatusDbRouterLinkCount }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 28 }
+
+vtssOspfStatusDbRouterTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusDbRouterInstanceId,
+                  vtssOspfStatusDbRouterAreaId,
+                  vtssOspfStatusDbRouterLsdbType,
+                  vtssOspfStatusDbRouterLinkStateId,
+                  vtssOspfStatusDbRouterAdvRouterId,
+                  vtssOspfStatusDbRouterAge,
+                  vtssOspfStatusDbRouterOptions,
+                  vtssOspfStatusDbRouterSequence,
+                  vtssOspfStatusDbRouterChecksum,
+                  vtssOspfStatusDbRouterLength,
+                  vtssOspfStatusDbRouterRouterLinkCount }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 29 }
+
+vtssOspfStatusDbNetworkTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusDbNetworkInstanceId,
+                  vtssOspfStatusDbNetworkAreaId,
+                  vtssOspfStatusDbNetworkLsdbType,
+                  vtssOspfStatusDbNetworkLinkStateId,
+                  vtssOspfStatusDbNetworkAdvRouterId,
+                  vtssOspfStatusDbNetworkAge,
+                  vtssOspfStatusDbNetworkOptions,
+                  vtssOspfStatusDbNetworkSequence,
+                  vtssOspfStatusDbNetworkChecksum,
+                  vtssOspfStatusDbNetworkLength,
+                  vtssOspfStatusDbNetworkNetworkMask,
+                  vtssOspfStatusDbNetworkAttachedRouterCount }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 30 }
+
+vtssOspfStatusDbSummaryTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusDbSummaryInstanceId,
+                  vtssOspfStatusDbSummaryAreaId,
+                  vtssOspfStatusDbSummaryLsdbType,
+                  vtssOspfStatusDbSummaryLinkStateId,
+                  vtssOspfStatusDbSummaryAdvRouterId,
+                  vtssOspfStatusDbSummaryAge,
+                  vtssOspfStatusDbSummaryOptions,
+                  vtssOspfStatusDbSummarySequence,
+                  vtssOspfStatusDbSummaryChecksum,
+                  vtssOspfStatusDbSummaryLength,
+                  vtssOspfStatusDbSummaryNetworkMask,
+                  vtssOspfStatusDbSummaryMetric }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 31 }
+
+vtssOspfStatusDbASBRSummaryTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusDbASBRSummaryInstanceId,
+                  vtssOspfStatusDbASBRSummaryAreaId,
+                  vtssOspfStatusDbASBRSummaryLsdbType,
+                  vtssOspfStatusDbASBRSummaryLinkStateId,
+                  vtssOspfStatusDbASBRSummaryAdvRouterId,
+                  vtssOspfStatusDbASBRSummaryAge,
+                  vtssOspfStatusDbASBRSummaryOptions,
+                  vtssOspfStatusDbASBRSummarySequence,
+                  vtssOspfStatusDbASBRSummaryChecksum,
+                  vtssOspfStatusDbASBRSummaryLength,
+                  vtssOspfStatusDbASBRSummaryNetworkMask,
+                  vtssOspfStatusDbASBRSummaryMetric }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 32 }
+
+vtssOspfStatusDbExternalTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusDbExternalInstanceId,
+                  vtssOspfStatusDbExternalAreaId,
+                  vtssOspfStatusDbExternalLsdbType,
+                  vtssOspfStatusDbExternalLinkStateId,
+                  vtssOspfStatusDbExternalAdvRouterId,
+                  vtssOspfStatusDbExternalAge,
+                  vtssOspfStatusDbExternalOptions,
+                  vtssOspfStatusDbExternalSequence,
+                  vtssOspfStatusDbExternalChecksum,
+                  vtssOspfStatusDbExternalLength,
+                  vtssOspfStatusDbExternalNetworkMask,
+                  vtssOspfStatusDbExternalMetric,
+                  vtssOspfStatusDbExternalMetricType,
+                  vtssOspfStatusDbExternalForwardAddress }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 33 }
+
+vtssOspfStatusDbNSSAExternalTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfStatusDbNSSAExternalInstanceId,
+                  vtssOspfStatusDbNSSAExternalAreaId,
+                  vtssOspfStatusDbNSSAExternalLsdbType,
+                  vtssOspfStatusDbNSSAExternalLinkStateId,
+                  vtssOspfStatusDbNSSAExternalAdvRouterId,
+                  vtssOspfStatusDbNSSAExternalAge,
+                  vtssOspfStatusDbNSSAExternalOptions,
+                  vtssOspfStatusDbNSSAExternalSequence,
+                  vtssOspfStatusDbNSSAExternalChecksum,
+                  vtssOspfStatusDbNSSAExternalLength,
+                  vtssOspfStatusDbNSSAExternalNetworkMask,
+                  vtssOspfStatusDbNSSAExternalMetric,
+                  vtssOspfStatusDbNSSAExternalMetricType,
+                  vtssOspfStatusDbNSSAExternalForwardAddress }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 34 }
+
+vtssOspfControlGlobalsInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssOspfControlGlobalsReloadProcess }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssOspfMibGroups 35 }
+
+vtssOspfMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssOspfCapabilitiesInfoGroup,
+                       vtssOspfConfigProcessTableInfoGroup,
+                       vtssOspfConfigProcessTableRowEditorInfoGroup,
+                       vtssOspfConfigRouterTableInfoGroup,
+                       vtssOspfConfigRouterInterfaceTableInfoGroup,
+                       vtssOspfConfigAreaTableInfoGroup,
+                       vtssOspfConfigAreaTableRowEditorInfoGroup,
+                       vtssOspfConfigAreaAuthTableInfoGroup,
+                       vtssOspfConfigAreaAuthTableRowEditorInfoGroup,
+                       vtssOspfConfigAreaRangeTableInfoGroup,
+                       vtssOspfConfigAreaRangeTableRowEditorInfoGroup,
+                       vtssOspfConfigInterfaceMdKeyTableInfoGroup,
+                       vtssOspfConfigInterfaceMdKeyTableRowEditorInfoGroup,
+                       vtssOspfConfigVlinkTableInfoGroup,
+                       vtssOspfConfigVlinkTableRowEditorInfoGroup,
+                       vtssOspfConfigVlinkMdKeyTableInfoGroup,
+                       vtssOspfConfigVlinkTableMdKeyRowEditorInfoGroup,
+                       vtssOspfConfigStubAreaTableInfoGroup,
+                       vtssOspfConfigStubAreaTableRowEditorInfoGroup,
+                       vtssOspfConfigInterfaceTableInfoGroup,
+                       vtssOspfStatusRouterTableInfoGroup,
+                       vtssOspfStatusRouteAreaTableInfoGroup,
+                       vtssOspfStatusInterfaceTableInfoGroup,
+                       vtssOspfStatusNeighborIpv4TableInfoGroup,
+                       vtssOspfStatusInterfaceMdKeyPrecedenceTableInfoGroup,
+                       vtssOspfStatusVlinkMdkeyPrecedenceTableInfoGroup,
+                       vtssOspfStatusRouteIpv4TableInfoGroup,
+                       vtssOspfStatusDbTableInfoGroup,
+                       vtssOspfStatusDbRouterTableInfoGroup,
+                       vtssOspfStatusDbNetworkTableInfoGroup,
+                       vtssOspfStatusDbSummaryTableInfoGroup,
+                       vtssOspfStatusDbASBRSummaryTableInfoGroup,
+                       vtssOspfStatusDbExternalTableInfoGroup,
+                       vtssOspfStatusDbNSSAExternalTableInfoGroup,
+                       vtssOspfControlGlobalsInfoGroup }
+
+    ::= { vtssOspfMibCompliances 1 }
+
+END

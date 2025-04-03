@@ -1,0 +1,167 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Port Status</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/format.js"></script>
+ <script type="text/javascript">
+
+var timerID;
+
+// Help page macic
+var help_page = "/help/help_mvrp_stat.htm";
+
+function addRow(index, frag, values) {
+    var tr = CreateStyledElement("tr", index % 2 ? "display_odd" : "display_even");
+    var MAC = values[2];
+
+    addTextCell(tr, configPortName(values[0], 0), "cr");
+    addTextCell(tr, values[1], "cr");
+    addTextCell(tr, toMacAddress(MAC), "c mac");
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+/* Format: 
+ * <port 1>,<port 2>,<port 3>,...<port n>
+ * 
+ * port x :== <port_no>/<FailedRegistrations>/<LastPduOrigin>
+ *   port_no              :== 1..max
+ *   FailedRegistrations  :== 0..2^64-1
+ *   LastPduOrigin        :== MAC address
+ */
+function processUpdate(req, ref)
+{
+    if(req.responseText)  {
+        var values = req.responseText.split(",");
+        var frag = document.createDocumentFragment();
+        for(var i = 0; i < values.length; i++) {
+            if(values[i].length) {
+                var pval = values[i].split("/");
+                addRow(i, frag, pval);
+            }
+        }
+        addFragment(frag, ref, 1);
+        var autorefresh = document.getElementById('autorefresh');
+        if(autorefresh.checked) {
+            if(timerID) {
+                clearTimeout(timerID);
+            }
+            timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+        }
+    } else {
+        SpomHandleError();
+    }
+    document.getElementById("update").style.visibility = "hidden";
+}
+
+function requestUpdate() {
+    document.getElementById("update").style.visibility = "visible";
+    if(SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    loadXMLDoc(SpomAddSidArg("/stat/mvrp_stat"), processUpdate, 'portData');
+    SpomUpdateDisplaySid("sid_display");
+}
+
+function chkRefresh(fld)
+{
+    if(!fld.checked) {
+        if(timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        requestUpdate();
+    }
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    requestUpdate();            // Update page to reflect selector
+}
+
+function docLoad()
+{
+    var frag = document.createDocumentFragment();
+    var tr;
+    var i;
+    tr = document.createElement("tr");
+    elem = addTextHeaderCell(tr, "Port", "hdrc");
+    elem.setAttribute("rowSpan", "1");
+    addTextHeaderCell(tr, "Failed Registrations", "hdrc");
+    addTextHeaderCell(tr, "Last PDU Origin", "hdrc");
+    frag.appendChild(tr);
+    addFragment(frag, "portHeader", 1);
+
+    requestUpdate();
+}
+
+ </script>
+</head>
+
+<body class="content" onload="docLoad();">
+
+<h1>MVRP Statistics <span id="sid_display"></span></h1>
+
+<div class="refreshbar">
+ <form action="#">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+  <input type="button" value="Refresh" onclick="requestUpdate(); this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+ </form>
+</div>
+
+<table id="portStats" summary="MVRP Statistics" class="display">
+ <thead id="portHeader">
+ </thead>
+ <tbody id="portData">
+ </tbody>
+</table>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

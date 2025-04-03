@@ -1,0 +1,1143 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+INCLUDE_BEGIN
+#include "mgmt_api.h"
+#include "misc_api.h"
+#include "msg_api.h"
+#include "ip_api.h"
+#include "ip_utils.hxx"
+#include "ip_icli_priv.h"
+#include "icli_porting_util.h"
+#include <vtss/appl/sysutil.h>
+#include "vlan_api.h"
+#include "icfg_api.h"
+
+#ifdef VTSS_SW_OPTION_IP_MISC
+#include "ping_api.h"
+#include "traceroute_api.h"
+#endif
+
+#if defined(VTSS_SW_OPTION_DHCP6_CLIENT)
+#include "vtss/appl/dhcp6_client.h"
+#endif /* defined(VTSS_SW_OPTION_DHCP6_CLIENT) */
+INCLUDE_END
+
+FUNCTION_BEGIN
+// Need to include IP's trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "ip_trace.h"
+
+#define ICFG_PRINTF(...) VTSS_RC(vtss_icfg_printf(result, __VA_ARGS__))
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// IPV6_ICFG_global_conf()
+/******************************************************************************/
+static mesa_rc IPV6_ICFG_global_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ip_route_key_t  prev, rt;
+    vtss_appl_ip_route_conf_t route_conf, default_route_conf;
+    vtss::StringStream        bs;
+    mesa_vid_t                vlan;
+    bool                      first = true;
+    mesa_rc                   rc;
+
+    VTSS_RC(vtss_appl_ip_route_conf_default_get(&default_route_conf));
+
+    // ipv6 route <ipv6_subnet> <ipv6_ucast> [interface vlan <vlan_id>] [distance <1-255>]
+    while (vtss_appl_ip_route_conf_itr(first ? nullptr : &prev, &rt, VTSS_APPL_IP_ROUTE_TYPE_IPV6_UC) == VTSS_RC_OK) {
+        first = false;
+        prev  = rt;
+
+        if ((rc = vtss_appl_ip_route_conf_get(&rt, &route_conf)) != VTSS_RC_OK) {
+            T_EG(IP_TRACE_GRP_ICLI, "vtss_appl_ip_route_conf_get(%s) failed: %s", rt, error_txt(rc));
+            continue;
+        }
+
+        vlan = vtss_ifindex_as_vlan(rt.vlan_ifindex);
+
+        // In order to use the short form of IPv6 addresses, we use the ostream
+        // operator<<.
+        bs.clear();
+
+        if (rt.route.ipv6_uc.destination == vtss_ipv6_blackhole_route) {
+            bs << rt.route.ipv6_uc.network << " blackhole";
+        } else {
+            bs << rt.route.ipv6_uc.network << " " << rt.route.ipv6_uc.destination;
+        }
+
+        ICFG_PRINTF("ipv6 route %s", bs.buf.c_str());
+
+        if (vlan) {
+            ICFG_PRINTF(" interface vlan %u", vlan);
+        }
+
+        if (route_conf.distance != default_route_conf.distance || req->all_defaults) {
+            ICFG_PRINTF(" distance %u", route_conf.distance);
+        }
+
+        ICFG_PRINTF("\n");
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// IPV6_ICFG_vlan_interface()
+/******************************************************************************/
+static mesa_rc IPV6_ICFG_vlan_interface(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ip_if_conf_ipv6_t conf;
+    mesa_vid_t                  vlan = (mesa_vid_t)req->instance_id.vlan;
+    vtss::StringStream          bs;
+    vtss_ifindex_t              ifindex;
+
+    // ipv6 address <ipv6_subnet>
+
+    // Yet-to-be-implemented:
+    // ipv6 address autoconfig [default]
+    // ipv6 nd managed-config-flag
+    // ipv6 nd other-config-flag
+    // ipv6 nd reachable-time <milliseconds:0-3600000>
+    // ipv6 nd prefix <ipv6_subnet> valid-lifetime <seconds:0-4294967295>
+    // ipv6 nd prefix <ipv6_subnet> preferred-lifetime <seconds:0-4294967295>
+    // ipv6 nd prefix <ipv6_subnet> off-link
+    // ipv6 nd prefix <ipv6_subnet> no-autoconfig
+    // ipv6 nd prefix <ipv6_subnet> no-rtr-address
+    // ipv6 nd ra interval <maximum_secs:4-1800> [<minimum_secs:3-1350>]
+    // ipv6 nd ra lifetime <seconds:0-9000>
+
+    (void)vtss_ifindex_from_vlan(vlan, &ifindex);
+    if (vtss_appl_ip_if_conf_ipv6_get(ifindex, &conf) != VTSS_RC_OK || !conf.enable) {
+        if (req->all_defaults) {
+            ICFG_PRINTF(" no ipv6 address\n");
+        }
+    } else {
+        // In order to use the short form of IPv6 addresses, we use the ostream
+        // operator<<.
+        bs << conf.network;
+        ICFG_PRINTF(" ipv6 address %s\n", bs.buf.c_str());
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// vtss_ip_ipv6_icfg_init()
+/******************************************************************************/
+mesa_rc vtss_ip_ipv6_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPV6_GLOBAL,         "ipv6", IPV6_ICFG_global_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPV6_VLAN_INTERFACE, "ipv6", IPV6_ICFG_vlan_interface));
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+/******************************************************************************/
+// IPV6_ICLI_ip_by_vlan_or_port()
+/******************************************************************************/
+static bool IPV6_ICLI_ip_by_vlan_or_port(mesa_vid_t vlan, mesa_port_no_t iport, mesa_ipv6_network_t *ipv6)
+{
+    mesa_vid_t                 vid;
+    vtss_appl_vlan_port_conf_t vlan_conf;
+    vtss_ifindex_t             ifindex;
+    vtss_appl_ip_if_key_ipv6_t key = {};
+
+    if (vlan == 0) {
+        // Get PVID
+        if (vlan_mgmt_port_conf_get(VTSS_ISID_LOCAL, iport, &vlan_conf, VTSS_APPL_VLAN_USER_ALL, true) != VTSS_RC_OK) {
+            return false;
+        }
+
+        vid = vlan_conf.hybrid.pvid;
+    } else {
+        vid = vlan;
+    }
+
+    if (vtss_ifindex_from_vlan(vid, &ifindex) != VTSS_RC_OK) {
+        return false;
+    }
+
+    // Get the IP for the VLAN with the PVID
+    key.ifindex = ifindex;
+    if (vtss_appl_ip_if_status_ipv6_itr(&key, &key) != VTSS_RC_OK || key.ifindex != ifindex) {
+        return false;
+    }
+
+    *ipv6 = key.addr;
+
+    return true;
+}
+
+/******************************************************************************/
+// IPV6_ICLI_build_ipv6_uc_route()
+// Pure function, no side effects
+/******************************************************************************/
+static void IPV6_ICLI_build_ipv6_uc_route(vtss_appl_ip_route_key_t *rt, const mesa_ipv6_network_t *network, const mesa_ipv6_t *gateway, mesa_vid_t vid)
+{
+    vtss_clear(*rt);
+
+    rt->type                      = VTSS_APPL_IP_ROUTE_TYPE_IPV6_UC;
+    rt->route.ipv6_uc.network     = *network;
+    rt->route.ipv6_uc.destination = *gateway;
+    (void)vtss_ifindex_from_vlan(vid, &rt->vlan_ifindex);
+}
+
+FUNCTION_END
+
+HELP_SHOW_VLAN              = VLAN of IPv6 interface
+HELP_SHOW_VLAN_LIST         = IPv6 interface VLAN list
+HELP_INTERFACE_IPV6_SUBNET  = IPv6 prefix x:x::y/z
+HELP_INTERFACE_NO_IPV6_SUBNET  = Disable IPv6 prefix x:x::y/z
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ipv6 neighbor
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+IF_FLAG   =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_IPV6
+HELP      = IPv6 neighbors
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)ip_util_nb_print(MESA_IP_TYPE_IPV6, icli_session_self_printf);
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+COMMAND   = show ipv6 route
+PROPERTY  = ICLI_CMD_PROP_GREP
+PRIVILEGE = ICLI_PRIVILEGE_0
+IF_FLAG   =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+
+HELP      = ##ICLI_HELP_SHOW
+HELP      = ##ICLI_HELP_IPV6
+HELP      = IPv6 routes
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)ip_util_route_print(VTSS_APPL_IP_ROUTE_TYPE_IPV6_UC, icli_session_self_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = ipv6 route <ipv6_subnet> {<ipv6_ucast> [interface vlan <vlan_id>] | blackhole} [distance <1-255>]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_ip2_ipv6_route_config
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_ipv6_subnet
+CMD_VAR = v_ipv6_ucast
+CMD_VAR = has_interface
+CMD_VAR =
+CMD_VAR = v_vlan_id
+CMD_VAR = has_blackhole
+CMD_VAR = has_distance
+CMD_VAR = v_distance
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_ROUTE
+HELP = ##HELP_INTERFACE_IPV6_SUBNET
+HELP = IPv6 unicast address of next-hop
+HELP = Specify VLAN interface for link-local address
+HELP = Specify VLAN interface for link-local address
+HELP = VLAN ID needed for link-local address
+HELP = Create a blackhole route
+HELP = Set a distance for this route
+HELP = Distance value for this route
+
+BYWORD =
+BYWORD =
+BYWORD = X:X:X:X::X/<0-128>
+BYWORD = X:X:X:X::X
+BYWORD = interface : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    mesa_rc                   rc;
+    vtss_appl_ip_route_key_t  rt;
+    vtss_appl_ip_route_conf_t conf;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    mesa_rc rc;
+    vtss_appl_ip_route_key_t rt;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (has_blackhole) {
+        v_ipv6_ucast = vtss_ipv6_blackhole_route;
+    }
+
+    if (vtss_ipv6_addr_is_link_local(&v_ipv6_ucast)) {
+        // Link-local addresses must have a VLAN.
+        if (!has_interface) {
+            ICLI_PRINTF("%% A link-local IPv6 gateway is specified. These addresses must have a VLAN interface associated.\n");
+            ICLI_PRINTF("%% Please use the \"interface vlan <vid>\" format of this command\n");
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        // This is not a link-local address, so the interface is not used.
+        if (has_interface) {
+            ICLI_PRINTF("%% A non-link-local IPv6 gateway is specified. These addresses don't have a VLAN interface associated.\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    IPV6_ICLI_build_ipv6_uc_route(&rt, &v_ipv6_subnet, &v_ipv6_ucast, v_vlan_id);
+
+    if ((rc = vtss_appl_ip_route_conf_default_get(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_distance) {
+        conf.distance = v_distance;
+    }
+
+    if ((rc = vtss_appl_ip_route_conf_set(&rt, &conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to add IPv6 route: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (has_blackhole) {
+        v_ipv6_ucast = vtss_ipv6_blackhole_route;
+    }
+
+    IPV6_ICLI_build_ipv6_uc_route(&rt, &v_ipv6_subnet, &v_ipv6_ucast, v_vlan_id);
+
+    if ((rc = vtss_appl_ip_route_conf_del(&rt)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to delete IPv6 route: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+IF_FLAG   =
+
+COMMAND   = ipv6 address <ipv6_subnet>
+
+FUNC_NAME = icli_ip2_ipv6_address_config
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = subnet
+
+BYWORD    =
+BYWORD    =
+BYWORD    = X:X:X:X::X/<0-128>
+
+HELP      = ##ICLI_HELP_IPV6
+HELP      = ##ICLI_HELP_IP6_ADRS
+HELP      = ##HELP_INTERFACE_IPV6_SUBNET
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlist
+
+VARIABLE_BEGIN
+    vtss_appl_ip_if_conf_ipv6_t ipconf;
+    vtss_ifindex_t              ifidx;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!vtss_ipv6_addr_is_mgmt_support(&subnet.address)) {
+        char adrString[40];
+
+        memset(adrString, 0x0, sizeof(adrString));
+
+        (void)icli_ipv6_to_str(subnet.address, adrString);
+
+        ICLI_PRINTF("%% %s/%u can not be configured, %s\n\n",
+                    adrString, subnet.prefix_size,
+                    vtss_ipv6_addr_is_loopback(&subnet.address) ? "invalid" : "unsupported");
+        return ICLI_RC_ERROR;
+    }
+
+    if (vtss_ipv6_addr_is_zero(&subnet.address)) {
+        ICLI_PRINTF("%% Please use no command to negate IPv6 address setting.\n\n");
+        return ICLI_RC_ERROR;
+    }
+
+    VTSS_ICLI_RANGE_FOREACH (vlist, u32, vid) {
+        if (vtss_appl_ip_if_exists(vtss_ifindex_cast_from_u32(vid, VTSS_IFINDEX_TYPE_VLAN)) &&
+            vtss_ifindex_from_vlan(vid, &ifidx) == VTSS_RC_OK) {
+            if (vtss_appl_ip_if_conf_ipv6_get(ifidx, &ipconf) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Failed to get IPv6 interface configuration on VLAN %u.\n", vid);
+            } else {
+                ipconf.enable  = true;
+                ipconf.network = subnet;
+                if (vtss_appl_ip_if_conf_ipv6_set(ifidx, &ipconf) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Failed to set IPv6 interface address on VLAN %u.\n", vid);
+                }
+            }
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+//
+// Command Segment
+//   This segment is the implementation of the command,
+//   one segment for one command.
+//
+CMD_BEGIN
+IF_FLAG   =
+
+COMMAND   = no ipv6 address [ <ipv6_subnet> ]
+
+FUNC_NAME = icli_ip2_ipv6_address_clear
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+
+BYWORD    =
+BYWORD    =
+BYWORD    =
+BYWORD    = X:X:X:X::X/<0-128>
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##ICLI_HELP_IPV6
+HELP      = ##ICLI_HELP_IP6_ADRS
+HELP      = ##HELP_INTERFACE_NO_IPV6_SUBNET
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlist
+
+VARIABLE_BEGIN
+    vtss_appl_ip_if_conf_ipv6_t ip6_conf = {};
+    vtss_ifindex_t              ifidx;
+VARIABLE_END
+
+CODE_BEGIN
+    VTSS_ICLI_RANGE_FOREACH (vlist, u32, vid) {
+        if (vtss_appl_ip_if_exists(vtss_ifindex_cast_from_u32(vid, VTSS_IFINDEX_TYPE_VLAN)) && vtss_ifindex_from_vlan(vid, &ifidx) == VTSS_RC_OK) {
+            (void)vtss_appl_ip_if_conf_ipv6_set(ifidx, &ip6_conf);
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show ipv6 interface [brief]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_ip2_ipv6_interface_show
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: show
+! 2: ipv6
+! 3: interface
+! 4: brief
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_INTERFACE
+HELP = Brief summary of IPv6 status and configuration
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = brief : Option
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)ip_util_if_brief_print(MESA_IP_TYPE_IPV6, icli_session_self_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+IF_FLAG =
+COMMAND = clear ipv6 neighbors
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: clear
+! 2: ipv6
+! 3: neighbors
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_CLEAR
+HELP = ##ICLI_HELP_IPV6
+HELP = IPv6 neighbors
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (vtss_appl_ip_neighbor_clear(MESA_IP_TYPE_IPV6) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to clear IPv6 neighbor cache.\n\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = VTSS_SW_OPTION_IP_MISC
+
+COMMAND = ping ipv6 { <domain_name> | <ipv6_addr> } [ repeat <1-60> ] [ saddr <ipv6_addr> ] [ sif { <port_type_id> | vlan <vlan_id> } ] [ size <2-1452> ] [ data <0-255> ] [ { verbose | quiet } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = icli_ip2_ping6_utility
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! ping
+CMD_VAR =
+RUNTIME =
+HELP = ##ICLI_HELP_PING
+BYWORD = <HasPing : option>
+
+! ipv6
+CMD_VAR =
+HELP = ICMPv6 Echo Request
+BYWORD = <HasIp : option>
+
+! <domain_name>
+CMD_VAR = domain_name
+HELP = Destination hostname or FQDN
+BYWORD = <hostname>
+
+! <ipv6_addr>
+CMD_VAR = ip_addr
+HELP = Destination IPv6 address
+BYWORD = <ipv6_addr>
+
+! repeat
+CMD_VAR = has_repeat
+HELP = Specify repeat count
+BYWORD = <HasRepeat : option>
+
+! <count:1-60>
+CMD_VAR = count
+HELP = Packets: 1-60; Default is 5
+BYWORD = <Count : 1-60>
+
+! saddr
+CMD_VAR = has_saddr
+HELP = Send from interface with source address
+BYWORD = <HasSaddr: option>
+
+! <ipv6_addr>
+CMD_VAR = src_addr
+HELP = Source Address of interface
+BYWORD = <ipv6_addr>
+
+! sif
+CMD_VAR = has_sif
+HELP = Send from specified interface
+BYWORD = <HasSif: option>
+
+! <port_type_id>
+CMD_VAR = src_if
+HELP = Source interface
+BYWORD = <port_type_id>
+
+! vlan
+CMD_VAR = has_vlan
+HELP = Send from VLAN interface with source address
+BYWORD = <HasSaddr: option>
+
+! <vlan_id>
+CMD_VAR = vlan_id
+HELP = Source VLAN interface
+BYWORD = <vlan_id>
+
+! size
+CMD_VAR = has_size
+HELP = Specify datagram size
+BYWORD = <HasSize : option>
+
+! <size:2-1452>
+CMD_VAR = size
+HELP = Size (bytes): 2-1452; Default is 56 (excluding MAC, IP and ICMP headers)
+BYWORD = <Size : 2-1452>
+
+! data
+CMD_VAR = has_data
+HELP = Specify payload data byte value
+BYWORD = <HasData : option>
+
+! <data:0-255>
+CMD_VAR = data_value
+HELP = Payload data: 0-255; Default is 0
+BYWORD = <Data : 0-255>
+
+! verbose
+CMD_VAR =
+HELP = Set verbose output
+BYWORD = <HasVerbose: option>
+
+! quiet
+CMD_VAR = has_quiet
+HELP = Set quiet output
+BYWORD = <HasQuiet: option>
+
+VARIABLE_BEGIN
+    i32                 irc = 0;
+    icli_line_mode_t    line_mode;
+    i32                 pktlen = PING_DEF_PACKET_LEN;
+    i32                 pktcnt = PING_DEF_PACKET_CNT;
+    i32                 pldata = PING_DEF_PACKET_PLDATA;
+    char                dest_host[VTSS_APPL_SYSUTIL_DOMAIN_NAME_LEN];
+    char                src_addr_str[VTSS_APPL_SYSUTIL_HOSTNAME_LEN];
+    BOOL                verbose = TRUE;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_repeat) {
+        pktcnt = count;
+    }
+
+    if (has_size) {
+        pktlen = size;
+    }
+
+    if (has_data) {
+        pldata = data_value;
+    }
+
+    memset(dest_host, 0x0, sizeof(dest_host));
+    memset(src_addr_str, 0x0, sizeof(src_addr_str));
+
+    if (domain_name && strlen(domain_name)) {
+        strncpy(dest_host, domain_name, strlen(domain_name));
+    } else if (!vtss_ipv6_addr_is_zero(&ip_addr)) {
+        (void)icli_ipv6_to_str(ip_addr, dest_host);
+    } else {
+        ICLI_PRINTF("%% Error: Invalid destination address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_saddr) {
+        (void)icli_ipv6_to_str(src_addr, src_addr_str);
+
+        if (vtss_ipv6_addr_is_link_local(&src_addr) && !has_vlan) {
+            ICLI_PRINTF("%% Error: Link-local source addresses must be scoped with a source VLAN interface\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    if (has_sif) {
+        mesa_ipv6_network_t addr;
+
+        // Get the IP address for the specified IP VLAN interface or the
+        // specified physical interface.
+        if (!IPV6_ICLI_ip_by_vlan_or_port(has_vlan ? vlan_id : 0, has_vlan ? VTSS_PORT_NO_NONE : src_if.begin_iport, &addr)) {
+            if (has_vlan) {
+                ICLI_PRINTF("%% Error: Specified VLAN interface has no IP address\n");
+            } else {
+                ICLI_PRINTF("%% Error: Unable to get IP address for specified interface\n");
+            }
+
+            return ICLI_RC_ERROR;
+        }
+
+        if (!has_vlan) {
+            (void)icli_ipv6_to_str(addr.address, src_addr_str);
+        }
+    }
+
+    if (has_quiet) {
+        verbose = FALSE;
+    }
+
+    if (!has_vlan) {
+        vlan_id = 0;
+    }
+
+    if (has_saddr && has_vlan) {
+        if (!vtss_ipv6_addr_is_link_local(&src_addr)) {
+            ICLI_PRINTF("%% Error: Only link-local addresses can be scoped with source interface\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    /*
+     *  Set CLI line mode to flood, but save current mode
+     */
+    irc = ICLI_LINE_MODE_GET(&line_mode);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Error: Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    irc = ICLI_LINE_MODE_SET(ICLI_LINE_MODE_FLOOD);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Error: Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    // Call the ping function
+    (void)ping6_test(icli_session_self_printf, dest_host, src_addr_str, vlan_id, pktcnt, 0, pktlen, pldata, verbose, FALSE);
+
+    // Restore saved line mode
+    (void)ICLI_LINE_MODE_SET(line_mode);
+
+    return ICLI_RC_OK;
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = VTSS_SW_OPTION_IP_MISC
+COMMAND = traceroute ipv6 { <domain_name> | <ipv6_addr> } [ dscp <0-255> ] [ timeout <1-86400> ] [ saddr <ipv6_addr> ] [ sif { <port_type_id> | vlan <vlan_id> } ] [ probes <1-60> ] [ maxttl <1-255> ] [ numeric ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! traceroute
+CMD_VAR =
+HELP = ##ICLI_HELP_TRACEROUTE
+BYWORD = <HasTraceroute : option>
+
+! ip
+CMD_VAR =
+HELP = Traceroute (IPv6)
+BYWORD = <HasIp : option>
+
+! <domain_name>
+CMD_VAR = domain_name
+HELP = Destination hostname or FQDN
+BYWORD = <hostname>
+
+! <ipv6_addr>
+CMD_VAR = ip_addr
+HELP = Destination IPv6 address
+BYWORD = <ipv6_addr>
+
+! dscp
+CMD_VAR = has_dscp
+HELP = Specify DSCP value (default 0)
+BYWORD = <HasDscp : option>
+
+! <dscp:0-255>
+CMD_VAR = dscp
+HELP = DSCP value (decimal value, default 0)
+BYWORD = <Dscp:0-255>
+
+! timeout
+CMD_VAR = has_timeout
+HELP = Specify time to wait for a response in seconds (default 3)
+BYWORD = <HasTimeout: option>
+
+! <timeout:1-86400>
+CMD_VAR = timeout
+HELP = Time to wait for a response in seconds (default 3)
+BYWORD = <Timeout:1-86400>
+
+! saddr
+CMD_VAR = has_saddr
+HELP = Send from interface with source address
+BYWORD = <HasSaddr: option>
+
+! <ipv6_addr>
+CMD_VAR = src_addr
+HELP = Source Address of interface
+BYWORD = <ipv6_addr>
+
+! sif
+CMD_VAR = has_sif
+HELP = Send from specified interface
+BYWORD = <HasSif: option>
+
+! <port_type_id>
+CMD_VAR = src_if
+HELP = Source interface
+BYWORD = <port_type_id>
+
+! vlan
+CMD_VAR = has_vlan
+HELP = Send from VLAN interface with source address
+BYWORD = <HasSaddr: option>
+
+! <vlan_id>
+CMD_VAR = vlan_id
+HELP = Source VLAN interface
+BYWORD = <vlan_id>
+
+! probes
+CMD_VAR = has_probes
+HELP = Specify number of probes per hop (default 3)
+BYWORD = <HasProbes: option>
+
+! <probes:1-60>
+CMD_VAR = probes
+HELP = Number of probes per hop (default 3)
+BYWORD = <Probes:1-60>
+
+! maxttl
+CMD_VAR = has_maxttl
+HELP = Specify max number of hops (max TTL) (default 30)
+BYWORD = <HasMaxttl: option>
+
+! <maxttl:1-255>
+CMD_VAR = maxttl
+HELP = Max number of hops (default 255)
+BYWORD = <Maxttl:1-255>
+
+! numeric
+CMD_VAR = has_numeric
+HELP = Print numeric addresses
+BYWORD = <HasNumeric>
+
+CODE_BEGIN
+    i32                 irc = 0;
+    icli_line_mode_t    line_mode;
+    char                dest_host[VTSS_APPL_SYSUTIL_DOMAIN_NAME_LEN];
+    char                src_addr_str[VTSS_APPL_SYSUTIL_HOSTNAME_LEN];
+
+    memset(dest_host, 0x0, sizeof(dest_host));
+    memset(src_addr_str, 0x0, sizeof(src_addr_str));
+
+    if (domain_name && strlen(domain_name)) {
+        strncpy(dest_host, domain_name, strlen(domain_name));
+    } else if (!vtss_ipv6_addr_is_zero(&ip_addr)) {
+        (void)icli_ipv6_to_str(ip_addr, dest_host);
+    } else {
+        ICLI_PRINTF("%% Error: Invalid destination address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_saddr) {
+        (void)icli_ipv6_to_str(src_addr, src_addr_str);
+    }
+
+    if (has_sif) {
+        mesa_ipv6_network_t addr;
+
+        // Get the IP address for the specified IP VLAN interface or the
+        // specified physical interface.
+        if (!IPV6_ICLI_ip_by_vlan_or_port(has_vlan ? vlan_id : 0, has_vlan ? VTSS_PORT_NO_NONE : src_if.begin_iport, &addr)) {
+            if (has_vlan) {
+                ICLI_PRINTF("%% Error: Specified VLAN interface has no IP address\n");
+            } else {
+                ICLI_PRINTF("%% Error: Unable to get IP address for specified interface\n");
+            }
+
+            return ICLI_RC_ERROR;
+        }
+
+        if (!has_vlan) {
+            (void)icli_ipv6_to_str(addr.address, src_addr_str);
+        }
+    }
+
+    if (!has_vlan) {
+        vlan_id = 0;
+    }
+
+    if (has_saddr && has_vlan) {
+        if (!vtss_ipv6_addr_is_link_local(&src_addr)) {
+            ICLI_PRINTF("%% Error: Only link-local addresses can be scoped with source interface\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    /*
+     *  Set CLI line mode to flood, but save current mode
+     */
+    irc = ICLI_LINE_MODE_GET(&line_mode);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    irc = ICLI_LINE_MODE_SET(ICLI_LINE_MODE_FLOOD);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    // Call the ping function
+    (void)traceroute6_test(icli_session_self_printf, dest_host, src_addr_str,
+                            vlan_id,
+                            has_dscp ? dscp : -1,
+                            has_timeout ? timeout : -1,
+                            has_probes ? probes : -1,
+                            has_maxttl ? maxttl : -1,
+                            has_numeric);
+
+    // Restore saved line mode
+    (void)ICLI_LINE_MODE_SET(line_mode);
+
+    return ICLI_RC_OK;
+
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = clear ipv6 statistics
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_CLEAR
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_STATISTICS
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    ICLI_RC(ip_icli_stats_clear(&req));
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = show ipv6 statistics [ system ] [ interface vlan <vlan_list> ]
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: show
+CMD_VAR =
+RUNTIME =
+HELP = ##ICLI_HELP_SHOW
+BYWORD =
+
+! 2: ipv6
+CMD_VAR =
+RUNTIME =
+HELP = ##ICLI_HELP_IPV6
+BYWORD =
+
+! 3: statistics
+CMD_VAR =
+RUNTIME =
+HELP = ##ICLI_HELP_STATISTICS
+BYWORD =
+
+! 4: system
+CMD_VAR = has_system
+RUNTIME =
+HELP = IPv6 system traffic
+BYWORD = system : Option
+
+! 5: interface
+CMD_VAR =
+RUNTIME =
+HELP = ##ICLI_HELP_INTERFACE
+BYWORD = interface : Option
+
+! 6: vlan
+CMD_VAR =
+RUNTIME =
+HELP = IPv6 interface traffic
+BYWORD =
+
+! 7: <vlan_list>
+CMD_VAR = vlan_list
+RUNTIME =
+HELP = VLAN identifier (VID)
+BYWORD =
+
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    req.system = has_system;
+    req.vid_list = vlan_list;
+    ICLI_RC(ip_icli_stats_show(&req));
+}
+CODE_END
+CMD_END
+

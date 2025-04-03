@@ -1,0 +1,1157 @@
+-- *****************************************************************
+-- PSEC-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-PSEC-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    MacAddress FROM SNMPv2-TC
+    TruthValue FROM SNMPv2-TC
+    VTSSDisplayString FROM VTSS-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSPsecUserBitmaskType FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    VTSSVlan FROM VTSS-TC
+    VTSSVlanOrZero FROM VTSS-TC
+    ;
+
+vtssPsecMib MODULE-IDENTITY
+    LAST-UPDATED "201801260000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "Private MIB for Port Security"
+    REVISION    "201801260000Z"
+    DESCRIPTION
+        "Added support for static and sticky MACs"
+    REVISION    "201610240000Z"
+    DESCRIPTION
+        "Restructured entire MIB in a non-backward-compatible way"
+    REVISION    "201606020000Z"
+    DESCRIPTION
+        "Support SNMP trap"
+    REVISION    "201412100000Z"
+    DESCRIPTION
+        "Remove user of DHCP snooping"
+    REVISION    "201412080000Z"
+    DESCRIPTION
+        "Add users in status port table"
+    REVISION    "201410130000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 66 }
+
+
+VTSSPsecMacType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The MAC type determines how the entry is learned."
+    SYNTAX      INTEGER { dynamic(0), static(1), sticky(2) }
+
+VTSSPsecViolationMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The violation mode determines what should happen when a limit is
+         exceeded."
+    SYNTAX      INTEGER { protect(0), restrict(1), shutdown(2) }
+
+vtssPsecMibObjects OBJECT IDENTIFIER
+    ::= { vtssPsecMib 1 }
+
+vtssPsecCapabilities OBJECT IDENTIFIER
+    ::= { vtssPsecMibObjects 1 }
+
+vtssPsecCapabilitiesUsers OBJECT-TYPE
+    SYNTAX      VTSSPsecUserBitmaskType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "A bitmask indicating the internal modules (a.k.a. users) included in
+         this flavor of the application."
+    ::= { vtssPsecCapabilities 1 }
+
+vtssPsecCapabilitiesPoolSize OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Total number of Port Security-controlled <VLAN, MAC> entries."
+    ::= { vtssPsecCapabilities 2 }
+
+vtssPsecCapabilitiesLimitMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum limit on number of <VLAN, MAC> entries a given interface
+         can be configured to."
+    ::= { vtssPsecCapabilities 3 }
+
+vtssPsecCapabilitiesLimitMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum limit on number of <VLAN, MAC> entries a given interface
+         can be configured to."
+    ::= { vtssPsecCapabilities 4 }
+
+vtssPsecCapabilitiesViolateLimitMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum number of violating <VLAN, MAC> entries a given interface
+         can be configured to."
+    ::= { vtssPsecCapabilities 5 }
+
+vtssPsecCapabilitiesViolateLimitMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum number of violating <VLAN, MAC> entries a given interface
+         can be configured to."
+    ::= { vtssPsecCapabilities 6 }
+
+vtssPsecCapabilitiesAgeTimeMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum allowed age time value."
+    ::= { vtssPsecCapabilities 7 }
+
+vtssPsecCapabilitiesAgeTimeMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum allowed age time value."
+    ::= { vtssPsecCapabilities 8 }
+
+vtssPsecCapabilitiesHoldTimeMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The minimum allowed hold time value."
+    ::= { vtssPsecCapabilities 9 }
+
+vtssPsecCapabilitiesHoldTimeMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The maximum allowed hold time value."
+    ::= { vtssPsecCapabilities 10 }
+
+vtssPsecConfig OBJECT IDENTIFIER
+    ::= { vtssPsecMibObjects 2 }
+
+vtssPsecConfigGlobals OBJECT IDENTIFIER
+    ::= { vtssPsecConfig 1 }
+
+vtssPsecConfigGlobalsMain OBJECT IDENTIFIER
+    ::= { vtssPsecConfigGlobals 1 }
+
+vtssPsecConfigGlobalsMainEnableAging OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When TRUE, learned, forwarding entries are subject to aging - FALSE if
+         not."
+    ::= { vtssPsecConfigGlobalsMain 1 }
+
+vtssPsecConfigGlobalsMainAgingPeriodSecs OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "If aging is enabled (with enableAging), this is the aging period in
+         seconds. Valid range is defined by capabilities' ageTimeMin and
+         ageTimeMax members."
+    ::= { vtssPsecConfigGlobalsMain 2 }
+
+vtssPsecConfigGlobalsMainHoldTimeSecs OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Denies entries are held in a blocking state for this amount of time,
+         measured in seconds. Valid range is defined by capabilities'
+         holdTimeMin and holdTimeMax members."
+    ::= { vtssPsecConfigGlobalsMain 3 }
+
+vtssPsecConfigInterfaces OBJECT IDENTIFIER
+    ::= { vtssPsecConfig 2 }
+
+vtssPsecConfigInterfacesTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPsecConfigInterfacesEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Table of per-interface configuration."
+    ::= { vtssPsecConfigInterfaces 1 }
+
+vtssPsecConfigInterfacesEntry OBJECT-TYPE
+    SYNTAX      VTSSPsecConfigInterfacesEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the port-security configuration for one interface."
+    INDEX       { vtssPsecConfigInterfacesIfIndex }
+    ::= { vtssPsecConfigInterfacesTable 1 }
+
+VTSSPsecConfigInterfacesEntry ::= SEQUENCE {
+    vtssPsecConfigInterfacesIfIndex        VTSSInterfaceIndex,
+    vtssPsecConfigInterfacesEnabled        TruthValue,
+    vtssPsecConfigInterfacesLimit          Unsigned32,
+    vtssPsecConfigInterfacesViolateLimit   Unsigned32,
+    vtssPsecConfigInterfacesViolationMode  VTSSPsecViolationMode,
+    vtssPsecConfigInterfacesSticky         TruthValue
+}
+
+vtssPsecConfigInterfacesIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface index."
+    ::= { vtssPsecConfigInterfacesEntry 1 }
+
+vtssPsecConfigInterfacesEnabled OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether port-security is enabled for this interface. "
+    ::= { vtssPsecConfigInterfacesEntry 2 }
+
+vtssPsecConfigInterfacesLimit OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of MAC addresses allowed on this interface. Valid range
+         is given by capabilities' limitMin and limitMax members."
+    ::= { vtssPsecConfigInterfacesEntry 3 }
+
+vtssPsecConfigInterfacesViolateLimit OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of violating MAC addresses allowed on this interface.
+         This is only used when violationMode is 'restrict'. Valid range is
+         given by capabilities' violateLimitMin and violateLimitMax members."
+    ::= { vtssPsecConfigInterfacesEntry 4 }
+
+vtssPsecConfigInterfacesViolationMode OBJECT-TYPE
+    SYNTAX      VTSSPsecViolationMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action to take if number of MAC addresses exceeds the limit. protect(0)
+         Do nothing, except disallowing further clients. restrict(1) Keep
+         recording the violating MAC addresses, which are kept until
+         holdTimeSecs expires. shutdown(2) Shut-down the interface."
+    ::= { vtssPsecConfigInterfacesEntry 5 }
+
+vtssPsecConfigInterfacesSticky OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to automatically convert dynamic entries to sticky, which
+         will survive link changes."
+    ::= { vtssPsecConfigInterfacesEntry 6 }
+
+vtssPsecConfigInterfacesMacTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPsecConfigInterfacesMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Table of static and sticky MAC addresses to be applied to MAC table
+         (forwarding database)"
+    ::= { vtssPsecConfigInterfaces 2 }
+
+vtssPsecConfigInterfacesMacEntry OBJECT-TYPE
+    SYNTAX      VTSSPsecConfigInterfacesMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the configurating for one MAC address"
+    INDEX       { vtssPsecConfigInterfacesMacIfIndex,
+                  vtssPsecConfigInterfacesMacVlanId,
+                  vtssPsecConfigInterfacesMacMacAddress }
+    ::= { vtssPsecConfigInterfacesMacTable 1 }
+
+VTSSPsecConfigInterfacesMacEntry ::= SEQUENCE {
+    vtssPsecConfigInterfacesMacIfIndex     VTSSInterfaceIndex,
+    vtssPsecConfigInterfacesMacVlanId      VTSSVlan,
+    vtssPsecConfigInterfacesMacMacAddress  MacAddress,
+    vtssPsecConfigInterfacesMacMacType     VTSSPsecMacType,
+    vtssPsecConfigInterfacesMacAction      VTSSRowEditorState
+}
+
+vtssPsecConfigInterfacesMacIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface index."
+    ::= { vtssPsecConfigInterfacesMacEntry 1 }
+
+vtssPsecConfigInterfacesMacVlanId OBJECT-TYPE
+    SYNTAX      VTSSVlan
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "VLAN ID used for indexing."
+    ::= { vtssPsecConfigInterfacesMacEntry 2 }
+
+vtssPsecConfigInterfacesMacMacAddress OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The MAC address for which this entry applies."
+    ::= { vtssPsecConfigInterfacesMacEntry 3 }
+
+vtssPsecConfigInterfacesMacMacType OBJECT-TYPE
+    SYNTAX      VTSSPsecMacType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates how to add entry. dynamic(0) It is strongly recommended not
+         to use this interface to add dynamic entries. static(1) Add statically
+         to MAC table (forwarding database). sticky(2) Like dynamic, but kept
+         across link-changes. It is strongly recommended not to use this
+         interface to add sticky entries."
+    ::= { vtssPsecConfigInterfacesMacEntry 4 }
+
+vtssPsecConfigInterfacesMacAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssPsecConfigInterfacesMacEntry 1000 }
+
+vtssPsecConfigInterfacesMacTableRowEditor OBJECT IDENTIFIER
+    ::= { vtssPsecConfigInterfaces 3 }
+
+vtssPsecConfigInterfacesMacTableRowEditorIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Logical interface index."
+    ::= { vtssPsecConfigInterfacesMacTableRowEditor 1 }
+
+vtssPsecConfigInterfacesMacTableRowEditorVlanId OBJECT-TYPE
+    SYNTAX      VTSSVlan
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "VLAN ID used for indexing."
+    ::= { vtssPsecConfigInterfacesMacTableRowEditor 2 }
+
+vtssPsecConfigInterfacesMacTableRowEditorMacAddress OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The MAC address for which this entry applies."
+    ::= { vtssPsecConfigInterfacesMacTableRowEditor 3 }
+
+vtssPsecConfigInterfacesMacTableRowEditorMacType OBJECT-TYPE
+    SYNTAX      VTSSPsecMacType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates how to add entry. dynamic(0) It is strongly recommended not
+         to use this interface to add dynamic entries. static(1) Add statically
+         to MAC table (forwarding database). sticky(2) Like dynamic, but kept
+         across link-changes. It is strongly recommended not to use this
+         interface to add sticky entries."
+    ::= { vtssPsecConfigInterfacesMacTableRowEditor 4 }
+
+vtssPsecConfigInterfacesMacTableRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssPsecConfigInterfacesMacTableRowEditor 1000 }
+
+vtssPsecStatus OBJECT IDENTIFIER
+    ::= { vtssPsecMibObjects 3 }
+
+vtssPsecStatusGlobals OBJECT IDENTIFIER
+    ::= { vtssPsecStatus 1 }
+
+vtssPsecStatusGlobalsMain OBJECT IDENTIFIER
+    ::= { vtssPsecStatusGlobals 1 }
+
+vtssPsecStatusGlobalsMainTotalMacCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Total number of MAC addresses in the system managed by Port Security."
+    ::= { vtssPsecStatusGlobalsMain 1 }
+
+vtssPsecStatusGlobalsMainCurMacCnt OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of currently unused MAC addresses in the system managed by Port
+         Security. The number of used MAC addresses can then be found by
+         subtracting curMacCnt from totalMacCnt."
+    ::= { vtssPsecStatusGlobalsMain 2 }
+
+vtssPsecStatusGlobalsNotification OBJECT IDENTIFIER
+    ::= { vtssPsecStatusGlobals 2 }
+
+vtssPsecStatusGlobalsNotificationPoolDepleted OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if Port Security has run out of free <VLAN, MAC>-entries, FALSE if
+         at least one is yet free."
+    ::= { vtssPsecStatusGlobalsNotification 1 }
+
+vtssPsecStatusInterfaces OBJECT IDENTIFIER
+    ::= { vtssPsecStatus 2 }
+
+vtssPsecStatusInterfacesTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPsecStatusInterfacesEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Table of per-interface status."
+    ::= { vtssPsecStatusInterfaces 1 }
+
+vtssPsecStatusInterfacesEntry OBJECT-TYPE
+    SYNTAX      VTSSPsecStatusInterfacesEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the port-security status for one interface."
+    INDEX       { vtssPsecStatusInterfacesIfIndex }
+    ::= { vtssPsecStatusInterfacesTable 1 }
+
+VTSSPsecStatusInterfacesEntry ::= SEQUENCE {
+    vtssPsecStatusInterfacesIfIndex        VTSSInterfaceIndex,
+    vtssPsecStatusInterfacesUsers          VTSSPsecUserBitmaskType,
+    vtssPsecStatusInterfacesMacCount       Unsigned32,
+    vtssPsecStatusInterfacesViolateCount   Unsigned32,
+    vtssPsecStatusInterfacesLimitReached   TruthValue,
+    vtssPsecStatusInterfacesSecLearning    TruthValue,
+    vtssPsecStatusInterfacesCpuCopying     TruthValue,
+    vtssPsecStatusInterfacesLinkIsUp       TruthValue,
+    vtssPsecStatusInterfacesStpDiscarding  TruthValue,
+    vtssPsecStatusInterfacesHwAddFailed    TruthValue,
+    vtssPsecStatusInterfacesSwAddFailed    TruthValue,
+    vtssPsecStatusInterfacesSticky         TruthValue
+}
+
+vtssPsecStatusInterfacesIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface index."
+    ::= { vtssPsecStatusInterfacesEntry 1 }
+
+vtssPsecStatusInterfacesUsers OBJECT-TYPE
+    SYNTAX      VTSSPsecUserBitmaskType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Bitmask indicating the port-security users that are currently enabled
+         on this interface."
+    ::= { vtssPsecStatusInterfacesEntry 2 }
+
+vtssPsecStatusInterfacesMacCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of MAC addresses currently assigned to this interface. This
+         includes violateCount."
+    ::= { vtssPsecStatusInterfacesEntry 3 }
+
+vtssPsecStatusInterfacesViolateCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Current number of violating MAC addresses. Only counts when
+         violationMode is 'restrict'. This keeps track of the current number of
+         violating MAC addresses in the MAC table. These MAC addresses time out
+         (according to holdTimeSecs)"
+    ::= { vtssPsecStatusInterfacesEntry 4 }
+
+vtssPsecStatusInterfacesLimitReached OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if the limit is reached on the interface, FALSE otherwise."
+    ::= { vtssPsecStatusInterfacesEntry 5 }
+
+vtssPsecStatusInterfacesSecLearning OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if secure learning is enabled on the interface, FALSE otherwise.
+         Mainly for debugging."
+    ::= { vtssPsecStatusInterfacesEntry 6 }
+
+vtssPsecStatusInterfacesCpuCopying OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if CPU copying is enabled on the interface, FALSE otherwise.
+         Mainly for debugging."
+    ::= { vtssPsecStatusInterfacesEntry 7 }
+
+vtssPsecStatusInterfacesLinkIsUp OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if interface link is up, FALSE otherwise. Mainly for debugging."
+    ::= { vtssPsecStatusInterfacesEntry 8 }
+
+vtssPsecStatusInterfacesStpDiscarding OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if at least one STP MSTI instance is discarding on the interface,
+         FALSE otherwise. Mainly for debugging."
+    ::= { vtssPsecStatusInterfacesEntry 9 }
+
+vtssPsecStatusInterfacesHwAddFailed OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if H/W add of a MAC address failed on this interface, FALSE
+         otherwise. Mainly for debugging."
+    ::= { vtssPsecStatusInterfacesEntry 10 }
+
+vtssPsecStatusInterfacesSwAddFailed OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if S/W add of a MAC address failed on this interface, FALSE
+         otherwise. Mainly for debugging."
+    ::= { vtssPsecStatusInterfacesEntry 11 }
+
+vtssPsecStatusInterfacesSticky OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if interface is configured as sticky, that is, learned MAC
+         addresses will survive link changes."
+    ::= { vtssPsecStatusInterfacesEntry 12 }
+
+vtssPsecStatusInterfacesNotificationTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPsecStatusInterfacesNotificationEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Table of per-interface notification status."
+    ::= { vtssPsecStatusInterfaces 2 }
+
+vtssPsecStatusInterfacesNotificationEntry OBJECT-TYPE
+    SYNTAX      VTSSPsecStatusInterfacesNotificationEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the port-security notification status for one
+         interface."
+    INDEX       { vtssPsecStatusInterfacesNotificationIfIndex }
+    ::= { vtssPsecStatusInterfacesNotificationTable 1 }
+
+VTSSPsecStatusInterfacesNotificationEntry ::= SEQUENCE {
+    vtssPsecStatusInterfacesNotificationIfIndex              VTSSInterfaceIndex,
+    vtssPsecStatusInterfacesNotificationTotalViolateCount    Unsigned32,
+    vtssPsecStatusInterfacesNotificationShutDown             TruthValue,
+    vtssPsecStatusInterfacesNotificationLatestViolatingVlan  VTSSVlanOrZero,
+    vtssPsecStatusInterfacesNotificationLatestViolatingMac   MacAddress
+}
+
+vtssPsecStatusInterfacesNotificationIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface index."
+    ::= { vtssPsecStatusInterfacesNotificationEntry 1 }
+
+vtssPsecStatusInterfacesNotificationTotalViolateCount OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Total number of violating MAC addresses. Only counts when violationMode
+         is 'restrict'. This keeps on counting up, whereas violateCount counts
+         the actual number of violating MAC addresses"
+    ::= { vtssPsecStatusInterfacesNotificationEntry 2 }
+
+vtssPsecStatusInterfacesNotificationShutDown OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if the interface is shut down as a result of a violation when
+         violationMode is 'shutdown', FALSE otherwise. Do a 'shutdown/no
+         shutdown' or a port-security configuration change on the interface to
+         re-open it."
+    ::= { vtssPsecStatusInterfacesNotificationEntry 3 }
+
+vtssPsecStatusInterfacesNotificationLatestViolatingVlan OBJECT-TYPE
+    SYNTAX      VTSSVlanOrZero
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Holds the VLAN ID of the latest violating host. Used when violationMode
+         is 'restrict' or 'shutdown'. This field and latestViolatingMac are only
+         valid if this field is non-zero"
+    ::= { vtssPsecStatusInterfacesNotificationEntry 4 }
+
+vtssPsecStatusInterfacesNotificationLatestViolatingMac OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Holds the MAC address of the latest violating host. Used when
+         violationMode is 'restrict' or 'shutdown'."
+    ::= { vtssPsecStatusInterfacesNotificationEntry 5 }
+
+vtssPsecStatusInterfacesMacTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSPsecStatusInterfacesMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Table of port-security controlled entries in the MAC table (forwarding
+         database)"
+    ::= { vtssPsecStatusInterfaces 3 }
+
+vtssPsecStatusInterfacesMacEntry OBJECT-TYPE
+    SYNTAX      VTSSPsecStatusInterfacesMacEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each row contains the status for one MAC address"
+    INDEX       { vtssPsecStatusInterfacesMacIfIndex,
+                  vtssPsecStatusInterfacesMacVlanId,
+                  vtssPsecStatusInterfacesMacMacAddress }
+    ::= { vtssPsecStatusInterfacesMacTable 1 }
+
+VTSSPsecStatusInterfacesMacEntry ::= SEQUENCE {
+    vtssPsecStatusInterfacesMacIfIndex           VTSSInterfaceIndex,
+    vtssPsecStatusInterfacesMacVlanId            VTSSVlan,
+    vtssPsecStatusInterfacesMacMacAddress        MacAddress,
+    vtssPsecStatusInterfacesMacPort              VTSSInterfaceIndex,
+    vtssPsecStatusInterfacesMacCreationTime      VTSSDisplayString,
+    vtssPsecStatusInterfacesMacChangedTime       VTSSDisplayString,
+    vtssPsecStatusInterfacesMacAgeHoldTime       Unsigned32,
+    vtssPsecStatusInterfacesMacViolating         VTSSUnsigned8,
+    vtssPsecStatusInterfacesMacBlocked           VTSSUnsigned8,
+    vtssPsecStatusInterfacesMacKeptBlocked       VTSSUnsigned8,
+    vtssPsecStatusInterfacesMacCpuCopying        VTSSUnsigned8,
+    vtssPsecStatusInterfacesMacAgeFrameSeen      VTSSUnsigned8,
+    vtssPsecStatusInterfacesMacUsersForward      VTSSPsecUserBitmaskType,
+    vtssPsecStatusInterfacesMacUsersBlock        VTSSPsecUserBitmaskType,
+    vtssPsecStatusInterfacesMacUsersKeepBlocked  VTSSPsecUserBitmaskType,
+    vtssPsecStatusInterfacesMacMacType           VTSSPsecMacType
+}
+
+vtssPsecStatusInterfacesMacIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface index."
+    ::= { vtssPsecStatusInterfacesMacEntry 1 }
+
+vtssPsecStatusInterfacesMacVlanId OBJECT-TYPE
+    SYNTAX      VTSSVlan
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "VLAN ID used for indexing."
+    ::= { vtssPsecStatusInterfacesMacEntry 2 }
+
+vtssPsecStatusInterfacesMacMacAddress OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The MAC address for which this entry applies."
+    ::= { vtssPsecStatusInterfacesMacEntry 3 }
+
+vtssPsecStatusInterfacesMacPort OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port on which this MAC address is learned."
+    ::= { vtssPsecStatusInterfacesMacEntry 4 }
+
+vtssPsecStatusInterfacesMacCreationTime OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..24))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "MAC address was originally added at this time."
+    ::= { vtssPsecStatusInterfacesMacEntry 5 }
+
+vtssPsecStatusInterfacesMacChangedTime OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..24))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "MAC address was last changed at this time (due to e.g. aging)."
+    ::= { vtssPsecStatusInterfacesMacEntry 6 }
+
+vtssPsecStatusInterfacesMacAgeHoldTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Down-counter indicating time left of aging period or hold time measured
+         in seconds. 0 means that aging is disabled."
+    ::= { vtssPsecStatusInterfacesMacEntry 7 }
+
+vtssPsecStatusInterfacesMacViolating OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if this MAC address is violating the limit and therefore is
+         blocked. This can only be set when violationMode is set to 'restrict'.
+         Non-violating MAC addresses may be blocked or kept blocked if other
+         user modules are enabled on this interface. MAC addresses may be
+         blocked for other reasons."
+    ::= { vtssPsecStatusInterfacesMacEntry 8 }
+
+vtssPsecStatusInterfacesMacBlocked OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if this MAC address is blocked from forwarding. Such MAC addresses
+         are subject to hold-time timeout."
+    ::= { vtssPsecStatusInterfacesMacEntry 9 }
+
+vtssPsecStatusInterfacesMacKeptBlocked OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if this MAC address is kept blocked from forwarding. Only internal
+         user modules can set a MAC address to be kept blocking until further
+         notice. MAC addresses in this state are not subject to hold-time
+         expiration."
+    ::= { vtssPsecStatusInterfacesMacEntry 10 }
+
+vtssPsecStatusInterfacesMacCpuCopying OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if CPU copying is enabled for this MAC address due to aging.
+         Mainly used for debugging."
+    ::= { vtssPsecStatusInterfacesMacEntry 11 }
+
+vtssPsecStatusInterfacesMacAgeFrameSeen OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "TRUE if an age frame was seen during aging of this MAC address. Mainly
+         used for debugging."
+    ::= { vtssPsecStatusInterfacesMacEntry 12 }
+
+vtssPsecStatusInterfacesMacUsersForward OBJECT-TYPE
+    SYNTAX      VTSSPsecUserBitmaskType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Bitmask indicating the user modules that have marked this MAC address
+         as forwarding."
+    ::= { vtssPsecStatusInterfacesMacEntry 13 }
+
+vtssPsecStatusInterfacesMacUsersBlock OBJECT-TYPE
+    SYNTAX      VTSSPsecUserBitmaskType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Bitmask indicating the user modules that have marked this MAC address
+         as blocking (wins over forward)."
+    ::= { vtssPsecStatusInterfacesMacEntry 14 }
+
+vtssPsecStatusInterfacesMacUsersKeepBlocked OBJECT-TYPE
+    SYNTAX      VTSSPsecUserBitmaskType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Bitmask indicating the user modules that wish this MAC address to be
+         kept blocked (wins over block)."
+    ::= { vtssPsecStatusInterfacesMacEntry 15 }
+
+vtssPsecStatusInterfacesMacMacType OBJECT-TYPE
+    SYNTAX      VTSSPsecMacType
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates how entry is learned. dynamic(0) Learned when packets are
+         received on the secure port. static(1) Configured by the user.
+         sticky(2) Learned like dynamic addresses, but persist through switch
+         reboots and link changes."
+    ::= { vtssPsecStatusInterfacesMacEntry 16 }
+
+vtssPsecControl OBJECT IDENTIFIER
+    ::= { vtssPsecMibObjects 4 }
+
+vtssPsecControlGlobals OBJECT IDENTIFIER
+    ::= { vtssPsecControl 1 }
+
+vtssPsecControlGlobalsMacClear OBJECT IDENTIFIER
+    ::= { vtssPsecControlGlobals 1 }
+
+vtssPsecControlGlobalsMacClearSpecificIfindex OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When TRUE, this structure's ifindex field is searched for matching MAC
+         addresses to remove. When FALSE, all ports are searched for MAC
+         addresses to remove."
+    ::= { vtssPsecControlGlobalsMacClear 1 }
+
+vtssPsecControlGlobalsMacClearIfindex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When specificIfindex is TRUE, this member holds the interface (must be
+         of type port) on which to search for MAC addresses to remove."
+    ::= { vtssPsecControlGlobalsMacClear 2 }
+
+vtssPsecControlGlobalsMacClearSpecificVlan OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When TRUE, this structure's vlanId field is searched for MAC addresses
+         to remove. When FALSE, all VLANs are searched for MAC addresses to
+         remove."
+    ::= { vtssPsecControlGlobalsMacClear 3 }
+
+vtssPsecControlGlobalsMacClearVlanId OBJECT-TYPE
+    SYNTAX      VTSSVlanOrZero
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When specificVlan is TRUE, this member holds the VLAN ID on which to
+         search for MAC addresses to remove."
+    ::= { vtssPsecControlGlobalsMacClear 4 }
+
+vtssPsecControlGlobalsMacClearSpecificMac OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When TRUE, this structure's macAddress field holds the MAC address to
+         remove. When FALSE, all MAC addresses are searched for MAC addresses to
+         remove."
+    ::= { vtssPsecControlGlobalsMacClear 5 }
+
+vtssPsecControlGlobalsMacClearMacAddress OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "When specificMac is TRUE, this member holds the MAC address to remove."
+    ::= { vtssPsecControlGlobalsMacClear 6 }
+
+vtssPsecControlInterfaces OBJECT IDENTIFIER
+    ::= { vtssPsecControl 2 }
+
+vtssPsecTrap OBJECT IDENTIFIER
+    ::= { vtssPsecMibObjects 6 }
+
+vtssPsecTrapGlobals OBJECT IDENTIFIER
+    ::= { vtssPsecTrap 1 }
+
+vtssPsecTrapGlobalsMain NOTIFICATION-TYPE
+    OBJECTS     { vtssPsecStatusGlobalsNotificationPoolDepleted }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that one or more of the objects included in the trap
+         has been updated."
+
+    ::= { vtssPsecTrapGlobals 1 }
+
+vtssPsecTrapInterfaces OBJECT IDENTIFIER
+    ::= { vtssPsecTrap 2 }
+
+vtssPsecTrapInterfacesAdd NOTIFICATION-TYPE
+    OBJECTS     { vtssPsecStatusInterfacesNotificationIfIndex,
+                  vtssPsecStatusInterfacesNotificationTotalViolateCount,
+                  vtssPsecStatusInterfacesNotificationShutDown,
+                  vtssPsecStatusInterfacesNotificationLatestViolatingVlan,
+                  vtssPsecStatusInterfacesNotificationLatestViolatingMac }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that a row has been added. The index(es) and value(s)
+         of the row is included in the trap."
+
+    ::= { vtssPsecTrapInterfaces 1 }
+
+vtssPsecTrapInterfacesMod NOTIFICATION-TYPE
+    OBJECTS     { vtssPsecStatusInterfacesNotificationIfIndex,
+                  vtssPsecStatusInterfacesNotificationTotalViolateCount,
+                  vtssPsecStatusInterfacesNotificationShutDown,
+                  vtssPsecStatusInterfacesNotificationLatestViolatingVlan,
+                  vtssPsecStatusInterfacesNotificationLatestViolatingMac }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that one or more of the objects included in the trap
+          has been updated."
+
+    ::= { vtssPsecTrapInterfaces 2 }
+
+vtssPsecTrapInterfacesDel NOTIFICATION-TYPE
+    OBJECTS     { vtssPsecStatusInterfacesNotificationIfIndex }
+    STATUS      current
+    DESCRIPTION
+        "This trap signals that a row has been deleted. The index(es) of the
+         row is included in the trap."
+
+    ::= { vtssPsecTrapInterfaces 3 }
+
+vtssPsecMibConformance OBJECT IDENTIFIER
+    ::= { vtssPsecMib 2 }
+
+vtssPsecMibCompliances OBJECT IDENTIFIER
+    ::= { vtssPsecMibConformance 1 }
+
+vtssPsecMibGroups OBJECT IDENTIFIER
+    ::= { vtssPsecMibConformance 2 }
+
+vtssPsecCapabilitiesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecCapabilitiesUsers,
+                  vtssPsecCapabilitiesPoolSize,
+                  vtssPsecCapabilitiesLimitMin,
+                  vtssPsecCapabilitiesLimitMax,
+                  vtssPsecCapabilitiesViolateLimitMin,
+                  vtssPsecCapabilitiesViolateLimitMax,
+                  vtssPsecCapabilitiesAgeTimeMin,
+                  vtssPsecCapabilitiesAgeTimeMax,
+                  vtssPsecCapabilitiesHoldTimeMin,
+                  vtssPsecCapabilitiesHoldTimeMax }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 1 }
+
+vtssPsecConfigGlobalsMainInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecConfigGlobalsMainEnableAging,
+                  vtssPsecConfigGlobalsMainAgingPeriodSecs,
+                  vtssPsecConfigGlobalsMainHoldTimeSecs }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 2 }
+
+vtssPsecConfigInterfacesTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecConfigInterfacesIfIndex,
+                  vtssPsecConfigInterfacesEnabled,
+                  vtssPsecConfigInterfacesLimit,
+                  vtssPsecConfigInterfacesViolateLimit,
+                  vtssPsecConfigInterfacesViolationMode,
+                  vtssPsecConfigInterfacesSticky }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 3 }
+
+vtssPsecConfigInterfacesMacTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecConfigInterfacesMacIfIndex,
+                  vtssPsecConfigInterfacesMacVlanId,
+                  vtssPsecConfigInterfacesMacMacAddress,
+                  vtssPsecConfigInterfacesMacMacType,
+                  vtssPsecConfigInterfacesMacAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 4 }
+
+vtssPsecConfigInterfacesMacTableRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecConfigInterfacesMacTableRowEditorIfIndex,
+                  vtssPsecConfigInterfacesMacTableRowEditorVlanId,
+                  vtssPsecConfigInterfacesMacTableRowEditorMacAddress,
+                  vtssPsecConfigInterfacesMacTableRowEditorMacType,
+                  vtssPsecConfigInterfacesMacTableRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 5 }
+
+vtssPsecStatusGlobalsMainInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecStatusGlobalsMainTotalMacCnt,
+                  vtssPsecStatusGlobalsMainCurMacCnt }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 6 }
+
+vtssPsecStatusGlobalsNotificationInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecStatusGlobalsNotificationPoolDepleted }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 7 }
+
+vtssPsecStatusInterfacesTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecStatusInterfacesIfIndex,
+                  vtssPsecStatusInterfacesUsers,
+                  vtssPsecStatusInterfacesMacCount,
+                  vtssPsecStatusInterfacesViolateCount,
+                  vtssPsecStatusInterfacesLimitReached,
+                  vtssPsecStatusInterfacesSecLearning,
+                  vtssPsecStatusInterfacesCpuCopying,
+                  vtssPsecStatusInterfacesLinkIsUp,
+                  vtssPsecStatusInterfacesStpDiscarding,
+                  vtssPsecStatusInterfacesHwAddFailed,
+                  vtssPsecStatusInterfacesSwAddFailed,
+                  vtssPsecStatusInterfacesSticky }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 8 }
+
+vtssPsecStatusInterfacesNotificationTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecStatusInterfacesNotificationIfIndex,
+                  vtssPsecStatusInterfacesNotificationTotalViolateCount,
+                  vtssPsecStatusInterfacesNotificationShutDown,
+                  vtssPsecStatusInterfacesNotificationLatestViolatingVlan,
+                  vtssPsecStatusInterfacesNotificationLatestViolatingMac }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 9 }
+
+vtssPsecStatusInterfacesMacTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecStatusInterfacesMacIfIndex,
+                  vtssPsecStatusInterfacesMacVlanId,
+                  vtssPsecStatusInterfacesMacMacAddress,
+                  vtssPsecStatusInterfacesMacPort,
+                  vtssPsecStatusInterfacesMacCreationTime,
+                  vtssPsecStatusInterfacesMacChangedTime,
+                  vtssPsecStatusInterfacesMacAgeHoldTime,
+                  vtssPsecStatusInterfacesMacViolating,
+                  vtssPsecStatusInterfacesMacBlocked,
+                  vtssPsecStatusInterfacesMacKeptBlocked,
+                  vtssPsecStatusInterfacesMacCpuCopying,
+                  vtssPsecStatusInterfacesMacAgeFrameSeen,
+                  vtssPsecStatusInterfacesMacUsersForward,
+                  vtssPsecStatusInterfacesMacUsersBlock,
+                  vtssPsecStatusInterfacesMacUsersKeepBlocked,
+                  vtssPsecStatusInterfacesMacMacType }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 10 }
+
+vtssPsecControlGlobalsMacClearInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssPsecControlGlobalsMacClearSpecificIfindex,
+                  vtssPsecControlGlobalsMacClearIfindex,
+                  vtssPsecControlGlobalsMacClearSpecificVlan,
+                  vtssPsecControlGlobalsMacClearVlanId,
+                  vtssPsecControlGlobalsMacClearSpecificMac,
+                  vtssPsecControlGlobalsMacClearMacAddress }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssPsecMibGroups 11 }
+
+vtssPsecTrapGlobalsMainInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssPsecTrapGlobalsMain }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssPsecMibGroups 12 }
+
+vtssPsecTrapInterfacesAddInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssPsecTrapInterfacesAdd }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssPsecMibGroups 13 }
+
+vtssPsecTrapInterfacesModInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssPsecTrapInterfacesMod }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssPsecMibGroups 14 }
+
+vtssPsecTrapInterfacesDelInfoGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { vtssPsecTrapInterfacesDel }
+    STATUS      current
+    DESCRIPTION
+        "Information group containing a trap."
+    ::= { vtssPsecMibGroups 15 }
+
+vtssPsecMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssPsecCapabilitiesInfoGroup,
+                       vtssPsecConfigGlobalsMainInfoGroup,
+                       vtssPsecConfigInterfacesTableInfoGroup,
+                       vtssPsecConfigInterfacesMacTableInfoGroup,
+                       vtssPsecConfigInterfacesMacTableRowEditorInfoGroup,
+                       vtssPsecStatusGlobalsMainInfoGroup,
+                       vtssPsecStatusGlobalsNotificationInfoGroup,
+                       vtssPsecStatusInterfacesTableInfoGroup,
+                       vtssPsecStatusInterfacesNotificationTableInfoGroup,
+                       vtssPsecStatusInterfacesMacTableInfoGroup,
+                       vtssPsecControlGlobalsMacClearInfoGroup,
+                       vtssPsecTrapGlobalsMainInfoGroup,
+                       vtssPsecTrapInterfacesAddInfoGroup,
+                       vtssPsecTrapInterfacesModInfoGroup,
+                       vtssPsecTrapInterfacesDelInfoGroup }
+
+    ::= { vtssPsecMibCompliances 1 }
+
+END

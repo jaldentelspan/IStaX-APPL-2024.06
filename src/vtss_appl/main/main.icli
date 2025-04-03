@@ -1,0 +1,1133 @@
+#
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "board_misc.h"
+#include "board_if.h" /* For vtss_board_name/type() */
+#include "conf_api.h"
+#include "misc_api.h"
+#include "icli_porting_util.h"
+#include <stdlib.h>
+#include <vtss/basics/notifications/process-cmd-pty.hxx>
+
+#include "control_api.h"
+#include "vtss/appl/module_id.h"
+
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_MAIN
+
+#if defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+#include "os_file_api.h"
+#if defined(CYGPKG_DEVS_DISK_MMC) && defined(CYGPKG_FS_FAT) && !defined(_lint)
+#include <cyg/fileio/fileio.h>
+#endif
+
+#include <unistd.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif // defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+#include "cli_io_api.h"
+INCLUDE_END
+
+FUNCTION_BEGIN
+#if defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+
+static void _cmd_file_ls(
+    IN u32         session_id,
+    IN const char* path
+)
+{
+    const char *name = (path ? path : ".");
+    int        err;
+    DIR        *dirp;
+
+    ICLI_PRINTF("Reading directory %s\n",name);
+
+    dirp = opendir( name );
+    if(dirp == NULL) {
+        ICLI_PRINTF("opendir: %s\n", strerror(errno));
+        return;
+    }
+
+    for(;;) {
+        struct dirent *entry = readdir( dirp );
+        char fullname[PATH_MAX];
+        struct stat sbuf;
+
+        if( entry == NULL )
+            break;
+
+        if (name[0]) {
+            strcpy(fullname, name );
+            if (!(name[0] == '/' && name[1] == 0 ))
+                strcat(fullname, "/" );
+        } else {
+            fullname[0] = 0;
+        }
+        strcat(fullname, entry->d_name );
+        err = stat( fullname, &sbuf );
+        if( err < 0 ) {
+            if( errno == ENOSYS )
+                ICLI_PRINTF("%s: <no status available>\n", fullname);
+            else {
+                ICLI_PRINTF("%s: stat: %s\n", fullname, strerror(errno));
+            }
+        } else {
+            ICLI_PRINTF("%14s [mode %08x ino %08x nlink %d mtime %s size %ld]\n",
+                    entry->d_name,
+                    sbuf.st_mode, sbuf.st_ino, sbuf.st_nlink, misc_time2str(sbuf.st_mtime),
+                    (unsigned long) sbuf.st_size);
+        }
+    }
+
+    err = closedir( dirp );
+    if( err < 0 ) {
+        ICLI_PRINTF("closedir: %s\n", strerror(errno));
+    }
+}
+
+#define IOSIZE  1024
+static void _cmd_file_create(
+    IN u32      session_id,
+    IN char     *name,
+    IN u32      size
+)
+{
+    char        buf[IOSIZE];
+    int         fd;
+    ssize_t     wrote;
+    int         i;
+    int         err;
+
+    ICLI_PRINTF("Create file %s size %zd\n", name, size);
+
+    err = access( name, F_OK );
+    if (err < 0 && errno != EACCES) {
+        ICLI_PRINTF("%s: %s\n", name, strerror(errno));
+        return;
+    }
+
+    for( i = 0; i < IOSIZE; i++ ) {
+        buf[i] = i % 256;
+    }
+
+    fd = open(name, O_WRONLY|O_CREAT|O_TRUNC);
+    if (fd < 0 ) {
+        ICLI_PRINTF("%s: %s\n", name, strerror(errno));
+        return;
+    }
+
+    while( size > 0 ) {
+        ssize_t len = size;
+        if (len > IOSIZE)
+            len = IOSIZE;
+        wrote = write( fd, buf, len );
+        if( wrote != len ) {
+            ICLI_PRINTF("%s: Requested %ld, wrote %ld\n", name, len, wrote);
+            break;
+        }
+        size -= wrote;
+    }
+
+    (void) fsync(fd);
+
+    err = close( fd );
+    if( err < 0 ) {
+        ICLI_PRINTF("%s: %s\n", name, strerror(errno));
+    }
+}
+
+static void _cmd_file_delete(
+    IN u32      session_id,
+    IN char     *name
+)
+{
+    ICLI_PRINTF("Delete file %s\n", name);
+
+    if ( unlink(name) < 0 ) {
+        ICLI_PRINTF("%s: %s\n", name, strerror(errno));
+    }
+}
+
+#endif // defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+
+static BOOL read_u32_from_file(u32 session_id, FILE *file, const char *path, const char *format, u32 *val)
+{
+    char line[200];
+
+    (void)fseek(file, 0, SEEK_SET);
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (sscanf(line, format, val) == 1) {
+            return TRUE;
+        }
+    }
+
+    ICLI_PRINTF("%% Unable to find pattern %s in %s\n", format, path);
+    return FALSE;
+}
+
+static void phys_mem_show(u32 session_id)
+{
+    FILE       *meminfo_file;
+    const char *meminfo_path = "/proc/meminfo";
+    static u32 old_memtotal, old_memavail;
+    u32        memtotal, memavail;
+
+    if ((meminfo_file = fopen(meminfo_path, "r")) == NULL) {
+        ICLI_PRINTF("%% Unable to open %s in R/O mode. Error = %s\n", meminfo_path, strerror(errno));
+        goto do_exit;
+    }
+
+    if (!read_u32_from_file(session_id, meminfo_file, meminfo_path, "MemTotal: %u", &memtotal)) {
+        goto do_exit;
+    }
+
+    // It is better to use MemAvailable than MemFree.
+    // See e.g. https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=34e431b0ae398fc54ea69ff85ec700722c9da773
+    if (!read_u32_from_file(session_id, meminfo_file, meminfo_path, "MemAvailable: %u", &memavail)) {
+        goto do_exit;
+    }
+
+#define PLUS_MINUS(_n_, _o_) ((_n_) < (_o_) ? "-" : (_n_) > (_o_) ? "+" : "")
+    ICLI_PRINTF("OS-Total = %u%s KBytes, OS-Free = %u%s KBytes\n", memtotal, PLUS_MINUS(memtotal, old_memtotal), memavail, PLUS_MINUS(memavail, old_memavail));
+#undef PLUS_MINUS
+
+    old_memtotal = memtotal;
+    old_memavail = memavail;
+
+do_exit:
+    if (meminfo_file) {
+        (void)fclose(meminfo_file);
+    }
+}
+
+static void _cmd_debug_heap(u32 session_id, vtss_module_id_t module_id, BOOL changes_only)
+{
+#if defined(VTSS_FEATURE_HEAP_WRAPPERS)
+    /*lint -esym(459,heap_usage_cur) */
+    /*lint -esym(459,heap_usage_old) */
+    /*lint -esym(459,heap_usage_new) */
+    /*lint -esym(459,old_total) */
+    /*lint -esym(459,new_total) */
+    /*lint -esym(459,heap_usage_tot_max_cur) */
+    /*lint -esym(459,heap_usage_tot_max_old) */
+    /*lint -esym(459,heap_usage_tot_max_new) */
+    extern heap_usage_t     heap_usage_cur[VTSS_MODULE_ID_NONE + 1];
+    static heap_usage_t     heap_usage_old[VTSS_MODULE_ID_NONE + 1];
+           heap_usage_t     heap_usage_new[VTSS_MODULE_ID_NONE + 1];
+    static heap_usage_t     old_total;
+           heap_usage_t     new_total;
+    extern u32              heap_usage_tot_max_cur;
+    static u32              heap_usage_tot_max_old;
+           u32              heap_usage_tot_max_new;
+    vtss_module_id_t        modid;
+
+// Required in both 32- and 64-bit version, hence a macro
+#define PLUS_MINUS(_n_, _o_) ((_n_) < (_o_) ? '-' : (_n_) > (_o_) ? '+' : ' ')
+
+    vtss_global_lock(__FILE__, __LINE__);
+    memcpy(heap_usage_new, heap_usage_cur, sizeof(heap_usage_new));
+    heap_usage_tot_max_new = heap_usage_tot_max_cur;
+    vtss_global_unlock(__FILE__, __LINE__);
+
+    memset(&new_total, 0, sizeof(new_total));
+
+    ICLI_PRINTF("Name                  ID   Current     Allocs      Frees       Alive       Max         Total\n");
+    ICLI_PRINTF("--------------------- ---- ----------- ----------- ----------- ----------- ----------- ---------------\n");
+    for (modid = 0; modid <= VTSS_MODULE_ID_NONE; modid++) {
+        heap_usage_t *m = &heap_usage_new[modid];
+
+        new_total.usage  += m->usage;
+        new_total.max    += m->max;
+        new_total.total  += m->total;
+        new_total.allocs += m->allocs;
+        new_total.frees  += m->frees;
+
+        if (module_id != VTSS_MODULE_ID_NONE && modid != module_id) {
+            continue;
+        }
+
+        if (m->usage == 0 && m->allocs == 0 && m->frees == 0 && m->max == 0 && m->total == 0) {
+            // Don't print modules that don't do dynamic allocation
+            continue;
+        }
+
+        if (changes_only && memcmp(m, &heap_usage_old[modid], sizeof(*m)) == 0) {
+            continue;
+        }
+
+        ICLI_PRINTF("%-21s  %3d  %10u%c %10u%c %10u%c %10u%c %10u%c " VPRI64Fu("14") "%c\n",
+                   vtss_module_names[modid],
+                   modid,
+                   m->usage,
+                   PLUS_MINUS(m->usage,  heap_usage_old[modid].usage),
+                   m->allocs,
+                   PLUS_MINUS(m->allocs, heap_usage_old[modid].allocs),
+                   m->frees,
+                   PLUS_MINUS(m->frees,  heap_usage_old[modid].frees),
+                   m->allocs - m->frees,
+                   PLUS_MINUS(m->allocs - m->frees, heap_usage_old[modid].allocs - heap_usage_old[modid].frees),
+                   m->max,
+                   PLUS_MINUS(m->max,    heap_usage_old[modid].max),
+                   m->total,
+                   PLUS_MINUS(m->total, heap_usage_old[modid].total));
+    }
+
+    ICLI_PRINTF("--------------------- ---- ----------- ----------- ----------- ----------- ----------- ---------------\n");
+
+    ICLI_PRINTF("Total                       %10u%c %10u%c %10u%c %10u%c %10u%c " VPRI64Fu("14") "%c\n\n",
+                new_total.usage,
+                PLUS_MINUS(new_total.usage,  old_total.usage),
+                new_total.allocs,
+                PLUS_MINUS(new_total.allocs, old_total.allocs),
+                new_total.frees,
+                PLUS_MINUS(new_total.frees,  old_total.frees),
+                new_total.allocs - new_total.frees,
+                PLUS_MINUS(new_total.allocs - new_total.frees, old_total.allocs - old_total.frees),
+                new_total.max,
+                PLUS_MINUS(new_total.max,    old_total.max),
+                new_total.total,
+                PLUS_MINUS(new_total.total,  old_total.total));
+
+    ICLI_PRINTF("Max. allocated: %u%c\n", heap_usage_tot_max_new, PLUS_MINUS(heap_usage_tot_max_new, heap_usage_tot_max_old));
+    ICLI_PRINTF("A '+' after a number indicates it has increased, and a '-' that it has decreased since last printout.\n\n");
+
+    memcpy(heap_usage_old, heap_usage_new, sizeof(heap_usage_old));
+    heap_usage_tot_max_old = heap_usage_tot_max_new;
+    old_total              = new_total;
+#undef PLUS_MINUS
+#endif /* defined defined(VTSS_FEATURE_HEAP_WRAPPERS) */
+
+    phys_mem_show(session_id);
+}
+
+static BOOL _runtime_cword_module(
+    IN    u32                   session_id,
+    IN    icli_runtime_ask_t    ask,
+    OUT   icli_runtime_t        *runtime
+)
+{
+    u32     i;
+
+    if ( session_id ){}
+
+    if ( runtime == NULL ) {
+        return FALSE;
+    }
+
+    switch ( ask ) {
+    case ICLI_ASK_CWORD:
+        for ( i = 0; i < VTSS_MODULE_ID_NONE; ++i ) {
+            runtime->cword[i] = (char *)vtss_module_names[i];
+        }
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+static vtss_module_id_t _module_id_get(
+    IN char     *module_name
+)
+{
+    vtss_module_id_t    i;
+
+    for ( i = 0; i < VTSS_MODULE_ID_NONE; ++i ) {
+        if ( strcmp(module_name, vtss_module_names[i]) == 0 ) {
+            return i;
+        }
+    }
+    return VTSS_MODULE_ID_NONE;
+}
+
+static mesa_rc board_qs_conf_read(u32 session_id, mesa_qs_conf_t *qs_conf)
+{
+    mesa_qs_conf_t        *qs_blk;
+    BOOL                   create = 0;
+    ulong                  size;
+
+    /* Restore. Open or create configuration block */
+    if ((qs_blk = (mesa_qs_conf_t *)conf_sec_open(CONF_SEC_GLOBAL, CONF_BLK_QUEUE_CONF, &size)) == NULL) {
+        create = 1;
+    }
+    if (create) {
+        qs_blk = (mesa_qs_conf_t *)conf_sec_create(CONF_SEC_GLOBAL, CONF_BLK_QUEUE_CONF, sizeof(mesa_qs_conf_t));
+        *qs_blk = *qs_conf = { };
+    } else {
+        if (qs_blk != NULL) {
+            *qs_conf = *qs_blk;
+        }
+    }
+
+    if (qs_blk == NULL) {
+        return VTSS_RC_ERROR;
+    } else {
+        conf_sec_close(CONF_SEC_GLOBAL, CONF_BLK_QUEUE_CONF);
+    }
+    return VTSS_RC_OK;
+}
+
+static mesa_rc board_qs_conf_set(u32 session_id, mesa_qs_conf_t *qs_conf)
+{
+    mesa_qs_conf_t *qs_blk;
+
+    if ((qs_blk = (mesa_qs_conf_t *)conf_sec_open(CONF_SEC_GLOBAL, CONF_BLK_QUEUE_CONF, NULL)) == NULL) {
+        return VTSS_RC_ERROR;
+    } else {
+        *qs_blk = *qs_conf;
+        conf_sec_close(CONF_SEC_GLOBAL, CONF_BLK_QUEUE_CONF);
+    }
+    return VTSS_RC_OK;
+}
+
+static BOOL main_icli_qs_conf_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return icli_present_cap(ask, runtime, MESA_CAP_PORT_QS_CONF);
+}
+
+FUNCTION_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = show process load
+
+DOC_CMD_DESC = Show current process load average: 1m, 5m and 15m running average (plus active/total, last PID created)
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP    = ##ICLI_HELP_SHOW
+HELP    = process
+HELP    = load
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    vtss::notifications::process_cmd_pty(cli_fd(), "cat /proc/loadavg");
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND   = show process list [detail]
+
+DOC_CMD_DESC = Show current state of system threads
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP    = ##ICLI_HELP_SHOW
+HELP    = process
+HELP    = list
+HELP    = optionally show thread call stack
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    vtss::notifications::process_cmd_pty(cli_fd(), "ps");
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_PIC)
+
+COMMAND = debug pic read <uint> <uint>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = offset
+CMD_VAR = length
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = PIC
+HELP = Read PIC
+HELP = Offset
+HELP = Length
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <Offset: uint>
+BYWORD = <Length: uint>
+
+VARIABLE_BEGIN
+    u8 *data;
+VARIABLE_END
+
+CODE_BEGIN
+    if (length > 0 &&
+        (data = VTSS_MALLOC(length))) {
+            (void) board_pic_read(data, offset, length);
+            //diag_printf("Offset 0x%04x\n", offset);
+            diag_dump_buf_with_offset(data, length, data - offset);
+            VTSS_FREE(data);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_PIC)
+
+COMMAND = debug pic verify
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = PIC
+HELP = Verify PIC
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (board_pic_verify() == VTSS_RC_OK) {
+       ICLI_PRINTF("Verify OK\n");
+    } else {
+       ICLI_PRINTF("Verify Failed\n");
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_PIC)
+
+COMMAND = debug pic program [reboot]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = do_reboot
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = PIC
+HELP = Program PIC
+HELP = Reboot system
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (board_pic_program(do_reboot) == VTSS_RC_OK) {
+       ICLI_PRINTF("Program OK\n");
+    } else {
+       ICLI_PRINTF("Program Failed\n");
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_PIC)
+
+COMMAND = debug pic erase
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = PIC
+HELP = Erase PIC
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (board_pic_erase() == VTSS_RC_OK) {
+       ICLI_PRINTF("Erase OK\n");
+    } else {
+       ICLI_PRINTF("Erase Failed\n");
+    }
+CODE_END
+
+CMD_END
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug board [mac <mac_addr>] [serial <uint>]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_mac
+CMD_VAR = mac
+CMD_VAR = has_serial
+CMD_VAR = serial
+
+HELP = ##ICLI_HELP_DEBUG
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <MAC: MAC Address>
+BYWORD =
+BYWORD = <Serial: Serial number of board>
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    conf_board_t conf;
+    char         buf[32];
+
+    if (conf_mgmt_board_get(&conf) == 0) {
+        if (has_mac || has_serial) {
+            if (has_mac) {
+                if (mac.addr[0] == 0 && mac.addr[1] == 0 && mac.addr[2] == 0 &&
+                    mac.addr[3] == 0 && mac.addr[4] == 0 && mac.addr[5] == 0) {
+                    ICLI_PRINTF("Invalid MAC address\n");
+                    return ICLI_RC_ERROR;
+                }
+                conf.mac_address = mac;
+            }
+
+            if (has_serial) {
+                conf.board_id = serial;
+            }
+
+            if (conf_mgmt_board_set(&conf) != VTSS_RC_OK) {
+                ICLI_PRINTF("Board set operation failed\n");
+            } else if (has_mac) {
+                ICLI_PRINTF("System MAC address updated. Please reboot now for this to take effect\n");
+            }
+        } else {
+            ICLI_PRINTF("Board Name       : %s\n", vtss_board_name());
+            ICLI_PRINTF("Board MAC Address: %s\n", misc_mac_txt(conf.mac_address.addr, buf));
+            ICLI_PRINTF("Board ID         : %lu\n", conf.board_id);
+            ICLI_PRINTF("Board Type       : %d\n", vtss_board_type());
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug board tag { save | list | <word> [<word>] | remove <word> }
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = save
+CMD_VAR = list
+CMD_VAR = name
+CMD_VAR = value
+CMD_VAR = remove
+CMD_VAR = name_to_remove
+
+HELP = ##ICLI_HELP_DEBUG
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = Option to save
+BYWORD = Option to list all tags
+BYWORD = Name of tag
+BYWORD = Value of tag
+BYWORD = Option to remove a tag
+BYWORD = Name of tag to remove
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+
+if (list) {
+    conf_mgmt_board_tag_list(session_id);
+} else if (save) {
+    conf_mgmt_board_tag_save();
+} else if (remove) {
+  mesa_rc rc = conf_mgmt_board_tag_remove(name_to_remove);
+  if (rc == VTSS_RC_ERR_PARM) {
+      ICLI_PRINTF("Invalid tag name: %s\n", name_to_remove);
+  } else if (rc == VTSS_RC_ERROR) {
+      ICLI_PRINTF("Tag name not found: %s\n", name_to_remove);
+  }
+} else {
+    if (value) {
+        if (conf_mgmt_board_tag_set(name, value)) {
+            ICLI_PRINTF("Set of %s=%s failed, illegal tag name or value\n", name, value);
+        }
+    } else {
+        if (name) {
+            const char *cur_value = conf_mgmt_board_tag_get(name);
+            if (cur_value) {
+                ICLI_PRINTF("%s=%s\n", name, cur_value);
+            } else {
+                ICLI_PRINTF("%s not found\n", name);
+            }
+        } else {
+            ICLI_PRINTF("<name> must given to list a tag value\n");
+        }
+    }
+}
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+
+COMMAND = debug qs [mode <0-1>] [<uint>] [<uint>]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME = main_icli_qs_conf_present
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_mode
+CMD_VAR = mode
+CMD_VAR = wm1
+CMD_VAR = wm2
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = queue system
+HELP = queue system modes
+HELP = Generic WM parameter
+HELP = Generic WM parameter
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <mode: Configured queue configuration>
+BYWORD = <wm1: watermark 1>
+BYWORD = <wm2: watermark 2>
+
+VARIABLE_BEGIN
+     mesa_qs_conf_t qs_conf;
+VARIABLE_END
+
+CODE_BEGIN
+if (board_qs_conf_read(session_id, &qs_conf) == VTSS_RC_OK) {
+    if (has_mode) {
+        qs_conf.mode = (mesa_qs_mode_t)mode;
+        qs_conf.wm1  = (u32)wm1;
+        qs_conf.wm2  = (u32)wm2;
+        if (board_qs_conf_set(session_id, &qs_conf) != VTSS_RC_OK) {
+            ICLI_PRINTF("Queue mode set operation failed\n");
+        } else {
+            ICLI_PRINTF("Queue mode configuration is applied after reboot\n");
+        }
+    } else {
+        ICLI_PRINTF("Supported queue system modes:\n");
+        ICLI_PRINTF(" mode = 0: Enterprise mode (default)\n");
+        ICLI_PRINTF(" mode = 1: Queue Limit Mode\n");
+        ICLI_PRINTF("Current QS mode: %d (%s) (wm1:%d wm2:%d)\n",qs_conf.mode, qs_conf.mode ? "QLIM" : "default",qs_conf.wm1,qs_conf.wm2);
+    }
+ } else {
+    ICLI_PRINTF("Could not read queue mode from flash\n");
+ }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+
+COMMAND   = debug file ls [<word>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = path
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = File system
+HELP = List directory
+HELP = Path
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    _cmd_file_ls( session_id, path );
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+
+COMMAND   = debug file create <word> <1-2097152>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = file_name
+CMD_VAR = file_size
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = File system
+HELP = Create file
+HELP = File name
+HELP = File size. Be careful with big files
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    _cmd_file_create( session_id, file_name, file_size );
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+
+COMMAND   = debug file delete <word>
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = file_name
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = File system
+HELP = Delete file
+HELP = File name
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    _cmd_file_delete( session_id, file_name );
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+
+COMMAND   = debug file sync
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = File system
+HELP = Synchronize FS to flash
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (os_file_fs2flash() != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error writing to flash");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(CYGPKG_FS_RAM) && defined(VTSS_SW_OPTION_ICFG)
+
+COMMAND   = debug file restore
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = File system
+HELP = Synchronize flash to FS
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    os_file_flash2fs();
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug heap [changes-only] [<cword>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = changes_only
+CMD_VAR = module_name
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Heap allocation and statistics
+HELP = Only print lines that have changed since last printout.
+HELP = Module name
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = _runtime_cword_module
+
+VARIABLE_BEGIN
+    vtss_module_id_t module_id;
+VARIABLE_END
+
+CODE_BEGIN
+    module_id = module_name ? _module_id_get(module_name) : VTSS_MODULE_ID_NONE;
+    _cmd_debug_heap(session_id, module_id, changes_only);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug show irq
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = IRQ
+HELP = Show IRQ count
+
+CODE_BEGIN
+    vtss::notifications::process_cmd_pty(cli_fd(), "cat /proc/interrupts");
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND   = debug system shell [ <line128> ]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = shell_cmd
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = system
+HELP = execute interactive shell. Use 'exit' to return to ICLI
+HELP = optional command line for non-interactive shell invocation
+
+CODE_BEGIN
+    if (shell_cmd && strnlen(shell_cmd, 128) > 0) {
+        vtss::notifications::process_cmd_pty(cli_fd(), shell_cmd);
+    } else {
+        vtss::notifications::process_cmd_pty(cli_fd(), "/bin/sh");
+    }
+CODE_END
+
+CMD_END

@@ -1,0 +1,1663 @@
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+// Module Segment
+//   This tag value is used to decide whether all commands of this module are
+//   registered or not and the generated C/H file is compiled or not.
+//
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_FRR_RIP)
+
+//
+// Include Segment
+//   The segment contains the include files. These include files are needed
+//   for the code body, that is, all other segments.
+//   "icli_api.h" is the default include file that will be auto-generated
+//   in C file.
+//   The content will be exactly pasted to the generated C file.
+//
+INCLUDE_BEGIN
+#include "icli_api.h"
+#include "frr_rip_api.hxx"
+#include "frr_daemon.hxx"
+#include "frr_rip_icli_functions.hxx"
+INCLUDE_END
+
+//
+// Function Segment
+//   The segment allows the designer writes the local functions that will be
+//   used in the command Segment and also the global functions that can be
+//   shared with other C files.
+//   The content will be exactly pasted to the generated C file.
+//
+FUNCTION_BEGIN
+/* Check OSPF daemon on runtime stage */
+static BOOL RIP_ICLI_runtime_has_ospfd(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = frr_has_ospfd();
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update RIP redistributed default metric valid range on runtime stage */
+static BOOL RIP_ICLI_runtime_redist_def_metric(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_RIP_REDIST_DEF_METRIC_MIN,
+                     VTSS_APPL_RIP_REDIST_DEF_METRIC_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_RIP_REDIST_DEF_METRIC_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_RIP_REDIST_DEF_METRIC_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update RIP redistribute specific metric valid range on runtime stage */
+static BOOL RIP_ICLI_runtime_redist_specific_metric(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_RIP_REDIST_SPECIFIC_METRIC_MIN,
+                     VTSS_APPL_RIP_REDIST_SPECIFIC_METRIC_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_RIP_REDIST_SPECIFIC_METRIC_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_RIP_REDIST_SPECIFIC_METRIC_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update RIP administrative distance valid range on runtime stage */
+static BOOL RIP_ICLI_runtime_admin_distance(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_RIP_ADMIN_DISTANCE_MIN,
+                     VTSS_APPL_RIP_ADMIN_DISTANCE_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_RIP_ADMIN_DISTANCE_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_RIP_ADMIN_DISTANCE_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update RIP timer valid range on runtime stage */
+static BOOL RIP_ICLI_runtime_timer(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_RIP_TIMER_MIN,
+                     VTSS_APPL_RIP_TIMER_MAX);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_RIP_TIMER_MIN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_RIP_TIMER_MAX;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/* Update router access-list name valid length on runtime stage */
+static BOOL RIP_ICLI_runtime_access_list_name(
+    u32                session_id,
+    icli_runtime_ask_t ask,
+    icli_runtime_t     *runtime) {
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<%u-%u>",
+                     VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MIN_LEN,
+                     VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MAX_LEN);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        // Notice that the CLI range type need to match the original variable type.
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MIN_LEN;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_ROUTER_ACCESS_LIST_NAME_MAX_LEN;
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+FUNCTION_END
+
+//
+// Local help message segment
+//
+HELP_VER                = Set routing protocol version
+HELP_DEF_METRIC         = Default metric for the redistributed routes
+HELP_REDIST             = Redistribute route information from the specific routing protocol.
+HELP_REDIST_STATIC      = The RIP redistributed protocol type for the static routes.
+HELP_REDIST_CONNECTED   = The RIP redistributed protocol type for the connected interfaces.
+HELP_REDIST_RIP         = The RIP redistributed protocol type for the RIP routes.
+HELP_ADMIN_DISTANCE     = Administrative distance
+HELP_NETWORK            = Configure routing on an IPv4 network
+HELP_IP_ADDR            = IPv4 address
+HELP_IP_WILDCARD_MASK   = The wildcard-mask of the IPv4 address, where 0 is a match, and 1 is a 'do not care' bit.
+HELP_RIP_VER_RECV       = Advertisement reception
+HELP_RIP_VER_SEND       = Advertisement transmission
+HELP_RIP_VER_NONE       = None of any RIP version
+HELP_RIP_VER_1          = RIP version 1
+HELP_RIP_VER_2          = RIP version 2
+HELP_AUTH               = Enable authentication
+HELP_AUTH_MODE          = Set authentication type
+HELP_AUTH_MD5           = Use message digest(MD5) authentication
+HELP_AUTH_SIMPLE_PWD    = Use simple password authentication
+HELP_AUTH_NULL          = Use null authentication
+HELP_AUTH_KEY_SIMPLE    = Configure simple password authentication
+HELP_AUTH_KEY_CHAIN    = Configure key chain used by MD5 authentication
+HELP_AUTH_KEY_ID        = Configure message digest key ID
+HELP_UNENCRYPTED        = Specifies an UNENCRYPTED password will follow
+HELP_UNENCRYPTED_PWD    = The UNENCRYPTED (Plain Text) user password. \
+Any printable characters including space is accepted. \
+Notice that you have no chance to get the Plain Text password after this \
+command. The system will always display the ENCRYPTED password.
+HELP_ENCRYPTED          = Specifies an ENCRYPTED password will follow
+HELP_ENCRYPTED_PWD      = The ENCRYPTED (hidden) user password. \
+Notice the ENCRYPTED password will be decoded by system internally. \
+You cannot directly use it as same as the Plain Text and it is not \
+human-readable text normally.
+
+//----------------------------------------------------------------------------
+//** RIP router configuration
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no router rip
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = This command is an invisible command which is used to prevent
+DOC_CMD_DESC    = user deleting the current submode accidentally.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_router_prevent_delete_myself
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_INVISIBLE
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_ROUTER
+HELP = ##ICLI_HELP_RIP
+
+VARIABLE_BEGIN
+    vtss_appl_rip_router_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    conf.router_mode = false;
+    if (vtss_appl_rip_router_conf_set(&conf) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Disable RIP router mode failed.\n");
+    }
+    (void)ICLI_MODE_EXIT();
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no router rip
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = Use 'no router rip' to disable the RIP process on the device.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_router_disable
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_ROUTER
+HELP = ##ICLI_HELP_RIP
+
+VARIABLE_BEGIN
+    vtss_appl_rip_router_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    conf.router_mode = false;
+    if (vtss_appl_rip_router_conf_set(&conf) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Disable RIP router mode failed.\n");
+    }
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = version {1|2}
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_global_ver_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR = v1
+CMD_VAR = v2
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_VER
+HELP = Receive/Send RIPv1 packet only
+HELP = Receive/Send RIPv2 packet only
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.global_ver = v1 ? VTSS_APPL_RIP_GLOBAL_VER_1 :
+                     v2 ? VTSS_APPL_RIP_GLOBAL_VER_2 : VTSS_APPL_RIP_GLOBAL_VER_DEFAULT;
+    return FRR_ICLI_rip_global_ver_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no version
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_global_ver_restore
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_VER
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+    vtss_appl_rip_router_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    if (frr_rip_router_conf_def(&def_conf) != VTSS_RC_OK)  {
+        ICLI_PRINTF("%% Get RIP router default configuration failed.\n");
+        return ICLI_RC_ERROR;
+    }
+    req.global_ver = def_conf.version;
+    return FRR_ICLI_rip_global_ver_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = ip rip send version {1 [2]|2 [1]}
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_intf_send_ver_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_v1
+CMD_VAR = has_v1_v2
+CMD_VAR =
+CMD_VAR = has_v2_v1
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = ##HELP_RIP_VER_SEND
+HELP = ##HELP_VER
+HELP = ##HELP_RIP_VER_1
+HELP = ##HELP_RIP_VER_2
+HELP = ##HELP_RIP_VER_2
+HELP = ##HELP_RIP_VER_1
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.intf_send_ver =
+        (has_v1_v2 || has_v2_v1) ? VTSS_APPL_RIP_INTF_SEND_VER_BOTH :
+        has_v1 ? VTSS_APPL_RIP_INTF_SEND_VER_1 : VTSS_APPL_RIP_INTF_SEND_VER_2;
+    FRR_ICLI_rip_intf_conf_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = ip rip receive version {none|1 [2]|2 [1]}
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_intf_recv_ver_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_none
+CMD_VAR = has_v1
+CMD_VAR = has_v1_v2
+CMD_VAR =
+CMD_VAR = has_v2_v1
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = ##HELP_RIP_VER_RECV
+HELP = ##HELP_VER
+HELP = ##HELP_RIP_VER_NONE
+HELP = ##HELP_RIP_VER_1
+HELP = ##HELP_RIP_VER_2
+HELP = ##HELP_RIP_VER_2
+HELP = ##HELP_RIP_VER_1
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.intf_recv_ver =
+        has_none ? VTSS_APPL_RIP_INTF_RECV_VER_NONE :
+        (has_v1_v2 || has_v2_v1) ? VTSS_APPL_RIP_INTF_RECV_VER_BOTH :
+        has_v1 ? VTSS_APPL_RIP_INTF_RECV_VER_1 :VTSS_APPL_RIP_INTF_RECV_VER_2;
+    FRR_ICLI_rip_intf_conf_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no ip rip {send|receive} version
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_intf_ver_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_send
+CMD_VAR = has_recv
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = ##HELP_RIP_VER_SEND
+HELP = ##HELP_RIP_VER_RECV
+HELP = ##HELP_VER
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    if (has_send) {
+        req.intf_send_ver = VTSS_APPL_RIP_INTF_SEND_VER_NOT_SPECIFIED;
+    }
+    if (has_recv) {
+        req.intf_recv_ver = VTSS_APPL_RIP_INTF_RECV_VER_NOT_SPECIFIED;
+    }
+    FRR_ICLI_rip_intf_conf_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = default-metric <1-16>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_redist_def_metric_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR = def_metric
+
+RUNTIME =
+RUNTIME = RIP_ICLI_runtime_redist_def_metric
+
+HELP = ##HELP_DEF_METRIC
+HELP = User specified default metric value
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.metric = def_metric;
+    return FRR_ICLI_rip_redist_def_metric_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no default-metric
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_def_metric_restore
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_DEF_METRIC
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+    vtss_appl_rip_router_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    if (frr_rip_router_conf_def(&def_conf) != VTSS_RC_OK)  {
+        ICLI_PRINTF("%% Get RIP router default configuration failed.\n");
+        return ICLI_RC_ERROR;
+    }
+    req.metric = def_conf.redist_def_metric;
+    return FRR_ICLI_rip_redist_def_metric_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = redistribute { static | connected | ospf } [ metric <0-16> ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_redist_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR = has_static
+CMD_VAR = has_connected
+CMD_VAR =
+CMD_VAR = has_metric
+CMD_VAR = metric_val
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = RIP_ICLI_runtime_has_ospfd
+RUNTIME =
+RUNTIME = RIP_ICLI_runtime_redist_specific_metric
+
+HELP = ##HELP_REDIST
+HELP = ##HELP_REDIST_STATIC
+HELP = ##HELP_REDIST_CONNECTED
+HELP = ##HELP_REDIST_RIP
+HELP = Configure the specified metric for route redistribution
+HELP = User specified metric value
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.redist_proto_type = has_static ? VTSS_APPL_RIP_REDIST_PROTO_TYPE_STATIC :
+                          has_connected ? VTSS_APPL_RIP_REDIST_PROTO_TYPE_CONNECTED :
+                          VTSS_APPL_RIP_REDIST_PROTO_TYPE_OSPF;
+    if (has_metric) {
+        req.has_metric = true;
+        req.metric = metric_val;
+    }
+    return FRR_ICLI_rip_redist_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no redistribute { static | connected | ospf }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_redist_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_static
+CMD_VAR = has_connected
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = RIP_ICLI_runtime_has_ospfd
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_REDIST
+HELP = ##HELP_REDIST_STATIC
+HELP = ##HELP_REDIST_CONNECTED
+HELP = ##HELP_REDIST_RIP
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.has_no_form = true;
+    req.redist_proto_type = has_static ? VTSS_APPL_RIP_REDIST_PROTO_TYPE_STATIC :
+                          has_connected ? VTSS_APPL_RIP_REDIST_PROTO_TYPE_CONNECTED :
+                          VTSS_APPL_RIP_REDIST_PROTO_TYPE_OSPF;
+
+    return FRR_ICLI_rip_redist_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = passive-interface { default | vlan <vlan_list> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_passive_interface_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR = has_default
+CMD_VAR = has_vlan
+CMD_VAR = vlan_list
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = Suppress routing updates on an interface
+HELP = all interfaces as passive-interface
+HELP = VLAN interface
+HELP = ##ICLI_HELP_VLAN_LIST
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_default) {
+        req.passive_intf_enabled = true;
+        FRR_ICLI_rip_passive_intf_default(req);
+    } else if (has_vlan) {
+        req.passive_intf_enabled = true;
+        req.vlan_list = vlan_list;
+        FRR_ICLI_rip_passive_intf_set(req);
+    }
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    if (has_default) {
+        req.passive_intf_enabled = false;
+        FRR_ICLI_rip_passive_intf_default(req);
+    } else if (has_vlan) {
+        req.passive_intf_enabled = false;
+        req.vlan_list = vlan_list;
+        FRR_ICLI_rip_passive_intf_set(req);
+    }
+NO_FORM_CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = default-information originate
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_def_route_redist_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = Control distribution of default route
+HELP = Distribute a default route
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.def_route_redist = true;
+    return FRR_ICLI_rip_def_route_redist_set(req);
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.def_route_redist = false;
+    return FRR_ICLI_rip_def_route_redist_set(req);
+NO_FORM_CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = distance <1-255>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_admin_distance_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR = admin_distance
+
+RUNTIME =
+RUNTIME = RIP_ICLI_runtime_admin_distance
+
+HELP = ##HELP_ADMIN_DISTANCE
+HELP = User specified administrative distance value
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.admin_distance = admin_distance;
+    return FRR_ICLI_rip_admin_distance_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no distance
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_admin_distance_restore
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_ADMIN_DISTANCE
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+    vtss_appl_rip_router_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    if (frr_rip_router_conf_def(&def_conf) != VTSS_RC_OK)  {
+        ICLI_PRINTF("%% Get RIP router default configuration failed.\n");
+        return ICLI_RC_ERROR;
+    }
+    req.admin_distance = def_conf.admin_distance;
+    return FRR_ICLI_rip_admin_distance_set(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** RIP network configuration
+//----------------------------------------------------------------------------
+CMD_BEGIN
+COMMAND         = network <ipv4_addr> <ipv4_addr>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_network_add
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR = ip_address
+CMD_VAR = wildcard_mask
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_NETWORK
+HELP = ##HELP_IP_ADDR
+HELP = ##HELP_IP_WILDCARD_MASK
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.ip_address = ip_address;
+    req.wildcard_mask = wildcard_mask;
+    req.has_wildcard_mask = true;
+    FRR_ICLI_rip_network_add(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = network <ipv4_addr>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_network_add_without_wm
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR = ip_address
+
+RUNTIME =
+RUNTIME =
+
+HELP = ##HELP_NETWORK
+HELP = ##HELP_IP_ADDR
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.ip_address = ip_address;
+    FRR_ICLI_rip_network_add(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no network <ipv4_addr> <ipv4_addr>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_network_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = ip_address
+CMD_VAR = wildcard_mask
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_NETWORK
+HELP = ##HELP_IP_ADDR
+HELP = ##HELP_IP_WILDCARD_MASK
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.ip_address = ip_address;
+    req.wildcard_mask = wildcard_mask;
+    req.has_wildcard_mask = true;
+    FRR_ICLI_rip_network_del(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = no network <ipv4_addr>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_network_del_without_wm
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = ip_address
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_NETWORK
+HELP = ##HELP_IP_ADDR
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.ip_address = ip_address;
+    FRR_ICLI_rip_network_del(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** RIP timers configuration
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = timers basic <5-2147483> <5-2147483> <5-2147483>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_timers_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = update_timer
+CMD_VAR = invalid_timer
+CMD_VAR = garbage_collection_timer
+
+RUNTIME =
+RUNTIME =
+RUNTIME = RIP_ICLI_runtime_timer
+RUNTIME = RIP_ICLI_runtime_timer
+RUNTIME = RIP_ICLI_runtime_timer
+
+HELP = Adjust routing timers
+HELP = Basic routing protocol update timers
+HELP = The update time in seconds is an integer value
+HELP = The invalid time in seconds is an integer value
+HELP = The garbage-collection timer in seconds is an integer value
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.update_timer = update_timer;
+    req.invalid_timer = invalid_timer;
+    req.garbage_collection_timer = garbage_collection_timer;
+    return FRR_ICLI_rip_router_times_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no timers basic
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_router_timers_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = Adjust routing timers
+HELP = Basic routing protocol update timers
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+    vtss_appl_rip_router_conf_t def_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    if (frr_rip_router_conf_def(&def_conf) != VTSS_RC_OK)  {
+        ICLI_PRINTF("%% Get RIP router default configuration failed.\n");
+        return ICLI_RC_ERROR;
+    }
+    req.update_timer = def_conf.timers.update_timer;
+    req.invalid_timer = def_conf.timers.invalid_timer;
+    req.garbage_collection_timer = def_conf.timers.garbage_collection_timer;
+    return FRR_ICLI_rip_router_times_set(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** RIP neighbor connection
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = neighbor <ipv4_addr>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_neighbor_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR = ip_addr
+
+RUNTIME =
+RUNTIME =
+
+HELP = Configure a RIP neighbor router
+HELP = Neighbor address
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.ip_address = ip_addr;
+    FRR_ICLI_rip_neighbor_add(req);
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.ip_address = ip_addr;
+    FRR_ICLI_rip_neighbor_del(req);
+NO_FORM_CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** RIP authentication
+//----------------------------------------------------------------------------
+CMD_BEGIN
+COMMAND         = ip rip authentication mode {text | md5}
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_intf_auth_mode_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_text
+CMD_VAR = has_md5
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_MODE
+HELP = ##HELP_AUTH_SIMPLE_PWD
+HELP = ##HELP_AUTH_MD5
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    if (has_text) {
+        req.auth_type = VTSS_APPL_RIP_AUTH_TYPE_SIMPLE_PASSWORD;
+    } else if (has_md5){
+        req.auth_type = VTSS_APPL_RIP_AUTH_TYPE_MD5;
+    }
+    FRR_ICLI_rip_intf_auth_conf_set(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = ip rip authentication string { unencrypted <word1-15> | encrypted <word128> }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_intf_auth_simple_pwd_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = unencrypted_pwd
+CMD_VAR =
+CMD_VAR = encrypted_pwd
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_KEY_SIMPLE
+HELP = ##HELP_UNENCRYPTED
+HELP = ##HELP_UNENCRYPTED_PWD
+HELP = ##HELP_ENCRYPTED
+HELP = ##HELP_ENCRYPTED_PWD
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    if (unencrypted_pwd) {
+        strncpy(req.simple_pwd_str, unencrypted_pwd, VTSS_APPL_RIP_AUTH_SIMPLE_KEY_MAX_LEN);
+        // Prevent from buffer overflow.
+        req.simple_pwd_str[VTSS_APPL_RIP_AUTH_SIMPLE_KEY_MAX_LEN] = '\0';
+        req.has_encrypted = false;
+    } else {
+        strncpy(req.simple_pwd_str, encrypted_pwd, VTSS_APPL_RIP_AUTH_ENCRYPTED_SIMPLE_KEY_LEN);
+        // Prevent from buffer overflow.
+        req.simple_pwd_str[VTSS_APPL_RIP_AUTH_ENCRYPTED_SIMPLE_KEY_LEN] = '\0';
+        req.has_encrypted = true;
+    }
+    req.has_simple_pwd_str = true;
+    FRR_ICLI_rip_intf_auth_conf_set(req);
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND         = ip rip authentication key-chain <word1-31>
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_intf_auth_key_chain_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = key_chain_str
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_KEY_CHAIN
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    strncpy(req.keychain_name, key_chain_str, VTSS_APPL_ROUTER_KEY_CHAIN_NAME_MAX_LEN);
+    // Prevent from buffer overflow.
+    req.keychain_name[VTSS_APPL_ROUTER_KEY_CHAIN_NAME_MAX_LEN] = '\0';
+
+    req.has_keychain_name = true;
+    FRR_ICLI_rip_intf_auth_conf_set(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = no ip rip authentication { mode | key-chain | string }
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_intf_auth_del
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_mode
+CMD_VAR = has_keychain
+CMD_VAR = has_string
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = ##HELP_AUTH
+HELP = ##HELP_AUTH_MODE
+HELP = ##HELP_AUTH_KEY_CHAIN
+HELP = ##HELP_AUTH_KEY_SIMPLE
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    if (has_mode) {
+        req.auth_type = VTSS_APPL_RIP_AUTH_TYPE_NULL;
+    } else if (has_keychain) {
+        req.has_keychain_name = true;
+        req.keychain_name[0] = '\0';
+    } else if (has_string) {
+        req.has_simple_pwd_str = true;
+        req.simple_pwd_str[0] = '\0';
+        req.has_encrypted = false;
+    }
+    FRR_ICLI_rip_intf_auth_conf_set(req);
+CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** RIP interface configuration
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = ip rip split-horizon [ poisoned-reverse ]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    = Use the 'ip rip split-horizon' command in VLAN interface \
+                  mode to enable split horizon. Use the no form to disable the \
+                  setting.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_split_horizon_set
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR  = vlan_list
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_poisoned_reverse
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = Enable split horizon
+HELP = Enable split horizon with poisoned reverse
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.has_split_horizon = true;
+    req.split_horizon_mode = has_poisoned_reverse ?
+        VTSS_APPL_RIP_SPLIT_HORIZON_MODE_POISONED_REVERSE :
+        VTSS_APPL_RIP_SPLIT_HORIZON_MODE_SIMPLE;
+    FRR_ICLI_rip_intf_conf_set(req);
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.vlan_list = vlan_list;
+    req.has_split_horizon = true;
+    // 'no ip rip split-horizon poisoned-revese' means to set to simple mode.
+    req.split_horizon_mode = has_poisoned_reverse ?
+        VTSS_APPL_RIP_SPLIT_HORIZON_MODE_SIMPLE :
+        VTSS_APPL_RIP_SPLIT_HORIZON_MODE_DISABLED;
+    FRR_ICLI_rip_intf_conf_set(req);
+NO_FORM_CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** RIP metric manipulation: Offset-list
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = offset-list <word1-31> {in|out} <0-16> [vlan <vlan_id>]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+FUNC_NAME = icli_rip_offset_list_add
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_CONFIG_ROUTER_RIP
+MODE_VAR  =
+PROPERTY  =
+
+CMD_VAR =
+CMD_VAR = access_list_name
+CMD_VAR = has_in
+CMD_VAR =
+CMD_VAR = metric_value
+CMD_VAR = has_vlan
+CMD_VAR = vlan_id
+
+RUNTIME =
+RUNTIME = RIP_ICLI_runtime_access_list_name
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = Offset-list for RIP metric modification
+HELP = The name of access-list
+HELP = For incoming updates
+HELP = For outgoing updates
+HELP = User specified metric value
+HELP = VLAN (Virtual Local Area Network)
+HELP = VLAN identifier (VID)
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    req.offset_direction =
+        has_in ? VTSS_APPL_RIP_OFFSET_DIRECTION_IN :
+                 VTSS_APPL_RIP_OFFSET_DIRECTION_OUT;
+    req.metric = metric_value;
+    strcpy(req.access_list_name.name, access_list_name);
+    if (has_vlan && vtss_ifindex_from_vlan(vlan_id, &req.ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Convert VLAN ID %d to interface index failed.\n", vlan_id);
+        return ICLI_RC_ERROR;
+    }
+
+    FRR_ICLI_rip_offset_list_set(req);
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    req.has_no_form = true;
+    req.offset_direction =
+        has_in ? VTSS_APPL_RIP_OFFSET_DIRECTION_IN :
+                 VTSS_APPL_RIP_OFFSET_DIRECTION_OUT;
+    req.metric = metric_value;
+    strcpy(req.access_list_name.name, access_list_name);
+    if (has_vlan && vtss_ifindex_from_vlan(vlan_id, &req.ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Convert VLAN ID %d to interface index failed.\n", vlan_id);
+        return ICLI_RC_ERROR;
+    }
+
+    FRR_ICLI_rip_offset_list_set(req);
+NO_FORM_CODE_END
+CMD_END
+
+//----------------------------------------------------------------------------
+//** RIP status
+//----------------------------------------------------------------------------
+// =============================================================================
+CMD_BEGIN
+COMMAND         = show ip rip [database]
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_show_ip_rip_database
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_database
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = Database
+
+VARIABLE_BEGIN
+    FrrRipCliReq req(session_id);
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_database) {
+        return FRR_ICLI_rip_show_db_info(req);
+    }
+    return FRR_ICLI_rip_show_status_info(req);
+CODE_END
+CMD_END
+
+// =============================================================================
+CMD_BEGIN
+COMMAND         = clear ip rip process
+# /* ---------------------------------------------------------------------------
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+# ----------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_rip_clear_process
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+MODE_VAR  =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+HELP = ##ICLI_HELP_CLEAR
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_RIP
+HELP = RIP routing process
+
+VARIABLE_BEGIN
+    vtss_appl_rip_control_globals_t rip_control;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&rip_control, 0, sizeof(rip_control));
+    rip_control.reload_process = true;
+    if (vtss_appl_rip_control_globals(&rip_control) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Clear ip rip process failed.\n");
+         return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+

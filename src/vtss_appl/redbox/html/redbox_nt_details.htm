@@ -1,0 +1,356 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Detailed RedBox NodesTable</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="redbox_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_redbox_nt_details.htm";
+var nodesTable, globals, variables;
+
+// Page arguments
+var page_args = searchArgs(window.location.search);
+
+var selected_inst = 1;
+if (page_args["inst"]) {
+    selected_inst = parseInt(page_args["inst"], 10);
+}
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(inst, err_msg, last)
+{
+    if (err_msg) {
+        alert(err_msg);
+    }
+
+    if (last) {
+        // Done. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_clear_button_click()
+/******************************************************************************/
+function on_clear_button_click()
+{
+    redbox_lib_json_submit("redbox.control.ntClear.set", [[selected_inst, true]], on_submit_done);
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // 1st row (numbers are colspan, rowspan)
+    row = {fields: [
+              {type: "disp_hdr", params: ["MAC Address", 1, 3, "148px"]},
+              {type: "disp_hdr", params: ["Node Type",   1, 3, "97px"]},
+              {type: "disp_hdr", params: ["Forward",     1, 3]},
+              {type: "disp_hdr", params: ["Data",        6, 1]},
+              {type: "disp_hdr", params: ["Supervision", 6, 1]}]
+          };
+
+    table_rows.push(row);
+
+    // 2nd row
+    row = {fields: [
+              // Data
+              {type: "disp_hdr", params: ["Rx",           2, 1]},
+              {type: "disp_hdr", params: ["Last Seen",    2, 1]},
+              {type: "disp_hdr", params: ["Rx Wrong LAN", 2, 1]},
+
+              // Supervision
+              {type: "disp_hdr", params: ["Rx",        2, 1]},
+              {type: "disp_hdr", params: ["Last Seen", 2, 1]},
+              {type: "disp_hdr", params: ["Last Type", 2, 1]}]
+          };
+
+    table_rows.push(row);
+
+    // 3rd row
+    row = {fields: [
+              // Data Rx
+              {type: "disp_hdr", params: ["Port A", 1, 1, "100px"]},
+              {type: "disp_hdr", params: ["Port B", 1, 1, "100px"]},
+
+              // Data Last Seen
+              {type: "disp_hdr", params: ["Port A", 1, 1]},
+              {type: "disp_hdr", params: ["Port B", 1, 1]},
+
+              // Rx Wrong LAN
+              {type: "disp_hdr", params: ["Port A", 1, 1, "100px"]},
+              {type: "disp_hdr", params: ["Port B", 1, 1, "100px"]},
+
+              // Supervision Rx
+              {type: "disp_hdr", params: ["Port A", 1, 1, "100px"]},
+              {type: "disp_hdr", params: ["Port B", 1, 1, "100px"]},
+
+              // Supervision Last Seen
+              {type: "disp_hdr", params: ["Port A", 1, 1]},
+              {type: "disp_hdr", params: ["Port B", 1, 1]},
+
+              // Supervision Last Type
+              {type: "disp_hdr", params: ["Port A", 1, 1]},
+              {type: "disp_hdr", params: ["Port B", 1, 1]}]
+          };
+
+    table_rows.push(row);
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(mac, val, conf, statu)
+{
+    var row, fwd;
+
+    if (statu && statu.OperState == "active") {
+        if (conf.Mode == "prpSan") {
+            if (val.PortAFwd && val.PortBFwd) {
+                fwd = "Both";
+            } else if (val.PortAFwd) {
+                fwd = "Port A";
+            } else if (val.PortBFwd) {
+                fwd = "Port B";
+            } else {
+                // Possible?!?
+                fwd = "None";
+            }
+        } else {
+            fwd = "-";
+        }
+
+        row = {fields: [
+                  {type: "text",   params: [mac, "cl mac"]},
+                  {type: "text",   params: [redbox_lib_node_type_map[val.NodeType], "cl"]},
+                  {type: "text",   params: [fwd, "cl"]},
+
+                  // Data Rx
+                  {type: "digit",  params: [val.PortARxCnt]},
+                  {type: "digit",  params: [val.PortBRxCnt]},
+
+                  // Data Last Seen
+                  {type: "digit",  params: [val.PortARxCnt ? val.PortALastSeen : "-"]},
+                  {type: "digit",  params: [val.PortBRxCnt ? val.PortBLastSeen : "-"]},
+
+                  // Rx Wrong LAN
+                  {type: "digit",  params: [conf.Mode == "prpSan" ? val.PortARxWrongLanCnt : "-"]},
+                  {type: "digit",  params: [conf.Mode == "prpSan" ? val.PortBRxWrongLanCnt : "-"]},
+
+                  // Supervision Rx
+                  {type: "digit",  params: [val.PortASvRxCnt]},
+                  {type: "digit",  params: [val.PortBSvRxCnt]},
+
+                  // Supervision Last Seen
+                  {type: "digit",  params: [val.PortASvRxCnt ? val.PortASvLastSeen : "-"]},
+                  {type: "digit",  params: [val.PortBSvRxCnt ? val.PortBSvLastSeen : "-"]},
+
+                  // Supervision Last Type
+                  {type: "text",   params: [val.PortASvRxCnt ? redbox_lib_sv_type_map[val.PortASvLastType] : "-", "cl"]},
+                  {type: "text",   params: [val.PortBSvRxCnt ? redbox_lib_sv_type_map[val.PortBSvLastType] : "-", "cl"]}]
+              };
+    } else {
+        row = {fields: [{type: "empty_row", params: [15, statu ? "Inactive" : "Not created"]}]};
+    }
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows, cnt = 0, fld, show_all;
+
+    table_rows = new Array();
+    add_header(table_rows);
+
+    fld = $('filter_select');
+    show_all = fld.options[fld.selectedIndex].value == 1;
+
+    // Update which mode this RedBox is running in.
+    $("selected_mode").innerHTML = variables.conf ? " (" + redbox_lib_mode_map[variables.conf.Mode] + " mode)" : "";
+
+    if (!variables.statu) {
+        // Show a row with "Not created"
+        table_rows.push(add_row("", undefined, undefined, undefined));
+    } else {
+        // Add data rows
+        Object.each(variables.nt_mac, function(record) {
+            if (record.key[0] == selected_inst && (show_all || record.val.PortARxWrongLanCnt !== 0 || record.val.PortBRxWrongLanCnt !== 0)) {
+                table_rows.push(add_row(record.key[1], record.val, variables.conf, variables.statu));
+                cnt++;
+            }
+        });
+
+        if (!cnt) {
+            // No rows were added.
+            if (variables.statu.OperState == "active") {
+                // It is active, so it's because there are no MAC addresses in
+                // the NodesTable
+                table_rows.push({fields: [{type: "empty_row", params: [16, "No MAC addresses"]}]});
+            } else {
+                // It is inactive, so show a row with "Inactive".
+                table_rows.push(add_row(undefined, undefined, undefined, variables.statu));
+            }
+        }
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Update which instance we are showing detailed NT for
+    $("selected_inst").innerHTML = selected_inst;
+
+    // Add table rows
+    nodesTable.addRows(add_rows());
+
+    // Update this dynamic table
+    nodesTable.update();
+
+    // Refresh timer
+    redbox_lib_autorefresh_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, statu: {}, nt_mac: {}};
+    redbox_lib_json_request(variables, processUpdate, selected_inst);
+}
+
+/******************************************************************************/
+// on_inst_select()
+/******************************************************************************/
+function on_inst_select(fld)
+{
+    selected_inst = fld.options[fld.selectedIndex].value;
+    requestUpdate();
+}
+
+/******************************************************************************/
+// on_filter_select()
+/******************************************************************************/
+function on_filter_select(fld)
+{
+    processUpdate();
+}
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    var inst, selector, option;
+
+    // Update instance selector combo box.
+    selector = $("inst_select");
+    clearChildNodes(selector);
+    for (inst = 1; inst <= globals.capabilities.InstCntMax; inst++) {
+        option = document.createElement("option");
+        option.appendChild(document.createTextNode("Instance #" + inst));
+        option.setAttribute("value", inst);
+        if (inst == selected_inst) {
+            option.setAttribute("selected", true);
+        }
+
+        selector.options.add(option);
+    }
+
+    requestUpdate();
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    // Create a form with table body for receive/transmit JSON data
+    nodesTable = new DynamicTable("nodesTableContent", "display");
+
+    redbox_lib_disable_button_add("inst_select");
+    redbox_lib_disable_button_add("autorefresh");
+    redbox_lib_disable_button_add("refresh_button");
+    redbox_lib_disable_button_add("clear_button");
+
+    globals = {capabilities: {}};
+    redbox_lib_json_request(globals, on_globals_received);
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>Detailed RedBox NodesTable for Instance #<span id="selected_inst"></span><span id="selected_mode"></span></h1>
+
+<div class="refreshbar">
+ <form action="#">
+  <select id="inst_select" onchange="on_inst_select(this);">
+     <option value="1">Instance #</option>
+  </select>
+
+  <select id="filter_select" onchange="on_filter_select(this);">
+     <option value="1">Show All</option>
+     <option value="2">Show Rx Wrong LAN</option>
+  </select>
+
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="redbox_lib_on_autorefresh_click();">
+  <input type="button" id="refresh_button" value="Refresh"   onClick="requestUpdate();         this.blur();">
+  <input type="button" id="clear_button"   value="Clear"     onClick="on_clear_button_click(); this.blur();">
+  <img id="redbox_update" alt="" src="images/updating.gif">
+  </form>
+</div>
+
+<div id="nodesTableContent"/>
+
+</body>
+</html>
+

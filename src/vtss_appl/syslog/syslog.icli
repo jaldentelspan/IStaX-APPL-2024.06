@@ -1,0 +1,1362 @@
+# Copyright (c) 2006-2021 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_SYSLOG)
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "syslog_api.h"
+#include "misc_api.h"   // For misc_str_is_ipv4(), misc_ipv4_txt(), misc_ipv6_txt()
+#include "mgmt_api.h"   // For mgmt_txt2ipv4(), mgmt_txt2ipv6()
+#include "msg_api.h"    // For msg_switch_exists()
+#include "topo_api.h"   // For topo_usid2isid(), topo_isid2usid()
+#include "vtss/appl/syslog.h"
+#include "vtss_icli_session.h"
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+#define ICLI_SESSION_CTRL_C_CHECK_CNT   100
+#define ICLI_SESSION_CTRL_C_WAIT        100     /* 0.1 secs */
+
+typedef enum {
+    SYS_MODE_CMD,
+    SYS_HOST_CMD,
+    SYS_LEVEL_CMD,
+    SYS_CMD_END
+}SYSLOG_ICLI_system_cmd_t;
+
+static BOOL SYSLOG_ICLI_runtime_has_dns(u32                session_id,
+                                        icli_runtime_ask_t ask,
+                                        icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+#if defined(VTSS_SW_OPTION_DNS)
+        runtime->present = TRUE;
+#else
+        runtime->present = FALSE;
+#endif /* VTSS_SW_OPTION_DNS */
+        return TRUE;
+    default :
+        break;
+    }
+    return FALSE;
+}
+
+static i32 SYSLOG_ICLI_system_set(u32 session_id, SYSLOG_ICLI_system_cmd_t cmd, const void* var, void* len)
+{
+    vtss_appl_syslog_server_conf_t conf;
+
+    ICLI_RC_CHECK(vtss_appl_syslog_server_conf_get(&conf), "%% Failed to get syslog configuration.\n");
+
+    switch (cmd) {
+        case SYS_MODE_CMD:
+        {
+            BOOL  original_mode;
+            original_mode = conf.server_mode;
+            conf.server_mode = *(BOOL*)var;
+            if (conf.server_mode != original_mode) {
+                ICLI_RC_CHECK(vtss_appl_syslog_server_conf_set(&conf), "%% Failed to set syslog configuration.\n");
+            }
+            break;
+        }
+        case SYS_HOST_CMD:
+        {
+            vtss_appl_syslog_server_conf_t newconf;
+            vtss_domain_name_t tmp;
+
+            newconf = conf;
+            tmp.name[0] = '\0';
+            strcpy(tmp.name, (char*)var);
+            if (strlen(tmp.name) == 0) {
+                newconf.syslog_server.type = VTSS_INET_ADDRESS_TYPE_NONE;
+                strcpy(newconf.syslog_server.address.domain_name.name, tmp.name);
+            } else if (misc_str_is_ipv4(tmp.name) == VTSS_RC_OK) {
+                newconf.syslog_server.type = VTSS_INET_ADDRESS_TYPE_IPV4;
+                (void)mgmt_txt2ipv4(tmp.name, &newconf.syslog_server.address.ipv4, NULL, FALSE);
+#if defined(VTSS_SW_OPTION_IPV6)
+            } else if (misc_str_is_ipv6(tmp.name) == VTSS_RC_OK) {
+                newconf.syslog_server.type = VTSS_INET_ADDRESS_TYPE_IPV6;
+                (void)mgmt_txt2ipv6(tmp.name, &newconf.syslog_server.address.ipv6);
+#endif /* VTSS_SW_OPTION_IPV6 */
+#if defined(VTSS_SW_OPTION_DNS)
+            } else {
+                newconf.syslog_server.type = VTSS_INET_ADDRESS_TYPE_DNS;
+                strcpy(newconf.syslog_server.address.domain_name.name, tmp.name);
+#endif /* VTSS_SW_OPTION_DNS */
+            }
+
+            if (memcmp(&newconf.syslog_server, &conf.syslog_server, sizeof(newconf.syslog_server))) {
+                ICLI_RC_CHECK(vtss_appl_syslog_server_conf_set(&newconf), "%% Failed to set syslog configuration.\n");
+            }
+            break;
+        }
+        case SYS_LEVEL_CMD:
+        {
+            vtss_appl_syslog_lvl_t tmp;
+            tmp = conf.syslog_level;
+            conf.syslog_level = *(vtss_appl_syslog_lvl_t*) var;
+            if (conf.syslog_level != tmp) {
+                ICLI_RC_CHECK(vtss_appl_syslog_server_conf_set(&conf), "%% Failed to set syslog configuration.\n");
+            }
+            break;
+        }
+        default:
+            ICLI_PRINTF("undkown cmd %d\n", cmd);
+            break;
+    }
+
+    return ICLI_RC_OK;
+}
+
+static void SYSLOG_ICLI_conf_show(u32 session_id)
+{
+    vtss_appl_syslog_server_conf_t  conf;
+    vtss_domain_name_t              tmp;
+
+    (void) vtss_appl_syslog_server_conf_get(&conf);
+    ICLI_PRINTF("Switch logging host mode is %s\n", icli_bool_txt(conf.server_mode));
+    tmp.name[0] = '\0';
+    if (conf.syslog_server.type == VTSS_INET_ADDRESS_TYPE_IPV4) {
+        (void)misc_ipv4_txt(conf.syslog_server.address.ipv4, tmp.name);
+#if defined(VTSS_SW_OPTION_IPV6)
+    } else if (conf.syslog_server.type == VTSS_INET_ADDRESS_TYPE_IPV6) {
+        (void)misc_ipv6_txt(&conf.syslog_server.address.ipv6, tmp.name);
+#endif /* VTSS_SW_OPTION_IPV6 */
+#if defined(VTSS_SW_OPTION_DNS)
+    } else if (conf.syslog_server.type == VTSS_INET_ADDRESS_TYPE_DNS) {
+        strcpy(tmp.name, conf.syslog_server.address.domain_name.name);
+#endif /* VTSS_SW_OPTION_DNS */
+    }
+    ICLI_PRINTF("Switch logging host address is %s\n", tmp.name[0] == '\0' ? "null" : tmp.name);
+    ICLI_PRINTF("Switch logging level is %s\n\n", syslog_lvl_to_string(conf.syslog_level, TRUE));
+}
+
+static void SYSLOG_ICLI_entry_show(u32 session_id, vtss_usid_t usid, u32 log_id, BOOL info, BOOL notice, BOOL warning, BOOL error, BOOL display_conf)
+{
+    syslog_ram_entry_t  entry;
+    syslog_ram_stat_t   stat;
+    u32                 total;
+    u32                 lvl;
+    BOOL                bool_rc, exact = (log_id == 0) ? FALSE : TRUE, first = TRUE;
+    int                 i;
+    vtss_usid_t         usid_idx, usid_idx_start, usid_idx_end;
+    vtss_isid_t         isid;
+    u32                 entry_cnt = 0;
+    if (usid != VTSS_USID_END) {
+        usid_idx_start = usid_idx_end = usid;
+        if (!icli_cmd_switch_exist(session_id, usid, TRUE, TRUE)) {
+            return;
+        }
+    } else {
+        usid_idx_start = VTSS_USID_START;
+        usid_idx_end = VTSS_USID_END - 1;
+    }
+
+    if (display_conf) {
+        SYSLOG_ICLI_conf_show(session_id);
+    }
+
+    for (usid_idx = usid_idx_start; usid_idx <= usid_idx_end; usid_idx++) {
+        isid = topo_usid2isid(usid_idx);
+        if (!icli_cmd_switch_exist(session_id, usid_idx, usid != VTSS_USID_END ? TRUE : FALSE, usid != VTSS_USID_END ? TRUE : FALSE)) {
+            continue;
+        }
+        if (FALSE == exact) {
+            if (syslog_ram_stat_get(isid, &stat) == VTSS_RC_OK) {
+                ICLI_PRINTF("Number of entries:\n");
+                for (total = 0, lvl = VTSS_APPL_SYSLOG_LVL_START; lvl <= VTSS_APPL_SYSLOG_LVL_END; lvl++) {
+                    total += stat.count[lvl];
+                    ICLI_PRINTF("%-13s: %lu\n", syslog_lvl_to_string(vtss_appl_syslog_lvl(lvl), FALSE), stat.count[lvl]);
+                }
+                ICLI_PRINTF("%-13s: %u\n\n", "All", total);
+            }
+
+        }
+
+        entry.id = exact ? log_id : 0;
+        while (TRUE == (bool_rc = syslog_ram_get(isid, exact ? FALSE : TRUE, entry.id, VTSS_APPL_SYSLOG_LVL_ALL, VTSS_MODULE_ID_NONE, &entry))) {
+            if (exact ||
+                (info && entry.lvl == VTSS_APPL_SYSLOG_LVL_INFO) ||
+                (notice && entry.lvl == VTSS_APPL_SYSLOG_LVL_NOTICE) ||
+                (warning && entry.lvl == VTSS_APPL_SYSLOG_LVL_WARNING) ||
+                (error && entry.lvl == VTSS_APPL_SYSLOG_LVL_ERROR)) {
+                const char msg_space_prefix[100] = "                           "; // Spaces in front the of the message, in order to get it just below the time
+                icli_session_handle_t   *handle = vtss_icli_session_handle_get(session_id); // In order to get the terminal width
+                // Header
+                if (TRUE == first) {
+                    ICLI_PRINTF("ID          Level          Time & Message\n");
+                    ICLI_PRINTF("----------  -------------  --------------\n");
+
+                }
+
+
+                ICLI_PRINTF("%10lu  %-13s  %s\n",
+                        entry.id,
+                        syslog_lvl_to_string(entry.lvl, FALSE),
+                        misc_time2str(entry.time));
+
+                // Message
+                ICLI_PRINTF("%s", msg_space_prefix);
+                u32 line_width = strlen(msg_space_prefix);
+                for (i = 0; i < VTSS_APPL_SYSLOG_MIB_MSG_TEXT_LEN_MAX; i++) {
+                    if (entry.msg[i] == '\n' || entry.msg[i] == '\0') {
+                       ICLI_PRINTF("\n");
+                       break;
+                    }
+
+                    line_width++;
+
+                    // New line if we exceed the termnal width
+                    if (line_width > handle->config_data->width && handle->config_data->width!=0) {
+                       T_I("line_width:%d, width:%d", line_width, handle->config_data->width);
+                       ICLI_PRINTF("\n%s", msg_space_prefix);
+                       line_width = strlen(msg_space_prefix);
+                    }
+
+                    ICLI_PRINTF("%.1s", &entry.msg[i]);
+
+                    if (i == VTSS_APPL_SYSLOG_MIB_MSG_TEXT_LEN_MAX - 1) {
+                      ICLI_PRINTF("...");
+                      T_W("Max length for syslog msg line exceeded (%d)", VTSS_APPL_SYSLOG_MIB_MSG_TEXT_LEN_MAX);
+                    }
+                }
+
+                ICLI_PRINTF("\n");
+                first = FALSE;
+            }
+
+            if (TRUE == exact) {
+                break;
+            }
+        }
+
+        if (first == TRUE && exact && log_id && bool_rc == FALSE) {
+            ICLI_PRINTF("Cannot find syslog ID %u.\n", log_id);
+        }
+
+        /* Check if break condition (ctrl+c) occured */
+        if (((++entry_cnt % ICLI_SESSION_CTRL_C_CHECK_CNT) == 0) &&
+            icli_session_ctrl_c_get(session_id, ICLI_SESSION_CTRL_C_WAIT) == ICLI_RC_OK) {
+            break;
+        }
+    }
+}
+
+static void SYSLOG_ICLI_acl_pkt_dump(u32 session_id, char *logging_msg)
+{
+#define ICLI_DISPLAY_BUF_MAX 1280
+    int msg_len = strlen(logging_msg);
+    char *p = logging_msg;
+
+    while (msg_len > 0) {
+        if (msg_len < ICLI_DISPLAY_BUF_MAX) {
+            ICLI_PRINTF("%s", p);
+            break;
+        } else {
+            char tmep_char = *(p + ICLI_DISPLAY_BUF_MAX);
+            *(p + ICLI_DISPLAY_BUF_MAX) = '\0';
+            ICLI_PRINTF("%s", p);
+            *(p + ICLI_DISPLAY_BUF_MAX) = tmep_char;
+            p += ICLI_DISPLAY_BUF_MAX;
+            msg_len -= ICLI_DISPLAY_BUF_MAX;
+        }
+    }
+}
+
+static void SYSLOG_ICLI_entry_show_detail(u32 session_id, vtss_usid_t usid, u32 log_id)
+{
+    syslog_ram_entry_t  entry;
+    BOOL                bool_rc, first = TRUE;
+    vtss_usid_t         usid_idx, usid_idx_start, usid_idx_end;
+    vtss_isid_t         isid;
+
+    if (usid != VTSS_USID_END) {
+        usid_idx_start = usid_idx_end = usid;
+        if (!icli_cmd_switch_exist(session_id, usid, TRUE, TRUE)) {
+            return;
+        }
+    } else {
+        usid_idx_start = VTSS_USID_START;
+        usid_idx_end = VTSS_USID_END - 1;
+    }
+
+    for (usid_idx = usid_idx_start; usid_idx <= usid_idx_end; usid_idx++) {
+        isid = topo_usid2isid(usid_idx);
+        if (!icli_cmd_switch_exist(session_id, usid_idx, usid != VTSS_USID_END ? TRUE : FALSE, usid != VTSS_USID_END ? TRUE : FALSE)) {
+            continue;
+        }
+        entry.id = log_id;
+        if ((bool_rc = syslog_ram_get(isid, FALSE, entry.id, VTSS_APPL_SYSLOG_LVL_ALL, VTSS_MODULE_ID_NONE, &entry))) {
+            if (!first) {
+                ICLI_PRINTF("\n");
+            }
+            first = FALSE;
+
+            /* Detailed information */
+            ICLI_PRINTF("ID     : %lu\n", entry.id);
+            ICLI_PRINTF("Level  : %s\n", syslog_lvl_to_string(entry.lvl, FALSE));
+            ICLI_PRINTF("Time   : %s\n", misc_time2str(entry.time));
+            ICLI_PRINTF("Message:\n");
+            SYSLOG_ICLI_acl_pkt_dump(session_id, (char *)entry.msg);
+            ICLI_PRINTF("\n");
+        }
+
+        if (log_id && bool_rc == FALSE) {
+            ICLI_PRINTF("Cannot find syslog ID %u.\n", log_id);
+        }
+
+        /* Check if break condition (ctrl+c) occured */
+        if (icli_session_ctrl_c_get(session_id, ICLI_SESSION_CTRL_C_WAIT) == ICLI_RC_OK) {
+            break;
+        }
+    }
+}
+
+#ifdef VTSS_SW_OPTION_JSON_RPC_NOTIFICATION
+static void SYSLOG_ICLI_create_notification_listen(u32 session_id, const char *name, const char *node, vtss_appl_syslog_lvl_t level)
+{
+    vtss_appl_syslog_notif_name_t nm;
+    vtss_appl_syslog_notif_conf_t conf;
+    if (name == nullptr) {
+        icli_session_self_printf("   Error: Missing name of notification");
+        return;
+    }
+    if (node == nullptr) {
+        icli_session_self_printf("   Error: Missing node to listen to");
+        return;
+    }
+    if (strlen(name) >= VTSS_APPL_SYSLOG_ENTRY_NAME_SIZE-1) {
+        icli_session_self_printf("   Error: Strlen of Name=\"%s\" too big %zd >= %d\n",
+               name, strlen(name), VTSS_APPL_SYSLOG_ENTRY_NAME_SIZE-1);
+        return;
+    }
+    if (strlen(node) >= ALARM_NAME_SIZE-1) {
+        icli_session_self_printf("   Error: Strlen of node=\"%s\" too big %zd >= %d\n",
+               name, strlen(name), ALARM_NAME_SIZE-1);
+        return;
+    }
+    strncpy(nm.notif_name, name, VTSS_APPL_SYSLOG_ENTRY_NAME_SIZE);
+    strncpy(conf.notification, node, ALARM_NAME_SIZE);
+    conf.level = level;
+    switch (vtss_appl_syslog_notif_add(&nm, &conf)) {
+    case VTSS_RC_OK:
+        break;
+    case VTSS_RC_ERROR_SYSLOG_ALREADY_DEFINED:
+        ICLI_PRINTF("Cannot create notification listen %s %s, %s already defined\n", name, node, name);
+        break;
+    case VTSS_RC_ERROR_SYSLOG_NO_SUCH_NOTIFICATION_SOURCE:
+        ICLI_PRINTF("Cannot create notification listen %s %s, %s not found\n", name, node, node);
+        break;
+    default:
+        ICLI_PRINTF("Cannot create notification listen %s %s\n", name, node);
+        break;
+    }
+}
+
+static void SYSLOG_ICLI_delete_notification_listen(u32 session_id, const char *name)
+{
+    vtss_appl_syslog_notif_name_t nm;
+    if (name == nullptr) {
+        for (auto rc = vtss_appl_syslog_notif_itr(nullptr,&nm);
+                  rc == VTSS_RC_OK;
+                  rc = vtss_appl_syslog_notif_itr(&nm,&nm)) {
+            switch (vtss_appl_syslog_notif_del(&nm)) {
+            case VTSS_RC_OK:
+                break;
+            default:
+                ICLI_PRINTF("Cannot delete notification listen %s\n", nm.notif_name);
+            }
+        }
+        return;
+    }
+    if (strlen(name) >= VTSS_APPL_SYSLOG_ENTRY_NAME_SIZE) {
+        icli_session_self_printf("   Error: Strlen of Name=\"%s\" too big %zd >= %d\n",
+               name, strlen(name), VTSS_APPL_SYSLOG_ENTRY_NAME_SIZE);
+        return;
+    }
+    strncpy(nm.notif_name, name, VTSS_APPL_SYSLOG_ENTRY_NAME_SIZE);
+    switch (vtss_appl_syslog_notif_del(&nm)) {
+    case VTSS_RC_OK:
+        break;
+    case VTSS_RC_ERROR_SYSLOG_NOT_FOUND:
+        ICLI_PRINTF("Cannot delete notification listen %s, not found\n", name);
+        break;
+    default:
+        ICLI_PRINTF("Cannot delete notification listen %s\n", name);
+    }
+}
+#endif // VTSS_SW_OPTION_JSON_RPC_NOTIFICATION
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+HELP_LOGGING         = System logging message
+HELP_ON              = Enable Switch logging host mode
+HELP_HOST            = host
+HELP_LEVEL           = Severity level
+HELP_LEVEL_EMERGENCY = Severity 0: System is unusable
+HELP_LEVEL_ALERT     = Severity 1: Action must be taken immediately
+HELP_LEVEL_CRITICAL  = Severity 2: Critical conditions
+HELP_LEVEL_ERROR     = Severity 3: Error conditions
+HELP_LEVEL_WARNING   = Severity 4: Warning conditions
+HELP_LEVEL_NOTICE    = Severity 5: Normal but significant condition
+HELP_LEVEL_INFO      = Severity 6: Informational messages
+HELP_LEVEL_DEBUG     = Severity 7: Debug-level messages
+HELP_NOTIFICATION    = notification
+HELP_LISTEN          = listen
+HELP_LISTEN_NAME     = A name identifying the listen command
+HELP_NODE_NAME       = Identification of the notification source
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show logging [ informational ] [ notice ] [ warning ] [ error ]
+
+DOC_CMD_DESC    = Use the show logging privileged EXEC command without \
+                  keywords to display the logging configuration, or \
+                  particularly the logging message summary for the logging level.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Expressions are case sensitive. For example, if you enter | exclude output, the lines that contain output do not appear, but the lines that contain Output appear.
+DOC_CMD_EXAMPLE = This is an example of output from the show logging command:
+DOC_CMD_EXAMPLE = Switch# show logging
+DOC_CMD_EXAMPLE = Switch logging host mode is disabled
+DOC_CMD_EXAMPLE = Switch logging host address is null
+DOC_CMD_EXAMPLE = Switch logging level is informational
+DOC_CMD_EXAMPLE = Number of entries:
+DOC_CMD_EXAMPLE = Error    : 1
+DOC_CMD_EXAMPLE = Warning  : 0
+DOC_CMD_EXAMPLE = Notice   : 0
+DOC_CMD_EXAMPLE = Info.    : 1
+DOC_CMD_EXAMPLE = All      : 2
+DOC_CMD_EXAMPLE = ID          Level      Time & Message
+DOC_CMD_EXAMPLE = --          -----      --------------
+DOC_CMD_EXAMPLE =          1  Info.      1970-01-01T00:00:00+00:00
+DOC_CMD_EXAMPLE =                        Switch just made a cool boot.
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE =          2  Error      1970-01-01T00:00:05+00:00
+DOC_CMD_EXAMPLE =                        LINK-UPDOWN: Interface GigabitEthernet 1/1, chan
+DOC_CMD_EXAMPLE =                        ged state to up.
+
+FUNC_NAME = icli_logging_summary
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+! 1: show
+! 2: logging
+! 3: informational
+! 4: notice
+! 5: warning
+! 6: error
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_info
+CMD_VAR = has_notice
+CMD_VAR = has_warning
+CMD_VAR = has_error
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##HELP_LOGGING
+HELP = ##HELP_LEVEL_INFO
+HELP = ##HELP_LEVEL_NOTICE
+HELP = ##HELP_LEVEL_WARNING
+HELP = ##HELP_LEVEL_ERROR
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_info == FALSE &&
+        has_notice == FALSE &&
+        has_warning == FALSE &&
+        has_error == FALSE) {
+        SYSLOG_ICLI_entry_show(session_id, VTSS_USID_END, 0, TRUE, TRUE, TRUE, TRUE, TRUE);
+    } else {
+        SYSLOG_ICLI_entry_show(session_id, VTSS_USID_END, 0, has_info, has_notice, has_warning, has_error, TRUE);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show logging <1-4294967295>
+
+DOC_CMD_DESC    = Use the show logging privileged EXEC command with logging ID \
+                  to display the detail logging message.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Display the detail logging message.
+DOC_CMD_EXAMPLE = This is an example of output from the show logging ID 1 command:
+DOC_CMD_EXAMPLE = Switch# show logging 1
+DOC_CMD_EXAMPLE = ID     : 5
+DOC_CMD_EXAMPLE = Level  : Info
+DOC_CMD_EXAMPLE = Time   : 1970-01-01T00:00:59+00:00
+DOC_CMD_EXAMPLE = Message:
+DOC_CMD_EXAMPLE = Frame of 473 bytes received on port 13
+DOC_CMD_EXAMPLE = MAC:
+DOC_CMD_EXAMPLE =   Destination: 00-01-c1-00-4b-c0
+DOC_CMD_EXAMPLE =   Source     : 68-b5-99-f9-63-1f
+DOC_CMD_EXAMPLE =   Type/Length: 0x0800
+DOC_CMD_EXAMPLE =   VLAN ID    : 1
+DOC_CMD_EXAMPLE = Frame Dump:
+DOC_CMD_EXAMPLE = 0000: 00 01 C1 00 4B C0 68 B5-99 F9 63 1F 08 00 45 00
+DOC_CMD_EXAMPLE = 0010: 01 CB 7F B3 40 00 80 06-FC 95 0A 09 34 67 0A 09
+DOC_CMD_EXAMPLE = 0020: 34 6B DC 03 00 50 E3 DD-C8 8D EB 62 07 0C 50 18
+DOC_CMD_EXAMPLE = 0030: 00 FA 95 C7 00 00 47 45-54 20 2F 61 63 6C 2E 68
+DOC_CMD_EXAMPLE = 0040: 74 6D 20 48 54 54 50 2F-31 2E 31 0D 0A 48 6F 73
+
+FUNC_NAME = icli_logging_detail
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+! 1: show
+! 2: logging
+! 3: <log_id:1-4294967295>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = log_id
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##HELP_LOGGING
+HELP = Logging ID
+
+BYWORD =
+BYWORD =
+BYWORD = <logging_id: 1-4294967295>
+
+VARIABLE_BEGIN
+
+VARIABLE_END
+
+CODE_BEGIN
+    SYSLOG_ICLI_entry_show_detail(session_id, VTSS_USID_END, log_id);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = clear logging [ informational ] [ notice ] [ warning ] [ error ]
+
+DOC_CMD_DESC    = Use the clear logging privileged EXEC \
+                  command to clear the logging message.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use this command without keywords to clear all logging messages, particularly the logging message for the logging level.
+DOC_CMD_EXAMPLE = This example shows how to clear the logging message of error level:
+DOC_CMD_EXAMPLE = Switch# clear logging warning
+DOC_CMD_EXAMPLE = You can verify that the information was deleted by entering the show logging privileged EXEC command.
+
+FUNC_NAME = icli_logging_clear
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+! 1: clear
+! 2: logging
+! 3: info
+! 4: notice
+! 5: warning
+! 6: error
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_info
+CMD_VAR = has_notice
+CMD_VAR = has_warning
+CMD_VAR = has_error
+
+HELP = ##ICLI_HELP_CLEAR
+HELP = ##HELP_LOGGING
+HELP = ##HELP_LEVEL_INFO
+HELP = ##HELP_LEVEL_NOTICE
+HELP = ##HELP_LEVEL_WARNING
+HELP = ##HELP_LEVEL_ERROR
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_isid_t isid;
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_usid_t usid_idx;
+
+    for (usid_idx = VTSS_USID_START; usid_idx < VTSS_USID_END; usid_idx++) {
+        isid = topo_usid2isid(usid_idx);
+        if (!icli_cmd_switch_exist(session_id, usid_idx, FALSE, FALSE)) {
+            continue;
+        }
+
+        if ((!has_info && !has_notice && !has_warning && !has_error) || (has_info && has_notice && has_warning && has_error)) {
+            syslog_ram_clear(isid, VTSS_APPL_SYSLOG_LVL_ALL);
+            continue;
+        }
+
+        syslog_ram_clear(isid, has_info ? VTSS_APPL_SYSLOG_LVL_INFO : has_notice ? VTSS_APPL_SYSLOG_LVL_NOTICE : has_warning ? VTSS_APPL_SYSLOG_LVL_WARNING : VTSS_APPL_SYSLOG_LVL_ERROR);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = logging on
+
+DOC_CMD_DESC    = Use the logging on global configuration command to \
+                  enable the logging server. Use the no form of this \
+                  command to disable the logging server.
+DOC_CMD_DEFAULT = The logging server is disabled.
+DOC_CMD_USAGE   = Enable the logging server.
+DOC_CMD_EXAMPLE = This example shows how to enable the logging server:
+DOC_CMD_EXAMPLE = Switch(config)# logging on
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show logging privileged EXEC command.
+
+NO_FORM_DOC_CMD_DESC    = Use the no logging on global configuration command to \
+                          disable the logging server.
+NO_FORM_DOC_CMD_DEFAULT = The logging is disabled.
+NO_FORM_DOC_CMD_USAGE   = Disable the logging server.
+NO_FORM_DOC_CMD_EXAMPLE = This example shows how to disable the logging server:
+NO_FORM_DOC_CMD_EXAMPLE = Switch(config)# no logging on
+NO_FORM_DOC_CMD_EXAMPLE = You can verify your settings by entering the show logging privileged EXEC command.
+
+FUNC_NAME = icli_logging_server_mode
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: logging
+! 2: on
+
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##HELP_LOGGING
+HELP = ##HELP_ON
+
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    BOOL mode = TRUE;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    BOOL mode = FALSE;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC_CHECK(SYSLOG_ICLI_system_set(session_id, SYS_MODE_CMD, &mode, NULL), NULL);
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC_CHECK(SYSLOG_ICLI_system_set(session_id, SYS_MODE_CMD, &mode, NULL), NULL);
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = logging host { <ipv4_ucast> | <domain_name> }
+
+DOC_CMD_DESC    = Use the logging host global configuration command \
+                  to configure the host address of logging server.
+DOC_CMD_DEFAULT = The logging host address is null.
+DOC_CMD_USAGE   = Configure the host address of logging server. If the switch provide DNS feature, it also can be a host name.
+DOC_CMD_EXAMPLE = This example shows how to configure the host address of logging server:
+DOC_CMD_EXAMPLE = Switch(config)# logging host 192.168.2.1
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show logging privileged EXEC command.
+
+FUNC_NAME = icli_logging_server_addr
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = SYSLOG_ICLI_runtime_has_dns
+
+! 1: logging
+! 2: host
+! 3: <ipv4_ucast>
+! 4: <domain_name>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = ipv4_addr
+CMD_VAR = domain_name
+
+
+HELP = ##HELP_LOGGING
+HELP = ##HELP_HOST
+HELP = The IPv4 address of the log server
+HELP = ##ICLI_HELP_DOMAIN_NAME
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+
+VARIABLE_BEGIN
+    char host_addr_txt[VTSS_APPL_SYSUTIL_INPUT_DOMAIN_NAME_LEN + 1];
+VARIABLE_END
+
+CODE_BEGIN
+    host_addr_txt[0] = '\0';
+    if (domain_name) {
+        strcpy(host_addr_txt, domain_name);
+    } else if (ipv4_addr) {
+        (void)misc_ipv4_txt(ipv4_addr, host_addr_txt);
+    } else {
+        ICLI_PRINTF("%% Worng domain name for the syslog server.\n");
+        return ICLI_RC_ERROR;
+    }
+    ICLI_RC_CHECK(SYSLOG_ICLI_system_set(session_id, SYS_HOST_CMD, host_addr_txt, NULL), NULL);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no logging host
+
+DOC_CMD_DESC    = Use the no logging host global configuration command \
+                  to clear the host address of logging server.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Clear the host address of logging server.
+DOC_CMD_EXAMPLE = This example shows how to clear the host address of logging server:
+DOC_CMD_EXAMPLE = Switch(config)# no logging host
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show logging privileged EXEC command.
+
+FUNC_NAME = icli_logging_server_addr_clear
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: no
+! 2: logging
+! 3: host
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_NO
+HELP = ##HELP_LOGGING
+HELP = ##HELP_HOST
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC_CHECK(SYSLOG_ICLI_system_set(session_id, SYS_HOST_CMD, "", NULL), NULL);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = logging level { informational | notice | warning | error }
+
+DOC_CMD_DESC    = Use the logging level global configuration command \
+                  to configure what level of message will send to logging server.
+DOC_CMD_DEFAULT = logging level is information.
+DOC_CMD_USAGE   = Configure the logging level that if a logging message level is less or equal than the configured value, it will send to logging server.
+DOC_CMD_EXAMPLE = This example shows how to configure logging error level:
+DOC_CMD_EXAMPLE = Switch(config)# logging level error
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show logging privileged EXEC command.
+
+FUNC_NAME = icli_logging_level
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+
+! 1: logging
+! 2: level
+! 3: info
+! 4: notice
+! 5: warning
+! 6: error
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_info
+CMD_VAR = has_notice
+CMD_VAR = has_warning
+CMD_VAR = has_error
+
+HELP = ##HELP_LOGGING
+HELP = ##HELP_LEVEL
+HELP = ##HELP_LEVEL_INFO
+HELP = ##HELP_LEVEL_NOTICE
+HELP = ##HELP_LEVEL_WARNING
+HELP = ##HELP_LEVEL_ERROR
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    u32 lvl;
+VARIABLE_END
+
+CODE_BEGIN
+    lvl = has_info ? VTSS_APPL_SYSLOG_LVL_INFO : has_notice ? VTSS_APPL_SYSLOG_LVL_NOTICE : has_warning ? VTSS_APPL_SYSLOG_LVL_WARNING : has_error ? VTSS_APPL_SYSLOG_LVL_ERROR : -1;
+    ICLI_RC_CHECK(SYSLOG_ICLI_system_set(session_id, SYS_LEVEL_CMD, &lvl, NULL), NULL);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug logging test [ level { informational | notice | warning | error } ] [ target { ram | flash } ] [repeat <1-65535>]
+
+DOC_CMD_DESC    = Use the debug logging test level debug command \
+                  to add test logging message for debug purpose.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Add test logging message for debug purpose.
+DOC_CMD_EXAMPLE = This example shows how to add an test logging message with information level on RAM:
+DOC_CMD_EXAMPLE = Switch# debug logging test
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show logging privileged EXEC command.
+
+FUNC_NAME = icli_logging_test
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! 1: debug
+! 2: logging
+! 3: test
+! 4: level
+! 5: info
+! 6: notice
+! 7: warning
+! 8: error
+! 9: target
+! 10: ram
+! 11: flash
+! 12: repeat
+! 13: <repeat_cnt:1-65535>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_notice
+CMD_VAR = has_warning
+CMD_VAR = has_error
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_flash
+CMD_VAR = has_repeat
+CMD_VAR = repeat_cnt
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_LOGGING
+HELP = Add test logging message
+HELP = ##HELP_LEVEL
+HELP = ##HELP_LEVEL_INFO
+HELP = ##HELP_LEVEL_NOTICE
+HELP = ##HELP_LEVEL_WARNING
+HELP = ##HELP_LEVEL_ERROR
+HELP = Target of test logging message
+HELP = Add test logging message on RAM
+HELP = Add test logging message on Flash
+HELP = Repeat
+HELP = repeat count
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss_appl_syslog_lvl_t lvl;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_repeat) {
+        repeat_cnt = 1;
+    }
+
+    lvl = has_error ? VTSS_APPL_SYSLOG_LVL_ERROR : has_warning ? VTSS_APPL_SYSLOG_LVL_WARNING : has_notice ? VTSS_APPL_SYSLOG_LVL_NOTICE : VTSS_APPL_SYSLOG_LVL_INFO;
+    while (repeat_cnt--) {
+        if (has_flash) {
+            syslog_flash_log(SYSLOG_CAT_DEBUG, lvl, "This is a syslog test message.");
+        } else {
+            syslog_ram_log(lvl, VTSS_MODULE_ID_ICLI, VTSS_ISID_END, fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT), "This is a syslog test message.");
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug logging flash [ category { debug | system | application } ] [ level { informational | notice | warning | error } ]
+
+DOC_CMD_DESC    = Use the debug logging flash debug command \
+                  to show the logging message on Flash.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Show the logging message on Flash.
+DOC_CMD_EXAMPLE = This example shows how to display the logging message on Flash:
+DOC_CMD_EXAMPLE = Switch# debug logging flash
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show logging privileged EXEC command.
+
+FUNC_NAME = icli_logging_show_flash
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! 1: debug
+! 2: logging
+! 3: flash
+! 4: category
+! 5: debug
+! 6: system
+! 7: application
+! 8: level
+! 9: info
+! 10: notice
+! 11: warning
+! 12: error
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_cat_debug
+CMD_VAR = has_cat_system
+CMD_VAR = has_cat_appl
+CMD_VAR =
+CMD_VAR = has_info
+CMD_VAR = has_notice
+CMD_VAR = has_warning
+CMD_VAR = has_error
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_LOGGING
+HELP = Logging message on Flash
+HELP = Category of logging message
+HELP = Debug category
+HELP = System category
+HELP = Application category
+HELP = ##HELP_LEVEL
+HELP = ##HELP_LEVEL_INFO
+HELP = ##HELP_LEVEL_NOTICE
+HELP = ##HELP_LEVEL_WARNING
+HELP = ##HELP_LEVEL_ERROR
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    syslog_cat_t cat;
+    vtss_appl_syslog_lvl_t lvl;
+VARIABLE_END
+
+CODE_BEGIN
+    cat = has_cat_debug ? SYSLOG_CAT_DEBUG : has_cat_system ? SYSLOG_CAT_SYSTEM : has_cat_appl ? SYSLOG_CAT_APP : SYSLOG_CAT_ALL;
+    lvl = has_info ? VTSS_APPL_SYSLOG_LVL_INFO : has_notice ? VTSS_APPL_SYSLOG_LVL_NOTICE : has_warning ? VTSS_APPL_SYSLOG_LVL_WARNING : has_error ? VTSS_APPL_SYSLOG_LVL_ERROR : VTSS_APPL_SYSLOG_LVL_ALL;
+
+    syslog_flash_print(cat, lvl, icli_session_self_printf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug logging erase
+
+DOC_CMD_DESC    = Use the debug logging erase debug command \
+                  to clear all logging messages on Flash.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Clear all logging messages on Flash.
+DOC_CMD_EXAMPLE = This example shows how to clear all logging messages on Flash:
+DOC_CMD_EXAMPLE = Switch# debug logging erase
+DOC_CMD_EXAMPLE = You can verify that the information was deleted by entering the debug show flash logging debug command.
+
+FUNC_NAME = icli_logging_erase
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+! 1: debug
+! 2: logging
+! 3: erase
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_LOGGING
+HELP = Clear all logging messages on Flash
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Deleting syslog from flash...");
+    if (syslog_flash_erase()) {
+        ICLI_PRINTF("Done!\n");
+    } else {
+        ICLI_PRINTF("Flash is in use by another process. Please try again later...\n");
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_JSON_RPC_NOTIFICATION)
+
+COMMAND = logging notification listen <kword127> level { informational | notice | warning | error } <line255>
+
+DOC_CMD_DESC    = Use the command to enable logging of state changes for specified variable
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = This example shows how to enable logging of all state changes for a port
+DOC_CMD_EXAMPLE = Switch# logging notif listen PortStatus level warning port.status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_STRICTLY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+! logging
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_LOGGING
+BYWORD  =
+
+! notification
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_NOTIFICATION
+BYWORD  =
+
+! listen
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_LISTEN
+BYWORD  =
+
+! name
+CMD_VAR = name
+RUNTIME =
+HELP    = ##HELP_LISTEN_NAME
+BYWORD  = <name : kword127>
+
+! level
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_LEVEL
+BYWORD  =
+
+! informational
+CMD_VAR = has_info
+RUNTIME =
+HELP    = ##HELP_LEVEL_INFO
+BYWORD  =
+
+! notice
+CMD_VAR = has_notice
+RUNTIME =
+HELP    = ##HELP_LEVEL_NOTICE
+BYWORD  =
+
+! warning
+CMD_VAR = has_warning
+RUNTIME =
+HELP    = ##HELP_LEVEL_WARNING
+BYWORD  =
+
+! error
+CMD_VAR = has_error
+RUNTIME =
+HELP    = ##HELP_LEVEL_ERROR
+BYWORD  =
+
+! node
+CMD_VAR = node
+RUNTIME =
+HELP    = ##HELP_NODE_NAME
+BYWORD  = <node : kword127>
+
+
+CODE_BEGIN
+    vtss_appl_syslog_lvl_t level = VTSS_APPL_SYSLOG_LVL_ERROR;
+    if (has_info) {
+        level = VTSS_APPL_SYSLOG_LVL_INFO;
+    }
+    if (has_notice) {
+        level = VTSS_APPL_SYSLOG_LVL_NOTICE;
+    }
+    if (has_warning) {
+        level = VTSS_APPL_SYSLOG_LVL_WARNING;
+    }
+    if (has_error) {
+        level = VTSS_APPL_SYSLOG_LVL_ERROR;
+    }
+    SYSLOG_ICLI_create_notification_listen(session_id,name,node,level);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_JSON_RPC_NOTIFICATION)
+
+COMMAND = no logging notification listen [ <kword127> ]
+
+DOC_CMD_DESC    = Use the command to disable logging of state changes for specified variable
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = This example shows how to disable logging of all state changes for a port
+DOC_CMD_EXAMPLE = Switch# no logging notif listen PortStatus port.status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_STRICTLY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+BYWORD  =
+
+! logging
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_LOGGING
+BYWORD  =
+
+! notification
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_NOTIFICATION
+BYWORD  =
+
+! listen
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_LISTEN
+BYWORD  =
+
+! listen
+CMD_VAR = name
+RUNTIME =
+HELP    = ##HELP_LISTEN_NAME
+BYWORD  = <name : kword127>
+
+CODE_BEGIN
+    SYSLOG_ICLI_delete_notification_listen(session_id,name);
+CODE_END
+
+CMD_END

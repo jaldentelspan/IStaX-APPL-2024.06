@@ -1,0 +1,198 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>VLAN Translation Port Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_vlan_trans_port_config.htm";
+
+var pageArgs = searchArgs(window.location.search);
+if (pageArgs.IF_error && parseInt(pageArgs.IF_error, 10) == 1) {
+    alert("Error(s) while refreshing the VLAN Translation Interface Configuration. One or more interfaces may have not been updated successfully.");
+}
+
+var timerID;
+var timeOut = settingsRefreshInterval();
+var portcount = configNormalPortMax - configPortMin + 1;
+var oTGroup = genArrayStr(1, portcount);
+var oVGroup = genArrayInt(1, portcount);
+
+function addRow(index, frag, values)
+{
+    var portno = parseInt(values[0], 10);
+    var tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    //port number
+    addTextCell(tr, portno, "cr");
+    //Default
+    addCheckBoxCell(tr, parseInt(values[1], 10), "c", "default_" + portno);
+    //Group ID
+    addSelectCell(tr, oTGroup, oVGroup, parseInt(values[2], 10), "cr", "group_id_" + portno);
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+/*
+ * Format:
+ * <port 1>|<port 2>|<port 3>|...<port n>
+ * 
+ * port x :== <port_no>#<default>#<group_id>
+ *   port_no   :== 1..max
+ *   default   :== 1 for default, 0 for manual
+ *   group_id  :== 1..max
+ */
+function processUpdate(req, ref)
+{
+    if (req.responseText) {
+        var portconfig = req.responseText.split("|");
+        var frag = document.createDocumentFragment();
+        for (var i = 0; i < portconfig.length; i++) {
+            if (portconfig[i]) {
+                var pval = portconfig[i].split("#");
+                addRow(i, frag, pval);
+            }
+        }
+ 
+        var tbody = document.getElementById(ref);
+        clearChildNodes(tbody);
+        tbody.appendChild(frag);
+        var cBar = new HeaderControlBar([{text: "*", className: "cr"},
+                                         {name: "default_"},
+                                         {name: "group_id_"}]);
+        cBar.construct(ref);
+    } else {
+        SpomHandleError();
+    }
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+    updateFuncBar(1);
+}
+
+function chkRefresh(fld) {
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        requestUpdate(0);
+    }
+}
+
+function requestUpdate() {
+    if (SpomNavigationLoading()) {
+        return; // Bail out, navigation will trigger update
+    }
+    updateFuncBar(0);
+    loadXMLDoc(SpomAddSidArg("/config/port2group_conf"), processUpdate, 'vtportData');
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    requestUpdate();            // Update page to reflect selector
+}
+
+function updateFuncBar(enable)
+{
+    if (enable) {
+        document.getElementById("refresh").style.visibility = "visible";
+        document.getElementById("update").style.visibility = "hidden";
+    } else {
+        document.getElementById("refresh").style.visibility = "hidden";
+        document.getElementById("update").style.visibility = "visible";
+    }
+}
+
+</script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+<div class="refreshbar">
+<form action="#">
+<label for="autorefresh">Auto-refresh</label>
+<input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+ <input type="button" id="refresh" value="Refresh" onClick="requestUpdate(); this.blur(); " style="visibility:hidden">
+  <span id="update">&nbsp;Updating...</span>
+ </form>
+</div>
+
+<h1>VLAN Translation Port Configuration <span id="display_sid"></span></h1>
+
+<form method="POST" action="/config/port2group_conf">
+
+<table id="vtportConfig" summary="VLAN Translation Port Configuration" class="config">
+ <thead>
+  <tr class="config_header">
+   <th rowspan="2">Port</th>
+   <th colspan="2">Group Configuration</th>
+  </tr>
+  <tr class="config_header">
+   <th>Default</th>
+   <th>Group ID</th>
+  </tr>
+ </thead>
+ <tbody id="vtportData">
+ </tbody>
+</table>
+
+<p>
+<input type="hidden" id="submit_sid" name="sid">
+<input type="submit" value="Save">
+<input type="reset" value="Reset">
+</p>
+
+</form>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

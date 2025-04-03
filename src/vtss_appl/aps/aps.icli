@@ -1,0 +1,2024 @@
+# Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include <vtss/appl/aps.h>          /* For vtss_appl_aps_XXX()                   */
+#include "aps_api.h"                /* For aps_util_XXX()                        */
+#include "cfm_api.h"                /* For cfm_util_XXX()                        */
+#include "mac_utils.hxx"             /* For operator== on mesa_mac_t             */
+#include "misc_api.h"               /* For iport2uport()                         */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include APS' trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "aps_trace.h"
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define APS_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// APS_ICFG_port_conf_print()
+/******************************************************************************/
+static mesa_rc APS_ICFG_port_conf_print(uint32_t inst, vtss_icfg_conf_print_t &conf_print, vtss_appl_aps_conf_t *conf, vtss_appl_aps_conf_t *default_conf, bool working, int what)
+{
+    vtss_appl_aps_port_conf_t *port_conf         = working ? &conf->w_port_conf         : &conf->p_port_conf;
+    vtss_appl_aps_port_conf_t *default_port_conf = working ? &default_conf->w_port_conf : &default_conf->p_port_conf;
+    const char                *port_str          = working ? "working" : "protect";
+    vtss_ifindex_elm_t        ife;
+    char                      buf[100], cmd[50];
+    bool                      empty;
+    mesa_rc                   rc;
+
+    switch (what) {
+    case 0:
+        // Print interface
+        sprintf(cmd, "%s interface", port_str);
+        if ((rc = vtss_appl_ifindex_port_configurable(port_conf->ifindex, &ife)) != VTSS_RC_OK) {
+            T_EG(APS_TRACE_GRP_ICLI, "%u: Unable to decompose %s ifindex %u", inst, port_str, VTSS_IFINDEX_PRINTF_ARG(port_conf->ifindex));
+            return rc;
+        }
+
+        conf_print.is_default = false;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), buf)));
+        break;
+
+    case 1:
+        // Print sf-trigger
+        sprintf(cmd, "%s sf-trigger", port_str);
+
+        switch (port_conf->sf_trigger) {
+        case VTSS_APPL_APS_SF_TRIGGER_LINK:
+            conf_print.is_default = port_conf->sf_trigger == default_port_conf->sf_trigger;
+            VTSS_RC(vtss_icfg_conf_print(&conf_print, cmd, "%s", aps_util_sf_trigger_to_str(port_conf->sf_trigger)));
+            break;
+
+        case VTSS_APPL_APS_SF_TRIGGER_MEP:
+            VTSS_RC(cfm_util_key_check(port_conf->mep, &empty));
+            if (empty) {
+                T_EG(APS_TRACE_GRP_ICLI, "%u: Internal error: %s: SF trigger is %s, but MEP config is empty (%s)", inst, port_str, aps_util_sf_trigger_to_str(port_conf->sf_trigger), port_conf->mep);
+                return VTSS_APPL_APS_RC_INTERNAL_ERROR;
+            }
+
+            VTSS_RC(vtss_icfg_printf(conf_print.result, " %s mep domain %s service %s mep-id %d\n", cmd, port_conf->mep.md.c_str(), port_conf->mep.ma.c_str(), port_conf->mep.mepid));
+            break;
+
+        default:
+            T_EG(APS_TRACE_GRP_ICLI, "%u: Invalid sf-trigger for %s (%d)", inst, port_str, port_conf->sf_trigger);
+            return VTSS_APPL_APS_RC_INTERNAL_ERROR;
+        }
+
+        break;
+
+    default:
+        T_EG(APS_TRACE_GRP_ICLI, "%u: Internal error: No support for what = %d on %s", inst, what, port_str);
+        return VTSS_APPL_APS_RC_INTERNAL_ERROR;
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// APS_ICFG_conf_print()
+/******************************************************************************/
+static mesa_rc APS_ICFG_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    uint32_t               inst;
+    vtss_icfg_conf_print_t conf_print;
+    vtss_appl_aps_conf_t   conf, default_conf;
+    char                   buf[100];
+    bool                   working;
+    int                    i, what;
+
+    // Format:
+    // aps <1-max>
+    //  [no] working-mep domain <kword1-15> service <kword1-15> mep-id <1-8191>                  OBSOLETE, BUT SUPPORTED WHEN LOADING CONFIG FROM FLASH
+    //  [no] protect-mep domain <kword1-15> service <kword1-15> mep-id <1-8191>                  OBSOLETE, BUT SUPPORTED WHEN LOADING CONFIG FROM FLASH
+    //  working interface <port_type_id>                                                         NEW
+    //  protect interface <port_type_id>                                                         NEW
+    //  working sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}} NEW
+    //  protect sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}} NEW
+    //  vlan {untagged | <vlan_id> [pcp <0-7>]}                                                  NEW
+    //  level <0-7>                                                                              NEW
+    //  [no] smac <mac_ucast>                                                                    NEW
+    //  mode {1-for-1 | bidirectional-1-plus-1 | unidirectional-1-plus-1 [tx-aps]}
+    //  [no] revertive
+    //  wait-to-restore <uint>
+    //  hold-off-time <uint>
+    //  admin-state {enable | disable}
+
+    if (req->cmd_mode != ICLI_CMD_MODE_APS) {
+        T_EG(APS_TRACE_GRP_ICLI, "Invalid cmd_mode (%d). Expected %d", req->cmd_mode, ICLI_CMD_MODE_APS);
+        return VTSS_RC_OK;
+    }
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+
+    inst = req->instance_id.generic_u32;
+    conf_print.print_no_arguments = false;
+
+    VTSS_RC(vtss_appl_aps_conf_default_get(&default_conf));
+    VTSS_RC(vtss_appl_aps_conf_get(inst, &conf));
+
+    for (what = 0; what < 2; what++) {
+        for (i = 0; i < 2; i++) {
+            working = i == 0;
+            VTSS_RC(APS_ICFG_port_conf_print(inst, conf_print, &conf, &default_conf, working, what));
+        }
+    }
+
+    // Using operator== from ip_utils.hxx
+    conf_print.is_default = conf.smac == default_conf.smac;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "smac", "%s", misc_mac_txt(conf.smac.addr, buf)));
+    conf_print.force_no_keyword = false;
+
+    if (conf.vlan == 0) {
+         if (default_conf.vlan != 0 || req->all_defaults) {
+             VTSS_RC(vtss_icfg_printf(conf_print.result, " vlan untagged\n"));
+         }
+    } else {
+        conf_print.is_default = conf.vlan == default_conf.vlan && conf.pcp == default_conf.pcp;
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, "vlan", "%u pcp %u", conf.vlan, conf.pcp));
+    }
+
+    conf_print.is_default = conf.level == default_conf.level;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "level", "%u", conf.level));
+
+    conf_print.is_default = conf.mode == default_conf.mode;
+    buf[0] = '\0';
+    if (conf.mode == VTSS_APPL_APS_MODE_ONE_PLUS_ONE_UNIDIRECTIONAL && conf.tx_aps) {
+        conf_print.is_default = false;
+        strcpy(buf, " tx-aps");
+    }
+
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "mode", "%s%s", aps_util_mode_to_str(conf.mode), buf));
+
+    conf_print.force_no_keyword   = true;
+    conf_print.is_default = conf.revertive == default_conf.revertive;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "revertive", "%s", ""));
+    conf_print.force_no_keyword   = false;
+
+    conf_print.is_default = conf.wtr_secs == default_conf.wtr_secs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "wait-to-restore", "%u", conf.wtr_secs));
+
+    conf_print.is_default = conf.hold_off_msecs == default_conf.hold_off_msecs;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "hold-off-time", "%u", conf.hold_off_msecs));
+
+    conf_print.is_default = conf.admin_active == default_conf.admin_active;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "admin-state", "%s", conf.admin_active ? "enable" : "disable"));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// aps_icfg_init()
+/******************************************************************************/
+mesa_rc aps_icfg_init(void)
+{
+    return vtss_icfg_query_register(VTSS_ICFG_APS, "aps", APS_ICFG_conf_print);
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+/******************************************************************************/
+// APS_ICLI_instance_range()
+/******************************************************************************/
+static BOOL APS_ICLI_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_aps_capabilities_t cap;
+    mesa_rc                      rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_aps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_aps_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = fast_cap(MEBA_CAP_BOARD_PORT_COUNT);
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1;
+    runtime->range.u.sr.range[0].min = 1;
+    runtime->range.u.sr.range[0].max = cap.inst_cnt_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// APS_ICLI_wait_to_restore_range()
+/******************************************************************************/
+static BOOL APS_ICLI_wait_to_restore_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_aps_capabilities_t cap;
+    mesa_rc                      rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_aps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_aps_capabilities_get() failed: %s", error_txt(rc));
+        cap.wtr_secs_max = 720;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1;
+    runtime->range.u.sr.range[0].min = 1;
+    runtime->range.u.sr.range[0].max = cap.wtr_secs_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// APS_ICLI_hold_off_time_range()
+/******************************************************************************/
+static BOOL APS_ICLI_hold_off_time_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_aps_capabilities_t cap;
+    mesa_rc                      rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_aps_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_aps_capabilities_get() failed: %s", error_txt(rc));
+        cap.hold_off_msecs_max = 10000;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1;
+    runtime->range.u.sr.range[0].min = 0;
+    runtime->range.u.sr.range[0].max = cap.hold_off_msecs_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// APS_ICLI_session_is_icfg()
+// A few commands are obsolete and only allowed when loading a config from flash
+// to running-config. This function allows a command if that's the case, and
+// denies it if it's entered interactively.
+/******************************************************************************/
+static BOOL APS_ICLI_session_is_icfg(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    icli_session_way_t way;
+    icli_rc_t          icli_rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if ((icli_rc = (icli_rc_t)icli_session_way_get(session_id, &way)) != ICLI_RC_OK) {
+        T_EG(APS_TRACE_GRP_ICLI, "icli_session_way_get() failed: %d", icli_rc);
+        return FALSE;
+    }
+
+    runtime->present = way == ICLI_SESSION_WAY_APP_EXEC;
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// APS_ICLI_bool_to_yes_no()
+/******************************************************************************/
+static const char *APS_ICLI_bool_to_yes_no(bool val)
+{
+    return val ? "Yes" : "No";
+}
+
+/******************************************************************************/
+// APS_ICLI_show_aps_statistics()
+/******************************************************************************/
+static void APS_ICLI_show_aps_statistics(u32 session_id, uint32_t inst, vtss_appl_aps_status_t &status, bool first_print)
+{
+    if (first_print) {
+        ICLI_PRINTF("Inst Rx Valid     Rx Invalid   Tx\n");
+        ICLI_PRINTF("---- ------------ ------------ ------------\n");
+    }
+
+    ICLI_PRINTF("%4u " VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") "\n",
+                inst,
+                status.rx_valid_cnt,
+                status.rx_invalid_cnt,
+                status.tx_cnt);
+}
+
+/******************************************************************************/
+// APS_ICLI_show_aps_status()
+/******************************************************************************/
+static void APS_ICLI_show_aps_status(u32 session_id, uint32_t inst, vtss_appl_aps_status_t &status, vtss_appl_aps_control_t &ctrl, bool first_print, bool has_details)
+{
+    char      defect_buf[10];
+    const int width = 20;
+
+    if (has_details) {
+        ICLI_PRINTF("\n--------------------------------------------------------------------------------------\n");
+        ICLI_PRINTF("%-*s %u\n",   width, "Instance:",            inst);
+        ICLI_PRINTF("%-*s %s\n",   width, "Operational state:",   aps_util_oper_state_to_str(status.oper_state));
+        ICLI_PRINTF("%-*s %s\n",   width, "Operational warning:", aps_util_oper_warning_to_str(status.oper_warning));
+        ICLI_PRINTF("%-*s %s\n",   width, "Protection state:",    aps_util_prot_state_to_str(status.prot_state, false));
+        ICLI_PRINTF("%-*s %s\n",   width, "Working state:",       aps_util_defect_state_to_str(status.w_state));
+        ICLI_PRINTF("%-*s %s\n",   width, "Protect state:",       aps_util_defect_state_to_str(status.p_state));
+        ICLI_PRINTF("%-*s %s\n",   width, "FOP-CM:",              APS_ICLI_bool_to_yes_no(status.dFOP_CM));
+        ICLI_PRINTF("%-*s %s\n",   width, "FOP-PM:",              APS_ICLI_bool_to_yes_no(status.dFOP_PM));
+        ICLI_PRINTF("%-*s %s\n",   width, "FOP-NR:",              APS_ICLI_bool_to_yes_no(status.dFOP_NR));
+        ICLI_PRINTF("%-*s %s\n",   width, "FOP-TO:",              APS_ICLI_bool_to_yes_no(status.dFOP_TO));
+        ICLI_PRINTF("%-*s %s\n",   width, "Command:",             aps_util_command_to_str(ctrl.command));
+        ICLI_PRINTF("Tx L-APS PDU\n");
+        ICLI_PRINTF("%-*s %s\n",   width, "  Request/State:",     aps_util_request_to_str(status.tx_aps.request));
+        ICLI_PRINTF("%-*s %u\n",   width, "  Requested Signal:",  status.tx_aps.re_signal);
+        ICLI_PRINTF("%-*s %u\n",   width, "  Bridged Signal:",    status.tx_aps.br_signal);
+        ICLI_PRINTF("Rx L-APS PDU\n");
+        ICLI_PRINTF("%-*s %s\n",   width, "  Request/State:",     aps_util_request_to_str(status.rx_aps.request));
+        ICLI_PRINTF("%-*s %u\n",   width, "  Requested Signal:",  status.rx_aps.re_signal);
+        ICLI_PRINTF("%-*s %u\n",   width, "  Bridged Signal:",    status.rx_aps.br_signal);
+        ICLI_PRINTF("--------------------------------------------------------------------------------------\n");
+    } else {
+        if (first_print) {
+            ICLI_PRINTF("Failure of Protocol defect abbreviations:\n");
+            ICLI_PRINTF("C: FOP-CM, Configuration Mismatch (received APS PDU on working interface within last 17.5 seconds)\n");
+            ICLI_PRINTF("P: FOP-PM, Provisioning Mismatch (far and near ends are not using the same mode; bidir only)\n");
+            ICLI_PRINTF("N: FOP-NR, No Response (far end hasn't agreed on 'Requested Signal' within 50 ms; bidir only)\n");
+            ICLI_PRINTF("T: FOP-TO, Time Out (near end hasn't received a valid APS PDU within last 17.5 seconds; bidir only)\n\n");
+
+            ICLI_PRINTF("                                           Working Protect Tx L-APS  Rx L-APS\n");
+            ICLI_PRINTF("Inst Operational State Protection State    State   State   R/S   R B R/S   R B Dfcts Command\n");
+            ICLI_PRINTF("---- ----------------- ------------------- ------- ------- --------- --------- ----- -----------------\n");
+        }
+
+        ICLI_PRINTF("%4u %-17s", inst, aps_util_oper_state_to_str(status.oper_state, status.oper_warning));
+
+        if (status.oper_state != VTSS_APPL_APS_OPER_STATE_ACTIVE) {
+            // Don't print the rest unless it's active.
+            ICLI_PRINTF("\n");
+            return;
+        }
+
+        sprintf(defect_buf, "%c%c%c%c",
+                status.dFOP_CM ? 'C' : '-',
+                status.dFOP_PM ? 'P' : '-',
+                status.dFOP_NR ? 'N' : '-',
+                status.dFOP_TO ? 'T' : '-');
+
+        ICLI_PRINTF(" %-19s %-7s %-7s %-5s %1u %1u %-5s %1u %1u %5s %s\n",
+                    aps_util_prot_state_to_str(status.prot_state, false),
+                    aps_util_defect_state_to_str(status.w_state),
+                    aps_util_defect_state_to_str(status.p_state),
+                    aps_util_request_to_str(status.tx_aps.request),
+                    status.tx_aps.re_signal,
+                    status.tx_aps.br_signal,
+                    aps_util_request_to_str(status.rx_aps.request),
+                    status.rx_aps.re_signal,
+                    status.rx_aps.br_signal,
+                    defect_buf,
+                    aps_util_command_to_str(ctrl.command));
+    }
+}
+
+/******************************************************************************/
+// APS_ICLI_show_aps()
+/******************************************************************************/
+static icli_rc_t APS_ICLI_show_aps(u32 session_id, icli_range_t *inst_list, bool has_statistics, bool has_details)
+{
+    vtss_appl_aps_status_t  status;
+    vtss_appl_aps_control_t ctrl;
+    uint32_t                prev_inst, inst, i;
+    bool                    first = true, first_print = true, show;
+    mesa_rc                 rc;
+
+    while (vtss_appl_aps_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            show = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    show = true;
+                    break;
+                }
+            }
+        } else {
+            show = true;
+        }
+
+        if (!show) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_aps_status_get(inst, &status)) != VTSS_RC_OK) {
+            T_EG(APS_TRACE_GRP_ICLI, "vtss_appl_aps_status_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if (has_statistics) {
+            APS_ICLI_show_aps_statistics(session_id, inst, status, first_print);
+        } else {
+            if ((rc = vtss_appl_aps_control_get(inst, &ctrl)) != VTSS_RC_OK) {
+                T_EG(APS_TRACE_GRP_ICLI, "vtss_appl_aps_control_get() failed: %s", error_txt(rc));
+                continue;
+            }
+
+            APS_ICLI_show_aps_status(session_id, inst, status, ctrl, first_print, has_details);
+        }
+
+        first_print = false;
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// APS_ICLI_statistics_clear())
+/******************************************************************************/
+static icli_rc_t APS_ICLI_statistics_clear(u32 session_id, icli_range_t *inst_list)
+{
+    uint32_t prev_inst, inst, i;
+    bool     first = true, clear;
+    mesa_rc  rc;
+
+    while (vtss_appl_aps_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            clear = false;
+            for (i = 0; i < inst_list->u.sr.cnt; i++) {
+                if (inst >= inst_list->u.sr.range[i].min && inst <= inst_list->u.sr.range[i].max) {
+                    clear = true;
+                    break;
+                }
+            }
+        } else {
+            clear= true;
+        }
+
+        if (!clear) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_aps_statistics_clear(inst)) != VTSS_RC_OK) {
+            T_EG(APS_TRACE_GRP_ICLI, "vtss_appl_aps_statistics_clear() failed: %s", error_txt(rc));
+            continue;
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// APS_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t APS_ICLI_show_capabilities(u32 session_id)
+{
+    vtss_appl_aps_capabilities_t cap;
+    const int                    cap_width = 22;
+
+    APS_PRINT_RC(vtss_appl_aps_capabilities_get(&cap));
+
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Instance count:",   cap.inst_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. WTR (secs):",       cap.wtr_secs_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Hold-Off (msecs):", cap.hold_off_msecs_max);
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// APS_ICLI_obsolete_mep_conf_to_aps_conf()
+/******************************************************************************/
+static icli_rc_t APS_ICLI_obsolete_mep_conf_to_aps_conf(u32 session_id, uint32_t inst, vtss_appl_cfm_mep_key_t mep_key, bool working)
+{
+    vtss_appl_aps_conf_t      conf;
+    vtss_appl_cfm_md_conf_t   md_conf;
+    vtss_appl_cfm_ma_conf_t   ma_conf;
+    vtss_appl_cfm_mep_conf_t  mep_conf;
+    vtss_appl_aps_port_conf_t &port_conf = working ? conf.w_port_conf : conf.p_port_conf;
+
+    // This is an obsolete command, which is now replaced by sf-trigger.
+    // However, to support old running-configs, we must convert it to the new
+    // configuration format.
+
+    // First read CFM configuration.
+    if (vtss_appl_cfm_ma_conf_get( mep_key, &ma_conf)  != VTSS_RC_OK ||
+        vtss_appl_cfm_md_conf_get( mep_key, &md_conf)  != VTSS_RC_OK ||
+        vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% MEP (%s:%s:%u) not found\n", mep_key.md.c_str(), mep_key.ma.c_str(), mep_key.mepid);
+        return ICLI_RC_ERROR;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+
+    port_conf.ifindex    = mep_conf.ifindex;
+    port_conf.sf_trigger = VTSS_APPL_APS_SF_TRIGGER_MEP;
+    port_conf.mep        = mep_key;
+
+    // If this is the protect MEP, we also carry over the level, VLAN, PCP, and
+    // smac.
+    if (!working) {
+        conf.level = md_conf.level;
+        conf.vlan  = mep_conf.vlan != 0 ? mep_conf.vlan : ma_conf.vlan;
+        conf.pcp   = mep_conf.pcp;
+        conf.smac  = mep_conf.smac;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+HELP_APS = Automatic Protection Switching
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = working-mep domain <kword1-15> service <kword1-15> mep-id <1-8191>
+HELP_APS_WORKING_MEP = Specify which MEP provides signal-fail for the working port.
+DOC_CMD_DESC    = ##HELP_APS_WORKING_MEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_WORKING_MEP
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! working-mep
+CMD_VAR =
+RUNTIME = APS_ICLI_session_is_icfg
+HELP    = ##HELP_APS_WORKING_MEP
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The working MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The working MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The working MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The working MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The working MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The working MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_key_t mep_key;
+    icli_rc_t               icli_rc;
+VARIABLE_END
+
+CODE_BEGIN
+    // This is an obsolete command, which is only allowed when loading from a
+    // flash file. We need to convert it to the new format.
+    mep_key.md    = md_name;
+    mep_key.ma    = ma_name;
+    mep_key.mepid = mepid;
+
+    if ((icli_rc = APS_ICLI_obsolete_mep_conf_to_aps_conf(session_id, inst, mep_key, true /* working */)) != ICLI_RC_OK) {
+        return icli_rc;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no working-mep
+HELP_APS_NO_WORKING_MEP = Remove working-mep (not really useful, but can be output from 'show running-config all-defaults')
+DOC_CMD_DESC    = ##HELP_APS_NO_WORKING_MEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_NO_WORKING_MEP
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME = APS_ICLI_session_is_icfg
+HELP    = ##ICLI_HELP_NO
+
+! working-mep
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_NO_WORKING_MEP
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    // This is an obsolete command, which is only allowed when loading from a
+    // flash file. We need to convert it to the new format.
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    vtss_clear(conf.w_port_conf.mep);
+    conf.w_port_conf.sf_trigger = VTSS_APPL_APS_SF_TRIGGER_LINK;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = protect-mep domain <kword1-15> service <kword1-15> mep-id <1-8191>
+HELP_APS_PROTECT_MEP = Specify which MEP provides signal-fail for the protect port.
+DOC_CMD_DESC    = ##HELP_APS_PROTECT_MEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_PROTECT_MEP
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! protect-mep
+CMD_VAR =
+RUNTIME = APS_ICLI_session_is_icfg
+HELP    = ##HELP_APS_PROTECT_MEP
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The working MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The protect MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The protect MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The protect MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The protect MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The protect MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_key_t mep_key;
+    icli_rc_t               icli_rc;
+VARIABLE_END
+
+CODE_BEGIN
+    // This is an obsolete command, which is only allowed when loading from a
+    // flash file. We need to convert it to the new format.
+    mep_key.md    = md_name;
+    mep_key.ma    = ma_name;
+    mep_key.mepid = mepid;
+
+    if ((icli_rc = APS_ICLI_obsolete_mep_conf_to_aps_conf(session_id, inst, mep_key, false /* protect */)) != ICLI_RC_OK) {
+        return icli_rc;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no protect-mep
+HELP_APS_NO_PROTECT_MEP = Remove protect-mep (not really useful, but can be output from 'show running-config all-defaults')
+DOC_CMD_DESC    = ##HELP_APS_NO_PROTECT_MEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_NO_PROTECT_MEP
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME = APS_ICLI_session_is_icfg
+HELP    = ##ICLI_HELP_NO
+
+! working-mep
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_NO_PROTECT_MEP
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    // This is an obsolete command, which is only allowed when loading from a
+    // flash file. We need to convert it to the new format.
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    vtss_clear(conf.p_port_conf.mep);
+    conf.p_port_conf.sf_trigger = VTSS_APPL_APS_SF_TRIGGER_LINK;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = working interface <port_type_id>
+HELP_APS_WORKING_INTERFACE = Assign an interface to the working port
+DOC_CMD_DESC    = ##HELP_APS_WORKING_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_WORKING_INTERFACE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! working
+CMD_VAR =
+RUNTIME =
+HELP    = Working port configuration
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_WORKING_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_APS_WORKING_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.w_port_conf.ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = protect interface <port_type_id>
+HELP_APS_PROTECT_INTERFACE = Assign an interface to the protect port
+DOC_CMD_DESC    = ##HELP_APS_PROTECT_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_PROTECT_INTERFACE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! working
+CMD_VAR =
+RUNTIME =
+HELP    = Protect port configuration
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_PROTECT_INTERFACE
+
+! <port_type_id>
+CMD_VAR = port
+RUNTIME =
+HELP    = ##HELP_APS_PROTECT_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &conf.p_port_conf.ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = working sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+HELP_APS_WORKING_SF_TRIGGER = Choose whether the working port's interface link state or a MEP installed on working's interface is used as signal-fail trigger
+DOC_CMD_DESC    = ##HELP_APS_WORKING_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_WORKING_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! working
+CMD_VAR =
+RUNTIME =
+HELP    = Working port configuration
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_WORKING_SF_TRIGGER
+
+! link
+CMD_VAR = has_link
+RUNTIME =
+HELP    = Working interface link state is used as signal-fail trigger
+
+! mep
+CMD_VAR =
+RUNTIME =
+HELP    = A MEP installed on working interface is used as signal-fail trigger
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t      conf;
+    vtss_appl_aps_port_conf_t *port_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    port_conf = &conf.w_port_conf;
+
+    if (has_link) {
+        port_conf->sf_trigger = VTSS_APPL_APS_SF_TRIGGER_LINK;
+    } else {
+        port_conf->sf_trigger = VTSS_APPL_APS_SF_TRIGGER_MEP;
+        port_conf->mep.md     = md_name;
+        port_conf->mep.ma     = ma_name;
+        port_conf->mep.mepid  = mepid;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = protect sf-trigger {link | {mep domain <kword1-15> service <kword1-15> mep-id <1-8191>}}
+HELP_APS_PROTECT_SF_TRIGGER = Choose whether the protect port's interface link state or a MEP installed on protect's interface is used as signal-fail trigger
+DOC_CMD_DESC    = ##HELP_APS_PROTECT_SF_TRIGGER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_PROTECT_SF_TRIGGER
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! protect
+CMD_VAR =
+RUNTIME =
+HELP    = Protect port configuration
+
+! sf-trigger
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_PROTECT_SF_TRIGGER
+
+! link
+CMD_VAR = has_link
+RUNTIME =
+HELP    = Protect interface link state is used as signal-fail trigger
+
+! mep
+CMD_VAR =
+RUNTIME =
+HELP    = A MEP installed on protect interface is used as signal-fail trigger
+
+! domain
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's domain
+
+! <kword1-15>
+CMD_VAR = md_name
+RUNTIME =
+HELP    = The MEP's domain name
+
+! service
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's service within the domain
+
+! <kword1-15>
+CMD_VAR = ma_name
+RUNTIME =
+HELP    = The MEP's service name within the domain
+
+! mep-id
+CMD_VAR =
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+! <1-8191>
+CMD_VAR = mepid
+RUNTIME =
+HELP    = The MEP's MEP-ID
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t      conf;
+    vtss_appl_aps_port_conf_t *port_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    port_conf = &conf.p_port_conf;
+
+    if (has_link) {
+        port_conf->sf_trigger = VTSS_APPL_APS_SF_TRIGGER_LINK;
+    } else {
+        port_conf->sf_trigger = VTSS_APPL_APS_SF_TRIGGER_MEP;
+        port_conf->mep.md     = md_name;
+        port_conf->mep.ma     = ma_name;
+        port_conf->mep.mepid  = mepid;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = vlan {untagged | <vlan_id> [pcp <0-7>]}
+HELP_APS_VLAN = Set the APS instance's VLAN ID and PCP used in L-APS PDUs transmitted on the protect interface.
+
+DOC_CMD_DESC    = ##HELP_APS_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_VLAN
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! vlan
+HELP    = ##HELP_APS_VLAN
+CMD_VAR =
+RUNTIME =
+
+! untagged
+HELP    = Don't insert a VLAN tag in the L-APS PDUs
+CMD_VAR = has_untagged
+RUNTIME =
+
+! <vlan_id>
+HELP    = Insert a VLAN tag with this VLAN ID in L-APS PDUs
+CMD_VAR = vid
+RUNTIME =
+
+! pcp
+HELP    = Choose a PCP to be used in the 802.1Q tag.
+CMD_VAR = has_pcp
+RUNTIME =
+
+! <0-7>
+HELP    = PCP value
+CMD_VAR = pcp
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+
+    if (has_untagged) {
+        conf.vlan = 0;
+        conf.pcp  = 0;
+    } else {
+        conf.vlan = vid;
+
+        if (has_pcp) {
+            conf.pcp = pcp;
+         }
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = level <0-7>
+HELP_APS_LEVEL = Set the MD/MEG level used in L-APS PDUs. Default is 0.
+
+DOC_CMD_DESC    = ##HELP_APS_LEVEL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_LEVEL
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! level
+HELP    = ##HELP_APS_LEVEL
+CMD_VAR =
+RUNTIME =
+
+! <0-7>
+HELP    = MD/MEG level.
+CMD_VAR = level
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.level = level;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = smac <mac_ucast>
+HELP_APS_SMAC = Set a source MAC address to be used in L-APS PDUs. Default to use interface's.
+DOC_CMD_DESC    = ##HELP_APS_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_SMAC
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! smac
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_SMAC
+
+! <mac_ucast>
+CMD_VAR = mac
+RUNTIME =
+HELP    = Select a unicast MAC address to be used as source MAC address in L-APS PDUs.
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.smac = mac;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no smac
+HELP_APS_NO_SMAC = Set source MAC address used in L-APS PDUs to protect port's interface's MAC address.
+
+DOC_CMD_DESC    = ##HELP_APS_NO_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_NO_SMAC
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! smac
+HELP    = ##HELP_APS_NO_SMAC
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_default_get(&default_conf));
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.smac = default_conf.smac;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = mode {1-for-1 | bidirectional-1-plus-1 | unidirectional-1-plus-1 [tx-aps]}
+HELP_APS_MODE = Specify the APS' architecture and direction
+DOC_CMD_DESC    = ##HELP_APS_MODE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_MODE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! mode
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_MODE
+
+! 1-for-1
+CMD_VAR = has_1f1
+RUNTIME =
+HELP    = 1:1, that is, source determines which port traffic goes into.
+
+! bidirectional-1-plus-1
+CMD_VAR = has_1p1_bidirectional
+RUNTIME =
+HELP    = Bidirectional 1+1, that is, traffic goes into both ports, and sink selects based on local defects and APS PDUs received from the far end.
+
+! unidirectional-1-plus-1
+CMD_VAR =
+RUNTIME =
+HELP    = Unidirectional 1+1, that is, traffic goes into both ports, and sink selects exclusively based on local defects.
+
+! tx-aps
+CMD_VAR = has_tx_aps
+RUNTIME =
+HELP    = Transmit APS PDUs even in unidirectional 1+1. Reception of APS PDUs in this mode are only used for informational purposes.
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    if (has_1f1) {
+        conf.mode = VTSS_APPL_APS_MODE_ONE_FOR_ONE;
+    } else if (has_1p1_bidirectional) {
+        conf.mode = VTSS_APPL_APS_MODE_ONE_PLUS_ONE_BIDIRECTIONAL;
+    } else {
+        conf.mode = VTSS_APPL_APS_MODE_ONE_PLUS_ONE_UNIDIRECTIONAL;
+        conf.tx_aps = has_tx_aps;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = revertive
+HELP_APS_REVERTIVE = Traffic switches back to the working port after the wait-to-restore timer has expired after the defect conditions causing a switch have cleared.
+DOC_CMD_DESC    = ##HELP_APS_REVERTIVE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_REVERTIVE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! revertive
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_REVERTIVE
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.revertive = true;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no revertive
+HELP_APS_NO_REVERTIVE = Traffic is allowed to remain on the protect port after a switch reason has cleared.
+DOC_CMD_DESC    = ##HELP_APS_NO_REVERTIVE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_NO_REVERTIVE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! revertive
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_NO_REVERTIVE
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.revertive = false;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = wait-to-restore <uint>
+HELP_APS_WAIT_TO_RESTORE = Only used in revertive mode. Indicates the number of seconds after a defect has cleared until operation is switched back to the working port.
+DOC_CMD_DESC    = ##HELP_APS_WAIT_TO_RESTORE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_WAIT_TO_RESTORE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! wait-to-restore
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_WAIT_TO_RESTORE
+
+! <uint>
+CMD_VAR = wtr
+RUNTIME = APS_ICLI_wait_to_restore_range
+HELP    = Wait-to-restore measured in seconds.
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.wtr_secs = wtr;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf, default_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_default_get(&default_conf));
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.wtr_secs = default_conf.wtr_secs;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = hold-off-time <uint>
+HELP_APS_HOLD_OFF_TIME = When a new (or more severe) defect occurs, the hold-off timer will be started and the event will be reported after the timer expires.
+DOC_CMD_DESC    = ##HELP_APS_HOLD_OFF_TIME
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_HOLD_OFF_TIME
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! hold-off-time
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_HOLD_OFF_TIME
+
+! <uint>
+CMD_VAR = hold_off
+RUNTIME = APS_ICLI_hold_off_time_range
+HELP    = Hold-off timer value measured in milliseconds. Must be in multiples of 100 ms.
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.hold_off_msecs = hold_off;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf, default_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_default_get(&default_conf));
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.hold_off_msecs = default_conf.hold_off_msecs;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = admin-state {enable | disable}
+HELP_APS_ADMIN_STATE = Enable or disable this APS instance
+DOC_CMD_DESC    = ##HELP_APS_ADMIN_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_ADMIN_STATE
+DOC_CMD_EXAMPLE =
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_APS
+MODE_VAR = inst
+
+! admin-state
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_ADMIN_STATE
+
+! enable
+CMD_VAR = has_enable
+RUNTIME =
+HELP    = Enable this APS instance
+
+CMD_VAR =
+RUNTIME =
+HELP    = Disable this APS instance
+
+VARIABLE_BEGIN
+    vtss_appl_aps_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    APS_PRINT_RC(vtss_appl_aps_conf_get(inst, &conf));
+    conf.admin_active = has_enable;
+    APS_PRINT_RC(vtss_appl_aps_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = no aps {<uint> | all}
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME =
+HELP_CFM_NO_APS = Delete a particular or all APS instances
+DOC_CMD_DESC    = ##HELP_CFM_NO_APS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_NO_APS
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = APS_ICLI_instance_range
+RUNTIME   =
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_CFM_NO_APS
+HELP      = Delete a particular APS instance
+HELP      = Delete all APS instances
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR  =
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = inst
+CMD_VAR   = has_all
+
+VARIABLE_BEGIN
+    uint32_t next_inst;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        while (vtss_appl_aps_itr(&inst, &next_inst) == VTSS_RC_OK) {
+            // Delete this APS instance
+            inst = next_inst;
+            APS_PRINT_RC(vtss_appl_aps_conf_del(inst));
+        }
+    } else {
+       // Delete this APS instance
+       APS_PRINT_RC(vtss_appl_aps_conf_del(inst));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = aps <uint> freeze
+
+HELP_APS_FREEZE = Freezes the state of the APS instance. While in this mode, additional near-end commands, condition changes, and received APS information are ignored. Use 'no aps <inst> freeze' to get out of this mode.
+DOC_CMD_DESC    = ##HELP_APS_FREEZE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_FREEZE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! aps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = APS_ICLI_instance_range
+HELP    = APS instance number
+
+! freeze
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_FREEZE
+
+VARIABLE_BEGIN
+    vtss_appl_aps_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.command = VTSS_APPL_APS_COMMAND_FREEZE;
+    APS_PRINT_RC(vtss_appl_aps_control_set(inst, &ctrl));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_aps_control_t ctrl;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.command = VTSS_APPL_APS_COMMAND_FREEZE_CLEAR;
+    APS_PRINT_RC(vtss_appl_aps_control_set(inst, &ctrl));
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = aps <uint> lockout
+
+HELP_APS_LOCKOUT = Lockout APS instance of protection. Use 'aps <inst> clear' to clear the request.
+DOC_CMD_DESC    = ##HELP_APS_LOCKOUT
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_LOCKOUT
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! aps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = APS_ICLI_instance_range
+HELP    = APS instance number
+
+! lockout
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_LOCKOUT
+
+VARIABLE_BEGIN
+    vtss_appl_aps_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.command = VTSS_APPL_APS_COMMAND_LO;
+    APS_PRINT_RC(vtss_appl_aps_control_set(inst, &ctrl));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = aps <uint> switch {force | manual {protect-to-working | working-to-protect}}
+
+HELP_APS_SWITCH = Request a switchover from the working path to the protection path or vice versa. Use 'aps <inst> clear' to clear the request.
+DOC_CMD_DESC    = ##HELP_APS_SWITCH
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_SWITCH
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! aps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = APS_ICLI_instance_range
+HELP    = APS instance number
+
+! switch
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_SWITCH
+
+! force
+CMD_VAR = has_force
+RUNTIME =
+HELP    = Causes a switchover if no lockout is in effect
+
+! manual
+CMD_VAR =
+RUNTIME =
+HELP    = Causes a switchover if the signal is good and no lockout is in effect
+
+! protect-to-working
+CMD_VAR = has_p_to_w
+RUNTIME =
+HELP    = Causes a manual signal switchover from the protection path to the working path if the protection path signal has not failed
+
+! working-to-protect
+CMD_VAR =
+RUNTIME =
+HELP    = Causes a manual signal switchover from the working path to the protection path whether or not the working path signal is active or not
+
+VARIABLE_BEGIN
+    vtss_appl_aps_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+
+    if (has_force) {
+        ctrl.command = VTSS_APPL_APS_COMMAND_FS;
+    } else if (has_p_to_w) {
+        ctrl.command = VTSS_APPL_APS_COMMAND_MS_TO_W;
+    } else {
+        ctrl.command = VTSS_APPL_APS_COMMAND_MS_TO_P;
+    }
+
+    APS_PRINT_RC(vtss_appl_aps_control_set(inst, &ctrl));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = aps <uint> exercise
+
+HELP_APS_EXERCISE = Exercise an APS instance. Use 'aps <inst> clear' to clear the request.
+DOC_CMD_DESC    = ##HELP_APS_EXERCISE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_EXERCISE
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! aps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = APS_ICLI_instance_range
+HELP    = APS instance number
+
+! exercise
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_EXERCISE
+
+VARIABLE_BEGIN
+    vtss_appl_aps_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.command = VTSS_APPL_APS_COMMAND_EXER;
+    APS_PRINT_RC(vtss_appl_aps_control_set(inst, &ctrl));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = aps <uint> clear
+
+HELP_APS_CLEAR = Clear a switchover (FS, MS-to-W, MS-to-P), lockout (LO), exercise (EXER) request and a WTR condition
+DOC_CMD_DESC    = ##HELP_APS_CLEAR
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_CLEAR
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! aps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = APS_ICLI_instance_range
+HELP    = APS instance number
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS_CLEAR
+
+VARIABLE_BEGIN
+    vtss_appl_aps_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.command = VTSS_APPL_APS_COMMAND_CLEAR;
+    APS_PRINT_RC(vtss_appl_aps_control_set(inst, &ctrl));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show aps [<range_list>] {[statistics] | [details]}
+HELP_SHOW_APS = Show the state or counters of one or more APS instances
+
+DOC_CMD_DESC    = ##HELP_SHOW_APS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_SHOW_APS
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = show_aps
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_SHOW_APS
+
+! aps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME =
+HELP    = The range of APS instances.
+
+! statistics
+CMD_VAR = has_statistics
+RUNTIME =
+HELP    = Show APS PDU Rx and Tx counters
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed status
+
+CODE_BEGIN
+    ICLI_RC(APS_ICLI_show_aps(session_id, inst_list, has_statistics, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear aps [<range_list>] statistics
+HELP_CLEAR_APS = Clear the counters of one or more APS instances
+
+DOC_CMD_DESC    = ##HELP_CLEAR_APS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CLEAR_APS
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = clear_aps
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_CLEAR_APS
+
+! aps
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_APS
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME =
+HELP    = The range of APS instances.
+
+! statistics
+CMD_VAR =
+RUNTIME =
+HELP    = Clear APS counters
+
+CODE_BEGIN
+    ICLI_RC(APS_ICLI_statistics_clear(session_id, inst_list));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_APS_DEBUG_TIMERS = Show current APS timers
+COMMAND         = debug show aps timers
+DOC_CMD_DESC    = ##HELP_APS_DEBUG_TIMERS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_DEBUG_TIMERS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_APS
+HELP            = ##HELP_APS_DEBUG_TIMERS
+
+CODE_BEGIN
+    void aps_timer_debug_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    aps_timer_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_APS_SHOW_CAPABILITIES = Show APS capabilities
+COMMAND         = debug show aps capabilities
+DOC_CMD_DESC    = ##HELP_APS_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! aps
+HELP    = ##HELP_APS
+CMD_VAR =
+RUNTIME =
+
+! capabilities
+HELP    = ##HELP_APS_SHOW_CAPABILITIES
+CMD_VAR =
+RUNTIME =
+CODE_BEGIN
+    ICLI_RC(APS_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_APS_DEBUG_HISTORY = Show APS state change history
+COMMAND         = debug show aps history
+DOC_CMD_DESC    = ##HELP_APS_DEBUG_HISTORY
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_DEBUG_HISTORY
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_APS
+HELP            = ##HELP_APS_DEBUG_HISTORY
+
+CODE_BEGIN
+    void aps_history_dump(uint32_t session_id, i32 (*pr)(uint32_t session_id, const char *fmt, ...));
+    aps_history_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_APS_DEBUG_RULES = Show current APS-installed rules
+COMMAND         = debug show aps rules
+DOC_CMD_DESC    = ##HELP_APS_DEBUG_RULES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_APS_DEBUG_RULES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_APS
+HELP            = ##HELP_APS_DEBUG_RULES
+
+CODE_BEGIN
+    void aps_rules_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    aps_rules_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+

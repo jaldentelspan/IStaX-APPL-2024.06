@@ -1,0 +1,324 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Port Security Port Status</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" language="JavaScript">
+
+// Refresh timer
+var timerID;
+
+// Help page magic
+var help_page = "/help/help_psec_status_port.htm";
+
+// Entry indices
+var PARM_IDX_VID                = 0;
+var PARM_IDX_MAC                = 1;
+var PARM_IDX_TYPE               = 2;
+var PARM_IDX_STATE              = 3;
+var PARM_IDX_AGE_HOLD_TIME_LEFT = 4;
+var PARM_CNT                    = PARM_IDX_AGE_HOLD_TIME_LEFT + 1; // A multiple of this number
+
+var selectedPort = "All";
+// This piece of code makes sure that a specific port can be selected
+// directly, when navigating from a hyperlink on a different page.
+var arg_idx = document.URL.indexOf('?');
+if (arg_idx != -1) {
+  var args = document.URL.substring(arg_idx+1, document.URL.length);
+  var tups = args.split('&');
+  var i;
+  for (i = 0; i < tups.length; i++) {
+    var tup = tups[i].split('=');
+    if (tup.length == 2) {
+      if (tup[0] == 'port') {
+        selectedPort = parseInt(tup[1], 10);
+      }
+    }
+  }
+}
+
+// Delete-button click event handler.
+// It's made in this way because IE (6.0) doesn't work with
+// setAttribute("onclick", "on_delete_click(this)")
+var on_delete_click = function() {
+  // Post a new request to web.c's stat/psec_clear() handler
+  var req = initXMLHTTP();
+  if (req) {
+    req.onreadystatechange = function () {
+      try {
+        if (req.readyState == 4 && req.status && req.status == 200) {
+          // Since this may have caused a change in state, request a new page
+          requestUpdate();
+          }
+      } catch(e) {
+        req = null; // MSIE leak avoidance
+      }
+    };
+
+    try {
+      // this.name holds the URL to GET (i.e. /stat/psec_clear?port=<port>&vid=<vid>&mac=<mac>)
+      var url_to_get = SpomAddSidArg(this.name);
+      req.open("GET", url_to_get, true);
+      req.send(null);
+    } catch(e) {
+      alert("Send error: " + e.toString());
+    }
+  } else {
+    alert("Failed to create request");
+  }
+};
+
+//****************************************
+//****************************************
+function add_mac_row(row, port_number, frag, vals)
+{
+  var tr = CreateStyledElement("tr", (row % 2) ? "display_even" : "display_odd");
+
+  // Delete button
+  var btn = document.createElement('input');
+  btn.onclick = on_delete_click;
+  btn.type = "button";
+  btn.value = " Delete ";
+  btn.disabled = vals[PARM_IDX_TYPE] != "Dynamic";
+
+  var the_port = port_number == -1 ? selectedPort : port_number;
+  btn.name = "/stat/psec_clear?port=" + the_port + "&vid=" + vals[PARM_IDX_VID] + "&mac=" + vals[PARM_IDX_MAC];
+  var td = CreateTd("c");
+  addCell(tr, td, btn);
+
+  if (port_number != -1) {
+      // We are showing all ports, so better add a port number column.
+      addTextCell(tr, port_number, "cr");
+  }
+
+  addTextCell(tr, vals[PARM_IDX_VID], "cr");
+  addTextCell(tr, vals[PARM_IDX_MAC], "c mac");
+  addTextCell(tr, vals[PARM_IDX_TYPE], "cl");
+  addTextCell(tr, vals[PARM_IDX_STATE], "cl");
+  if (parseInt(vals[PARM_IDX_AGE_HOLD_TIME_LEFT], 10) === 0) {
+    addTextCell(tr, "-", "cr");
+  } else {
+    addTextCell(tr, vals[PARM_IDX_AGE_HOLD_TIME_LEFT], "cr");
+  }
+  frag.appendChild(tr);
+}
+
+//****************************************
+//****************************************
+function processUpdate(req, ref)
+{
+  document.getElementById("update").style.visibility = "hidden";
+
+  if (redirectOnError(req)) {
+    return;
+  }
+
+  // If data for all ports are returned, the format is:
+  //   "ALL"|[PortData_1]|[PortData_2]|...|[PortData_N]
+  // Where
+  //   [PortData_x]: port#[MACs]
+  //
+  // Otherwise, if only data for a particular port is returned, the format is:
+  //   port#[MACs]
+  //
+  // Where
+  //   [MACs]: [MAC_1]#[MAC_2]#...#[MAC_N]
+  //   [MAC_x]: vid_x/mac_address_x/type_x/state_x/age_hold_time_left_x
+  var all_port_data = req.responseText.split("|");
+  var all_ports = false;
+
+  if (all_port_data[0] == "ALL") {
+      // Get rid of the dummy entry "ALL".
+      all_port_data.shift();
+      all_ports = true;
+  }
+
+  document.getElementById("port_col").style.display = all_ports ? "" : "none";
+
+  var frag = document.createDocumentFragment();
+
+  var port_txt;
+  if (all_ports) {
+    port_txt = "All Ports";
+    if (all_port_data.length === 0) {
+      // Add an empty row saying "No MAC addresses attached"
+      tr = CreateStyledElement("tr", "notice");
+      addTextCell(tr, "No MAC addresses attached", "cl", PARM_CNT + 2 /* for Delete-button column and port number column */);
+      frag.appendChild(tr);
+    }
+  } else {
+    var port_data = all_port_data[0].split("#");
+
+    port_txt = "Port " + port_data[0];
+    if (port_data.length == 1) {
+      // Only showing contents for one port.
+      // Add an empty row saying "No MAC addresses attached"
+      tr = CreateStyledElement("tr", "notice");
+      addTextCell(tr, "No MAC addresses attached", "cl", PARM_CNT + 1 /* for Delete-button column */);
+      frag.appendChild(tr);
+    }
+  }
+
+  // Update the "Port Y"-part of "Port Security Port Status for Switch X Port Y".
+  document.getElementById("port").innerHTML = port_txt;
+
+  // Build the MAC table
+  for (var port = 0; port < all_port_data.length; port++) {
+    port_data = all_port_data[port].split("#");
+
+    for (var i = 1; i < port_data.length; i++) {
+      var mac_values = port_data[i].split("/");
+      if (mac_values.length != PARM_CNT) {
+        alert("Expected " + PARM_CNT + " values, but got " + mac_values.length + ". Data = " + mac_values);
+        return;
+      }
+
+      // port_data[0] is the port number, which is only used when all ports are
+      // displayed (otherwise, it's part of the heading).
+      add_mac_row(i, all_ports ? port_data[0] : -1, frag, mac_values);
+    }
+  }
+
+  var tbody = document.getElementById('mac_tbody');
+  clearChildNodes(tbody);
+  tbody.appendChild(frag);
+
+  // Update the timer
+  var autorefresh = document.getElementById('autorefresh');
+  if (autorefresh.checked) {
+    if (timerID) {
+      clearTimeout(timerID);
+    }
+    timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+  }
+}
+
+//****************************************
+//****************************************
+function requestUpdate()
+{
+  if (SpomNavigationLoading()) {
+    return; // Bail out, navigation will trigger update
+  }
+
+  document.getElementById("update").style.visibility = "visible";
+  loadXMLDoc(SpomAddSidArg("/stat/psec_status_port?port=" + selectedPort), processUpdate, null);
+  SpomUpdateDisplaySid("sid_display");
+}
+
+//****************************************
+//****************************************
+function PortSelect(sel)
+{
+  selectedPort = sel.options[sel.selectedIndex].value;
+  requestUpdate();
+}
+
+//****************************************
+//****************************************
+function chkRefresh(fld)
+{
+  if (!fld.checked) {
+    if (timerID) {
+      clearTimeout(timerID);
+    }
+    timerID = null;
+  } else {
+    requestUpdate();
+  }
+}
+
+//****************************************
+//****************************************
+function SpomSidSelectorUpdate(sid, max_port_cnt)
+{
+  SpomSetCurrentSid(sid); // Save current SID
+  selectedPort = SpomUpdatePortSelector("portselect", selectedPort, false, "All", true);
+  requestUpdate();        // Update page to reflect selector
+}
+
+//****************************************
+// Called only once. Used to fill in the port selector
+//****************************************
+function docLoad()
+{
+  selectedPort = SpomUpdatePortSelector("portselect", selectedPort, false, "All", true);
+  requestUpdate();
+}
+
+ </script>
+</head>
+
+  <body class="content" onload="docLoad();">
+
+    <h1>Port Security Port Status<span>&nbsp;</span><span id="sid_display"></span><span>&nbsp;</span><span id="port"></span></h1>
+
+    <div class="refreshbar">
+      <form action="#">
+        <select id="portselect" onchange="PortSelect(this);">
+          <option value="1">Port 1</option>
+          <option value="99">Port 99</option>
+        </select>
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+        <input type="button" value="Refresh" onclick="requestUpdate(); this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+     </form>
+    </div>
+
+    <table summary="MAC Addresses" class="display">
+      <thead>
+        <tr class="display_header">
+          <th>Delete</th>
+          <th id="port_col">Port</th>
+          <th>VLAN ID</th>
+          <th>MAC Address</th>
+          <th>Type</th>
+          <th>State</th>
+          <th>Age/Hold</th>
+        </tr>
+      </thead>
+      <tbody id="mac_tbody"></tbody>
+    </table>
+
+  </body>
+</html>
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

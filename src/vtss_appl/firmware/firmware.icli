@@ -1,0 +1,903 @@
+#
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "firmware_api.h"
+#include "firmware.h"
+#include "conf_api.h"
+#include "firmware_icli_functions.h"
+#include "vtss_remote_file_transfer.hxx"
+#include "vtss_uboot.hxx"
+#include <vtss/basics/notifications/process-cmd.hxx>
+INCLUDE_END
+
+FUNCTION_BEGIN
+static BOOL FIRMWARE_ICLI_runtime_url_file(u32                session_id,
+                                           icli_runtime_ask_t ask,
+                                           icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_URL: // Filter not support protocols
+        runtime->url_not_support[ICLI_URL_PROTOCOL_FILE] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_FLASH] = TRUE;
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL FIRMWARE_ICLI_runtime_url_file_not_uboot(u32                session_id,
+                                           icli_runtime_ask_t ask,
+                                           icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = !conf_is_uboot();
+        return TRUE;
+    case ICLI_ASK_URL: // Filter not support protocols
+        runtime->url_not_support[ICLI_URL_PROTOCOL_FILE] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_FLASH] = TRUE;
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL FIRMWARE_runtime_save_host_key(u32                session_id,
+                                           icli_runtime_ask_t ask,
+                                           icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_SFTP) ||
+                icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_SCP);
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL FIRMWARE_runtime_save_host_key_not_uboot(u32                session_id,
+                                           icli_runtime_ask_t ask,
+                                           icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = !conf_is_uboot() &&
+                           (icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_SFTP) ||
+                            icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_SCP));
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL FIRMWARE_runtime_ftp_active(u32                session_id,
+                                        icli_runtime_ask_t ask,
+                                        icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_FTP);
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL FIRMWARE_runtime_ftp_active_not_uboot(u32                session_id,
+                                        icli_runtime_ask_t ask,
+                                        icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = !conf_is_uboot() &&
+                           icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_FTP);
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL FIRMWARE_ICLI_runtime_is_not_uboot(u32                session_id,
+                                               icli_runtime_ask_t ask,
+                                               icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = !conf_is_uboot();
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL FIRMWARE_ICLI_runtime_is_uboot(u32                session_id,
+                                           icli_runtime_ask_t ask,
+                                           icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = conf_is_uboot();
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+FUNCTION_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = firmware upgrade <url_file> [save-host-key] [ftp-active]
+
+DOC_CMD_DESC    = Use firmware upgrade to load new firmware image to the switch.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to load new firmware image to the switch.
+DOC_CMD_EXAMPLE = firmware upgrade tftp://10.10.10.10/new_image_path/new_image.dat
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: firmware
+! 2: upgrade
+! 3: <url_file>
+! 4: save-host-key
+! 5: ftp-active
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = url_file
+CMD_VAR = has_save_host_key
+CMD_VAR = has_ftp_active
+
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_ICLI_runtime_url_file
+RUNTIME = FIRMWARE_runtime_save_host_key
+RUNTIME = FIRMWARE_runtime_ftp_active
+
+HELP = Firmware upgrade/swap
+HELP = Firmware upgrade
+HELP = ##ICLI_HELP_URL_FILE
+HELP = Always save SSH host keys in local cache
+HELP = Use active mode for FTP transfers (default is passive mode)
+
+BYWORD =
+BYWORD =
+BYWORD = <protocol>://[<username>[:<password>]@]<host>[:<port>][/<path>]/<file_name>
+! <protocol>:   The scheme of URI. The input string allows the lowercase letters
+!               only and its maximum length is 31. It should be one of tftp/ftp/http/https/scp/sftp.
+! <username>:   (Optional) User information. The maximum length is 63.
+! <password>:   (Optional) User information. The maximum length is 63.
+! <host>:       It can be a domain name or an IPv4 address. The maximum length is 63.
+! <port>:       (Optional) port number.
+! <path>:       If the path is presented, it must separated by forward slash(/). The maximum length is 255.
+! <file_nmame>: A valid file name is a text string drawn from alphabet (A-Za-z),
+!               digits (0-9), dot (.), hyphen (-), under score(_). The maximum length
+!               is 63(default) and hyphen must not be first character. The file name
+!               content that only contains '.' is not allowed.
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss::remote_file_options_t transfer_options;
+VARIABLE_END
+
+CODE_BEGIN
+    transfer_options.ssh_save_host_keys = has_save_host_key;
+    transfer_options.ftp_active = has_ftp_active;
+
+    firmware_icli_upgrade(session_id, url_file, transfer_options);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = VTSS_SWITCH_STANDALONE
+
+COMMAND = firmware swap
+
+DOC_CMD_DESC    = Use firmware swap to swap the active and alternative firmware images.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to swap the active and alternative firmware images.
+DOC_CMD_EXAMPLE = firmware swap
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! 1: firmware
+! 2: swap
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP = Firmware upgrade/swap
+HELP = Swap between Active and Backup firmware image.
+
+
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    firmware_icli_swap_image(session_id);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug firmware bootloader <url_file> [save-host-key] [ftp-active]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+! 2: firmware
+! 3: bootloader
+! 4: <word>
+! 5: save-host-key
+! 6: ftp-active
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = url_file
+CMD_VAR = has_save_host_key
+CMD_VAR = has_ftp_active
+
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_url_file_not_uboot
+RUNTIME = FIRMWARE_runtime_save_host_key_not_uboot
+RUNTIME = FIRMWARE_runtime_ftp_active_not_uboot
+
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP =
+HELP = ##ICLI_HELP_URL_FILE
+HELP = Always save SSH host keys in local cache
+HELP = Use active mode for FTP transfers (default is passive mode)
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <URL : URL of bootloader firmware image>
+
+VARIABLE_BEGIN
+    vtss::remote_file_options_t transfer_options;
+VARIABLE_END
+
+CODE_BEGIN
+    transfer_options.ssh_save_host_keys = has_save_host_key;
+    transfer_options.ftp_active = has_ftp_active;
+
+    firmware_icli_bootloader(session_id, url_file, transfer_options);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug firmware load <word> <url_file> [save-host-key] [ftp-active]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+! 2: firmware
+! 3: load
+! 4: <word>
+! 5: <word>
+! 6: save-host-key
+! 7: ftp-active
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = fis
+CMD_VAR = url_file
+CMD_VAR = has_save_host_key
+CMD_VAR = has_ftp_active
+
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_url_file_not_uboot
+RUNTIME = FIRMWARE_runtime_save_host_key_not_uboot
+RUNTIME = FIRMWARE_runtime_ftp_active_not_uboot
+
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP =
+HELP =
+HELP = ##ICLI_HELP_URL_FILE
+HELP = Always save SSH host keys in local cache
+HELP = Use active mode for FTP transfers (default is passive mode)
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <fis : Name of FIS entry to update>
+BYWORD = <URL : URL of firmware image>
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss::remote_file_options_t transfer_options;
+VARIABLE_END
+
+CODE_BEGIN
+    transfer_options.ssh_save_host_keys = has_save_host_key;
+    transfer_options.ftp_active = has_ftp_active;
+
+    firmware_icli_load_fis(session_id, fis, url_file, transfer_options);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug firmware ramload <url> [save-host-key] [ftp-active]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+! 2: firmware
+! 3: ramload
+! 4: <word>
+! 5: save-host-key
+! 6: ftp-active
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = url_file
+CMD_VAR = has_save_host_key
+CMD_VAR = has_ftp_active
+
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_url_file_not_uboot
+RUNTIME = FIRMWARE_runtime_save_host_key_not_uboot
+RUNTIME = FIRMWARE_runtime_ftp_active_not_uboot
+
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP =
+HELP = ##ICLI_HELP_URL_FILE
+HELP = Always save SSH host keys in local cache
+HELP = Use active mode for FTP transfers (default is passive mode)
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <URL : URL of firmware image>
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss::remote_file_options_t transfer_options;
+VARIABLE_END
+
+CODE_BEGIN
+    transfer_options.ssh_save_host_keys = has_save_host_key;
+    transfer_options.ftp_active = has_ftp_active;
+
+    firmware_icli_load_ram(session_id, url_file, transfer_options);
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug firmware name [<word>]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+! 2: firmware
+! 3: name
+! 4: <word>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = filename
+
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP =
+HELP =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <NAME : URL name of firmware image>
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+
+if (!filename) {
+    char name[FIRMWARE_IMAGE_NAME_MAX] = { };
+    (void) firmware_image_name_get("linux", name, sizeof(name));
+    ICLI_PRINTF("Primary: %s\n", name);
+    (void) firmware_image_name_get("linux.bk", name, sizeof(name));
+    ICLI_PRINTF("Backup: %s\n", name);
+} else {
+    mesa_rc rc = firmware_image_name_set("linux", filename);
+    if (rc != MESA_RC_OK) {
+        ICLI_PRINTF("Error: %s\n", error_txt(rc));
+    }
+}
+
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug firmware bootstrap [ nand | nor | mmc ] [size <uint>]
+DOC_CMD_DESC    = Use firmware bootstrap to bootstrap the switch.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to bootstrap the switch.
+DOC_CMD_EXAMPLE = debug firmware bootstrap
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP = ##ICLI_HELP_DEBUG
+CMD_VAR =
+
+! firmware
+HELP = debug firmware
+CMD_VAR =
+
+! bootstrap
+HELP = bootstrap
+CMD_VAR =
+
+! nand
+HELP = bootstrap the nand flash
+CMD_VAR = has_nand
+
+! nor
+HELP = bootstrap the nor flash
+CMD_VAR = has_nor
+
+! mmc
+HELP = bootstrap the mmc flash
+CMD_VAR = has_mmc
+
+! size
+HELP = Specify a partition size
+CMD_VAR = has_size
+
+! <uint>
+HELP = Size of data volume (in Mb). Default to max volume size.
+CMD_VAR = size
+BYWORD = size in Mb
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_size) {
+        // Ensure that default size limit is 0
+        size = 0;
+    }
+    if (has_nand) {
+        (void)firmware_icli_bootstrap_ubi(session_id, size);
+    } else if (has_nor) {
+        (void)firmware_icli_bootstrap_ubi(session_id, size);
+    } else if (has_mmc) {
+        (void)firmware_icli_bootstrap_mmc(session_id, size);
+    } else {
+        (void)firmware_icli_bootstrap_ubi(session_id, size);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug firmware bootstrap <url_file> [size <uint>] [force] [save-host-key] [ftp-active]
+
+DOC_CMD_DESC    = Use firmware bootstrap to bootstrap the switch. Default is to do nand bootstrap.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Use to bootstrap the switch.
+DOC_CMD_EXAMPLE = debug firmware bootstrap tftp://10.10.10.10/new_image_path/new_image.img.mfi
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! 1: debug
+! 2: firmware
+! 3: bootstrap
+! 4: <url_file>
+! 5: size
+! 6: <uint>
+! 7: force
+! 8: save-host-key
+! 9: ftp-active
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = url_file
+CMD_VAR = has_size
+CMD_VAR = size
+CMD_VAR = force
+CMD_VAR = has_save_host_key
+CMD_VAR = has_ftp_active
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_ICLI_runtime_url_file
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_runtime_save_host_key
+RUNTIME = FIRMWARE_runtime_ftp_active
+
+HELP = debug firmware
+HELP = bootstrap
+HELP = bootstrap a new switch
+HELP = ##ICLI_HELP_URL_FILE
+HELP = Specify a partition size
+HELP = Size of data volume (in Mb). Default to max volume size.
+HELP = force bootstrapping (Skip checks. Use only when ram loaded)
+HELP = Always save SSH host keys in local cache
+HELP = Use active mode for FTP transfers (default is passive mode)
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <protocol>://[<username>[:<password>]@]<host>[:<port>][/<path>]/<file_name>
+! <protocol>:   The scheme of URI. The input string allows the lowercase letters
+!               only and its maximum length is 31. It should be aware of tftp/ftp/http/https.
+! <username>:   (Optional) User information. The maximum length is 63.
+! <password>:   (Optional) User information. The maximum length is 63.
+! <host>:       It can be a domain name or an IPv4 address. The maximum length is 63.
+! <port>:       (Optional) port number.
+! <path>:       If the path is presented, it must separated by forward slash(/). The maximum length is 255.
+! <file_nmame>: A valid file name is a text string drawn from alphabet (A-Za-z),
+!               digits (0-9), dot (.), hyphen (-), under score(_). The maximum length
+!               is 63(default) and hyphen must not be first character. The file name
+!               content that only contains '.' is not allowed.
+BYWORD =
+BYWORD = size in Mb
+BYWORD =
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    vtss::remote_file_options_t transfer_options;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_size) {
+        // Ensure that default size limit is 0
+        size = 0;
+    }
+
+    transfer_options.ssh_save_host_keys = has_save_host_key;
+    transfer_options.ftp_active = has_ftp_active;
+    firmware_icli_bootstrap(session_id, url_file, size, (bool) force, transfer_options);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug show firmware mfi-info
+
+DOC_CMD_DESC    = Shows information about the Image
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2. show
+! 3: firmware
+! 4: info
+HELP = ##ICLI_HELP_DEBUG
+HELP = Show keyword
+HELP = firmware keyword
+HELP = Shows MFI image information
+
+CODE_BEGIN
+  firmware_icli_show_info(session_id);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug firmware max-size [<uint>]
+
+DOC_CMD_DESC    = Set maximum image size (or show it)
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2: firmware
+! 3. max-size
+! 4: <uint>
+HELP = ##ICLI_HELP_DEBUG
+HELP = firmware keyword
+HELP = max-size keyword
+HELP = Maximum size for firmware images (in bytes)
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = max_size
+
+CODE_BEGIN
+        if (max_size) {
+           firmware_max_download = max_size;
+        }
+        ICLI_PRINTF("Max download size = %zu\n", firmware_max_download);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug firmware fis resize <word> <uint>
+
+DOC_CMD_DESC    = Resize a FIS entry
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2: firmware
+! 3. fis
+! 4: resize
+! 5: <uint>
+! 6: <uint>
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = firmware keyword
+HELP = FIS keyword
+HELP = resize keyword
+HELP = FIS name
+HELP = FIS size
+
+RUNTIME =
+RUNTIME =
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_is_not_uboot
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = name
+CMD_VAR = new_size
+
+CODE_BEGIN
+        if(firmware_fis_resize(name, new_size) != VTSS_RC_OK) {
+            ICLI_PRINTF("Resize of %s to %d bytes failed\n", name, new_size);
+        }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug uboot printenv
+
+DOC_CMD_DESC    = Print uboot environment
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2: uboot
+! 3. printenv
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = uboot
+HELP = printenv
+
+RUNTIME = FIRMWARE_ICLI_runtime_is_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_is_uboot
+RUNTIME = FIRMWARE_ICLI_runtime_is_uboot
+
+CMD_VAR =
+CMD_VAR =
+
+CODE_BEGIN
+    ICLI_PRINTF("%s\n", vtss_uboot_env_get());
+    ICLI_PRINTF("Current image: %s\n", firmware_fis_act());
+    ICLI_PRINTF("Primary image: %s\n", firmware_fis_prim());
+    ICLI_PRINTF("Backup image: %s\n", firmware_fis_bak());
+    ICLI_PRINTF("Image to update: %s\n", firmware_fis_to_update());
+
+CODE_END
+
+CMD_END
+
+!==============================================================================

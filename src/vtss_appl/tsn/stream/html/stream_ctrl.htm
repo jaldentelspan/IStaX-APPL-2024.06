@@ -1,0 +1,194 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Stream Configuration Overview</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="stream_lib.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_stream_ctrl.htm";
+
+// Global variables
+var configTable, variables;
+
+/******************************************************************************/
+// on_edit_button_click()
+/******************************************************************************/
+function on_edit_button_click()
+{
+    var elm_ids = this.id.split("_");
+    document.location.href = "stream_edit.htm?streamid=" + elm_ids[1];
+}
+
+/******************************************************************************/
+// on_del_button_click()
+/******************************************************************************/
+function on_del_button_click()
+{
+    var elm_ids = this.id.split("_");
+    var submit_json = [elm_ids[1]];
+    requestJsonDoc("stream.config.del", submit_json, requestUpdate);
+}
+
+/******************************************************************************/
+// on_add_button_click()
+/******************************************************************************/
+function on_add_button_click()
+{
+    document.location.href = "stream_edit.htm";
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    var row;
+
+    // Numbers are colspan, rowspan
+    row = {fields: [
+             {type: "disp_hdr", params: ["Stream ID",         1, 1]},
+             {type: "disp_hdr", params: ["DMAC",              1, 1]},
+             {type: "disp_hdr", params: ["SMAC",              1, 1]},
+             {type: "disp_hdr", params: ["Outer VLAN Tag",    1, 1]},
+             {type: "disp_hdr", params: ["Inner VLAN Tag",    1, 1]},
+             {type: "disp_hdr", params: ["Protocol",          1, 1]},
+             {type: "disp_hdr", params: ["Attached Clients",  1, 1, "150px"]},
+             {type: "disp_hdr", params: ["Stream Collection", 1, 1]},
+             {type: "disp_hdr", params: ["Warnings",          1, 1]},
+             {type: "disp_hdr", params: ["",                  2, 1]}]
+          };
+
+    table_rows.push(row);
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(stream_id, conf, statu)
+{
+    var row;
+
+    row = {
+        fields: [
+            {type: "text",  params: [stream_id,                                                  "cr"]},
+            {type: "text",  params: [stream_lib_dmac_match_type_map[conf.dmacMatchType],         "cl"]},
+            {type: "text",  params: [stream_lib_mac_is_zero(conf.smacMask) ? "Any" : "MAC/Mask", "cl"]},
+            {type: "text",  params: [stream_lib_vlan_tag_match_map[conf.outerTag],               "cl"]},
+            {type: "text",  params: [stream_lib_vlan_tag_match_map[conf.innerTag],               "cl"]},
+            {type: "text",  params: [stream_lib_protocol_type_map[conf.protocolType],            "cl"]},
+            {type: "text",  params: [stream_lib_attached_clients_to_str(statu),                  "cl"]},
+            stream_lib_stream_collection_cell_get(statu),
+            {type: "image", params: ["c", stream_lib_oper_warnings_to_image(statu), stream_lib_oper_warnings_to_str(statu)]},
+            {type: "image", params: ["c", "images/edit.gif", "Edit",   "Edit_"   + stream_id, on_edit_button_click]},
+            {type: "image", params: ["c", "images/del.gif",  "Delete", "Delete_" + stream_id, on_del_button_click]}]
+    };
+
+    return row;
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var row, table_rows = new Array();
+
+    // Add table header
+    add_header(table_rows);
+
+    // Add one row per stream
+    Object.each(variables.conf, function(record, idx) {
+        table_rows.push(add_row(record.key, record.val, variables.statu[idx].val));
+    });
+
+    // The maximum number of streams that can be configured is limited by the
+    // allowed index range [1; capabilities.inst_cnt_max]
+    table_rows.push(
+        {fields: [
+           {type: "text",  params: ["", "c", 10]},
+           {type: "image", params: ["c", "images/add.gif", "Add new stream", null, on_add_button_click]}]
+        });
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Add table rows
+    var table_rows = add_rows();
+    configTable.addRows(table_rows);
+
+    // Update this dynamic table
+    configTable.update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate(recv_json, name)
+{
+    variables = {conf: {}, statu: {}};
+    stream_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    configTable = new DynamicTable("streamTableContent", "config");
+
+    requestUpdate();
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>Stream Configuration Overview</h1>
+
+<div class="refreshbar">
+  <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();"/>
+  <img id="update" alt="" src="images/updating.gif"/>
+</div>
+
+<div id="streamTableContent"></div>
+
+</body>
+</html>
+

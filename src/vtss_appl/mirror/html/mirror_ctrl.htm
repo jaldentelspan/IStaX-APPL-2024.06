@@ -1,0 +1,177 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Mirror Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_mirror_ctrl.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities;
+var timerID;
+
+var oTMode = Array("Disabled", "Enabled");
+var oVMode = Array(false, true);
+var oTType       = Array("Mirror", "RMirror Source", "RMirror Destination");
+var oVType      = Array("mirror", "rMirrorSource", "rMirrorDestination");
+
+function addHeader(table_rows)
+{
+    var row;
+
+    row = {fields:[
+             {type:"disp_hdr", params:["Session ID"]},
+             {type:"disp_hdr", params:["Mode"]},
+             {type:"disp_hdr", params:["Type"]},
+             {type:"disp_hdr", params:["VLAN ID"]},
+             {type:"disp_hdr", params:["Reflector Port"]}
+            ]
+          };
+    table_rows.push(row);
+}
+
+function addRow(key, val)
+{
+    var none_map_val = 0xFFFFFFFF, none_map_text = "None", none_interface_text = "NONE";
+    var tunnel_mode_suffix = val.TunnelMode == "useglobal" ? " (" + oTTunnelMode[oVTunnelMode.indexOf(global_conf.tunnelMode)] + ")" : "";
+
+    var row = {fields:[
+                {type:"link",   params:["cr", "mirror.htm?session_id=" + key, key]},
+
+                {type:"text",  params:[oTMode[oVMode.indexOf(val.Mode)], "c"]},
+                {type:"text",  params:[oTType[oVType.indexOf(val.Type)], "c"]},
+                {type:"text", params:[val.Type == "mirror" ? "-": val.RMirrorVlan, "c"]},
+                {type:"text",  params:[val.Type == "rMirrorSource" ? val.ReflectorPort : "-" , "c"]}
+              ]};
+
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var row, empty_colspan = 7;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function(record) {
+        table_rows.push(addRow(record.key, record.val));
+    });
+
+    return table_rows;
+}
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    // Save the received JSON data
+    myDynamicTable.saveRecvJson("config", recv_json);
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table
+    myDynamicTable.update();
+
+    // Refresh timer
+    var autorefresh = document.getElementById("autorefresh");
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+
+function requestUpdate()
+{
+    // Restore table content
+    myDynamicTable.restore();
+
+    // This table two JSON data.
+    requestJsonDoc("mirror.config.session.get", null, processUpdate, "config");
+}
+
+function checkRefresh(fld)
+{
+    if (fld.checked) {
+        requestUpdate();
+    } else if (timerID) {
+        clearTimeout(timerID);
+        timerID = null;
+    }
+}
+
+window.addEvent('domready', function() {
+    // Create a form with table body for receive/transmit JSON data
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusRowCtrlBar");
+
+    requestUpdate();
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>Mirror &amp; RMirror Configuration Table</h1>
+
+<div class="refreshbar">
+  <input type="checkbox" name="autorefresh" id="autorefresh" onclick="checkRefresh(this);">
+  <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+<div style="visibility: hidden;">
+ <img alt="" src="images/add.gif">
+ <img alt="" src="images/edit.gif">
+ <img alt="" src="images/del.gif">
+</div>
+
+</body>
+</html>

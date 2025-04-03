@@ -1,0 +1,3378 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_IP)
+
+INCLUDE_BEGIN
+#include "mgmt_api.h"
+#include "misc_api.h"
+#include "ip_api.h"
+#include "ip_utils.hxx"
+#include "ip_os.hxx"
+#include "ip_icli_priv.h"
+#include "ip_chip.hxx"
+#include "vtss_netlink.hxx"
+#include "ip_filter_api.hxx"
+#include "vlan_api.h"
+#include "icli_porting_util.h"
+#include "icfg_api.h"
+#include "packet_api.h"
+#include "conf_api.h"
+
+#ifdef VTSS_SW_OPTION_IP_MISC
+#include "ping_api.h"
+#include "traceroute_api.h"
+#endif
+
+#ifdef VTSS_SW_OPTION_SNMP
+#include "ip_snmp.h"
+#endif
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+int cyg_file_owner(int fd, const char **file, int *line);
+extern void show_network_routes(vtss_ip_cli_pr *);
+#ifdef __cplusplus
+}
+#endif
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include IP's trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "ip_trace.h"
+
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_IP
+
+typedef struct {
+    bool         enable;
+    mesa_etype_t tpid;
+    mesa_vid_t   vid;
+    mesa_pcp_t   pcp;
+    mesa_dei_t   dei;
+} IP_ICLI_tag_t;
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define IP_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#define ICFG_PRINTF(...) VTSS_RC(vtss_icfg_printf(result, __VA_ARGS__))
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// IP_ICFG_ip_address_print()
+/******************************************************************************/
+static mesa_rc IP_ICFG_ip_address_print(vtss_ifindex_t ifindex, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ip_if_conf_ipv4_t ip_conf;
+    vtss_ifindex_elm_t          elm;
+    mesa_ipv4_t                 mask;
+    size_t                      hex_str_len;
+    char                        str_buf[32];
+    int                         idx;
+
+    if (vtss_appl_ip_if_conf_ipv4_get(ifindex, &ip_conf) != VTSS_RC_OK || !ip_conf.enable) {
+        ICFG_PRINTF(" no ip address\n");
+        return VTSS_RC_OK;
+    }
+
+    mask = vtss_ipv4_prefix_to_mask(ip_conf.network.prefix_size);
+
+    if (ip_conf.dhcpc_enable) {
+        ICFG_PRINTF(" ip address dhcp");
+        if (ip_conf.fallback_enable) {
+            ICFG_PRINTF(" fallback " VTSS_IPV4_FORMAT " " VTSS_IPV4_FORMAT, VTSS_IPV4_ARGS(ip_conf.network.address), VTSS_IPV4_ARGS(mask));
+            ICFG_PRINTF(" timeout %u", ip_conf.fallback_timeout_secs);
+        }
+
+        // client_id
+        if (ip_conf.dhcpc_params.client_id.type != VTSS_APPL_IP_DHCP4C_ID_TYPE_AUTO) {
+            ICFG_PRINTF(" client-id ");
+            if (ip_conf.dhcpc_params.client_id.type == VTSS_APPL_IP_DHCP4C_ID_TYPE_IF_MAC) {
+                if (vtss_ifindex_decompose(ip_conf.dhcpc_params.client_id.if_mac, &elm) == VTSS_RC_OK &&
+                    elm.iftype == VTSS_IFINDEX_TYPE_PORT) {
+                    ICFG_PRINTF("%s", icli_port_info_txt(elm.usid, iport2uport(elm.ordinal), str_buf));
+                }
+            } else if (ip_conf.dhcpc_params.client_id.type == VTSS_APPL_IP_DHCP4C_ID_TYPE_ASCII) {
+                ICFG_PRINTF("ascii %s", ip_conf.dhcpc_params.client_id.ascii);
+            } else if (ip_conf.dhcpc_params.client_id.type == VTSS_APPL_IP_DHCP4C_ID_TYPE_HEX) {
+                hex_str_len = strlen(ip_conf.dhcpc_params.client_id.hex);
+                ICFG_PRINTF("hex ");
+                for (idx = 0; idx < hex_str_len; ++idx) {
+                    ICFG_PRINTF("%c", toupper(ip_conf.dhcpc_params.client_id.hex[idx]));
+                }
+            }
+        }
+
+        // hostname
+        if (strlen(ip_conf.dhcpc_params.hostname)) {
+            ICFG_PRINTF(" hostname %s", ip_conf.dhcpc_params.hostname);
+        }
+
+        ICFG_PRINTF("\n");
+    } else {
+        ICFG_PRINTF(" ip address " VTSS_IPV4_FORMAT " " VTSS_IPV4_FORMAT "\n",
+                    VTSS_IPV4_ARGS(ip_conf.network.address),
+                    VTSS_IPV4_ARGS(mask));
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// IP_ICFG_global_conf()
+/******************************************************************************/
+static mesa_rc IP_ICFG_global_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_ip_route_key_t  prev, rt;
+    vtss_appl_ip_route_conf_t route_conf, default_route_conf;
+    mesa_ipv4_t               mask;
+    bool                      first = true;
+    mesa_rc                   rc;
+
+    T_DG(IP_TRACE_GRP_ICLI, "Enter");
+
+    // [no] ip routing
+    // ip route <ipv4_addr> <ipv4_netmask> <ipv4_ucast> [<1-255>]
+
+    VTSS_RC(vtss_appl_ip_route_conf_default_get(&default_route_conf));
+
+#ifdef VTSS_SW_OPTION_L3RT
+    {
+        vtss_appl_ip_global_conf_t global_conf;
+
+        if ((rc = vtss_appl_ip_global_conf_get(&global_conf)) != VTSS_RC_OK) {
+            T_EG(IP_TRACE_GRP_ICLI, "vtss_appl_ip_global_conf_get() failed: %s", error_txt(rc));
+            return rc;
+        }
+
+        if (global_conf.routing_enable) {
+            ICFG_PRINTF("ip routing\n");
+        } else if (req->all_defaults) {
+            ICFG_PRINTF("no ip routing\n");
+        }
+    }
+#endif
+
+    while (vtss_appl_ip_route_conf_itr(first ? nullptr : &prev, &rt, VTSS_APPL_IP_ROUTE_TYPE_IPV4_UC) == VTSS_RC_OK) {
+        first = false;
+        prev  = rt;
+
+        if ((rc = vtss_appl_ip_route_conf_get(&rt, &route_conf)) != VTSS_RC_OK) {
+            T_EG(IP_TRACE_GRP_ICLI, "vtss_appl_ip_route_conf_get(%s) failed: %s", rt, error_txt(rc));
+            continue;
+        }
+
+        mask = vtss_ipv4_prefix_to_mask(rt.route.ipv4_uc.network.prefix_size);
+
+        if (rt.route.ipv4_uc.destination == vtss_ipv4_blackhole_route) {
+            ICFG_PRINTF("ip route " VTSS_IPV4_FORMAT " " VTSS_IPV4_FORMAT " blackhole",
+                    VTSS_IPV4_ARGS(rt.route.ipv4_uc.network.address),
+                    VTSS_IPV4_ARGS(mask));
+        } else {
+            ICFG_PRINTF("ip route " VTSS_IPV4_FORMAT " " VTSS_IPV4_FORMAT " " VTSS_IPV4_FORMAT,
+                    VTSS_IPV4_ARGS(rt.route.ipv4_uc.network.address),
+                    VTSS_IPV4_ARGS(mask),
+                    VTSS_IPV4_ARGS(rt.route.ipv4_uc.destination));
+        }
+
+        if (route_conf.distance != default_route_conf.distance || req->all_defaults) {
+            ICFG_PRINTF(" distance %u", route_conf.distance);
+        }
+
+        ICFG_PRINTF("\n");
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// IP_ICFG_port_interface_conf()
+/******************************************************************************/
+static mesa_rc IP_ICFG_port_interface_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_ifindex_t ifidx;
+
+    T_DG(IP_TRACE_GRP_ICLI, "iport = %u", req->instance_id.port.begin_iport);
+
+    VTSS_RC(vtss_ifindex_from_port(req->instance_id.port.isid, req->instance_id.port.begin_iport, &ifidx));
+    if (vtss_ifindex_is_cpu(ifidx)) {
+        IP_ICFG_ip_address_print(ifidx, result);
+    }
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// IP_ICFG_vlan_interface_conf()
+/******************************************************************************/
+static mesa_rc IP_ICFG_vlan_interface_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    mesa_vid_t     vid = (mesa_vid_t)req->instance_id.vlan;
+    vtss_ifindex_t ifidx;
+
+    T_DG(IP_TRACE_GRP_ICLI, "vid = %u", vid);
+
+    VTSS_RC(vtss_ifindex_from_vlan(vid, &ifidx));
+    IP_ICFG_ip_address_print(ifidx, result);
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#if defined(VTSS_SW_OPTION_ICFG)
+/******************************************************************************/
+// vtss_ip_ipv4_icfg_init()
+/******************************************************************************/
+mesa_rc vtss_ip_ipv4_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPV4_GLOBAL,         "ipv4", IP_ICFG_global_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPV4_INTERFACE_CONF, "ipv4", IP_ICFG_port_interface_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_IPV4_VLAN_INTERFACE, "ipv4", IP_ICFG_vlan_interface_conf));
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#if defined(VTSS_SW_OPTION_L3RT)
+/******************************************************************************/
+// IP_ICLI_cmd_debug_lpm_stat_get_single()
+/******************************************************************************/
+static void IP_ICLI_cmd_debug_lpm_stat_get_single(i32 session_id, mesa_vid_t vlan, bool ipv4)
+{
+    mesa_rc rc;
+    mesa_l3_counters_t c;
+
+    rc = vtss_ip_chip_counters_vlan_get(vlan, &c);
+    if (rc != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to get counters on VLAN %u.\n", vlan);
+        return;
+    }
+
+    if (ipv4) {
+        ICLI_PRINTF("IPv4 %4u " VPRI64Fu("12") " " VPRI64Fu("15") " " VPRI64Fu("12") " " VPRI64Fu("15") "\n",
+                    vlan,
+                    c.ipv4uc_received_frames,
+                    c.ipv4uc_received_octets,
+                    c.ipv4uc_transmitted_frames,
+                    c.ipv4uc_transmitted_octets);
+    } else {
+        ICLI_PRINTF("IPv4 %4u " VPRI64Fu("12") " " VPRI64Fu("15") " " VPRI64Fu("12") " " VPRI64Fu("15") "\n",
+                    vlan,
+                    c.ipv6uc_received_frames,
+                    c.ipv6uc_received_octets,
+                    c.ipv6uc_transmitted_frames,
+                    c.ipv6uc_transmitted_octets);
+    }
+}
+#endif  // defined(VTSS_SW_OPTION_L3RT)
+
+#if defined(VTSS_SW_OPTION_L3RT)
+/******************************************************************************/
+// IP_ICLI_l3_present()
+/******************************************************************************/
+static BOOL IP_ICLI_l3_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return icli_present_cap(ask, runtime, MESA_CAP_L3);
+}
+#endif
+
+/******************************************************************************/
+// IP_ICLI_has_l3rt()
+/******************************************************************************/
+static BOOL IP_ICLI_has_l3rt(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_L3RT)
+    return icli_present_cap(ask, runtime, MESA_CAP_L3);
+#else
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// IP_ICLI_has_l3rt_and_ipv6()
+/******************************************************************************/
+static BOOL IP_ICLI_has_l3rt_and_ipv6(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_L3RT) && defined(VTSS_SW_OPTION_IPV6)
+    return icli_present_cap(ask, runtime, MESA_CAP_L3);
+#else
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// IP_ICLI_has_ipv6()
+/******************************************************************************/
+static BOOL IP_ICLI_has_ipv6(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+#if defined(VTSS_SW_OPTION_IPV6)
+    runtime->present = TRUE;
+#else
+    runtime->present = FALSE;
+#endif
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// IP_ICLI_dhcp_client_id_ascii()
+/******************************************************************************/
+static BOOL IP_ICLI_dhcp_client_id_ascii(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = 1;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_IP_DHCP4C_ID_MAX_LENGTH - 1;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/******************************************************************************/
+// IP_ICLI_dhcp_client_id_hex()
+/******************************************************************************/
+static BOOL IP_ICLI_dhcp_client_id_hex(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = 1;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_IP_DHCP4C_ID_MAX_LENGTH * 2; // one byte hex value is presented as two octets string
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/******************************************************************************/
+// IP_ICLI_dhcp_hostname()
+/******************************************************************************/
+static BOOL IP_ICLI_dhcp_hostname(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = 1;
+        runtime->range.u.ur.range[0].max = VTSS_APPL_IP_DHCP4C_HOSTNAME_MAX_LENGTH - 1;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/******************************************************************************/
+// IP_ICLI_build_ipv4_uc_route()
+// Pure function, no side effects
+/******************************************************************************/
+mesa_rc IP_ICLI_build_ipv4_uc_route(vtss_appl_ip_route_key_t *rt, mesa_ipv4_t address, mesa_ipv4_t mask, mesa_ipv4_t gateway)
+{
+    vtss_clear(*rt);
+    rt->type = VTSS_APPL_IP_ROUTE_TYPE_IPV4_UC;
+    VTSS_RC(vtss_build_ipv4_network(&rt->route.ipv4_uc.network, address, mask));
+    rt->route.ipv4_uc.destination = gateway;
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// IP_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t IP_ICLI_show_capabilities(u32 session_id)
+{
+    vtss_appl_ip_capabilities_t cap;
+    const int                   cap_width = 37;
+    mesa_rc                     rc;
+
+    if ((rc = vtss_appl_ip_capabilities_get(&cap)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports IPv4 host:",                   cap.has_ipv4_host_capabilities               ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports IPv6 host:",                   cap.has_ipv6_host_capabilities               ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports IPv4 Unicast Routing:",        cap.has_ipv4_unicast_routing_capabilities    ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports IPv4 Unicast Routing in H/W:", cap.has_ipv4_unicast_hw_routing_capabilities ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports IPv6 Unicast Routing:",        cap.has_ipv6_unicast_routing_capabilities    ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports IPv6 Unicast Routing in H/W:", cap.has_ipv6_unicast_hw_routing_capabilities ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. IP interface count:",              cap.interface_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. static route count:",              cap.static_route_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. LPM H/W entry count:",             cap.lpm_hw_entry_cnt_max);
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// IP_ICLI_ip_by_vlan_or_port()
+/******************************************************************************/
+static bool IP_ICLI_ip_by_vlan_or_port(mesa_vid_t vlan, mesa_port_no_t iport, mesa_ipv4_network_t *ipv4)
+{
+    mesa_vid_t                 vid;
+    vtss_appl_vlan_port_conf_t vlan_conf;
+    vtss_ifindex_t             ifindex;
+    vtss_appl_ip_if_key_ipv4_t key = {};
+
+    if (vlan == 0) {
+        // Get PVID
+        if (vlan_mgmt_port_conf_get(VTSS_ISID_LOCAL, iport, &vlan_conf, VTSS_APPL_VLAN_USER_ALL, true) != VTSS_RC_OK) {
+            return false;
+        }
+
+        vid = vlan_conf.hybrid.pvid;
+    } else {
+        vid = vlan;
+    }
+
+    if (vtss_ifindex_from_vlan(vid, &ifindex) != VTSS_RC_OK) {
+        return false;
+    }
+
+    key.ifindex = ifindex;
+
+    // Get the IP for the VLAN with the PVID
+    if (vtss_appl_ip_if_status_ipv4_itr(&key, &key) != VTSS_RC_OK || key.ifindex != ifindex) {
+        return false;
+    }
+
+    *ipv4 = key.addr;
+    return true;
+}
+
+/******************************************************************************/
+// IP_ICLI_runtime_packet_length()
+/******************************************************************************/
+static BOOL IP_ICLI_runtime_packet_length(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_RANGE) {
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.sr.cnt = 1;
+        runtime->range.u.sr.range[0].min = 60;
+        runtime->range.u.sr.range[0].max = fast_cap(MESA_CAP_PORT_FRAME_LENGTH_MAX);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/******************************************************************************/
+// IP_ICLI_hton_08()
+/******************************************************************************/
+static inline void IP_ICLI_hton_08(uint8_t **p, uint8_t val)
+{
+    uint8_t *q = *p;
+
+    q[0] = val;
+    *p += 1;
+}
+
+/******************************************************************************/
+// IP_ICLI_hton_16()
+/******************************************************************************/
+static inline void IP_ICLI_hton_16(uint8_t **p, uint16_t val)
+{
+    uint8_t *q = *p;
+
+    q[0] = val >> 8;
+    q[1] = val >> 0;
+    *p += 2;
+}
+
+/****************************************************************************/
+// IP_ICLI_hton_32()
+/****************************************************************************/
+static inline void IP_ICLI_hton_32(uint8_t **p, uint32_t val)
+{
+    uint8_t *q = *p;
+
+    q[0] = val >> 24;
+    q[1] = val >> 16;
+    q[2] = val >>  8;
+    q[3] = val >>  0;
+    *p += 4;
+}
+
+/******************************************************************************/
+// IP_ICLI_hton_cp()
+// "cp" stands for "copy".
+/******************************************************************************/
+static inline void IP_ICLI_hton_cp(uint8_t **p, uint8_t *src, size_t len)
+{
+    memcpy(*p, src, len);
+    *p += len;
+}
+
+/******************************************************************************/
+// IP_ICLI_tag_compose()
+// Returns 1 if a tag was added, 0 if not.
+/******************************************************************************/
+static uint32_t IP_ICLI_tag_compose(uint8_t **p, IP_ICLI_tag_t *tag)
+{
+    if (!tag->enable) {
+        // Don't push a tag
+        return 0;
+    }
+
+    // TPID
+    IP_ICLI_hton_16(p, tag->tpid);
+
+    // PCP, DEI, VID
+    IP_ICLI_hton_16(p, (tag->pcp << 13) | ((tag->dei & 0x1) << 12) | (tag->vid & 0xfff));
+
+    return 1;
+}
+
+/******************************************************************************/
+// IP_ICLI_l4_frame_compose()
+/******************************************************************************/
+static mesa_rc IP_ICLI_l4_frame_compose(uint8_t **p, uint32_t l4_size_bytes, mesa_ip_addr_t &sip, mesa_ip_addr_t &dip, uint8_t ip_proto, uint16_t sport, uint16_t dport)
+{
+    uint8_t *chksum_p = NULL, *start_p = *p;
+
+    // Whether the user has configured TCP, UDP, or something else, we
+    // insert the source and destination ports if there's room.
+    // Source first.
+    if (l4_size_bytes >= 2) {
+        IP_ICLI_hton_16(p, sport);
+    }
+
+    if (l4_size_bytes >= 4) {
+        IP_ICLI_hton_16(p, dport);
+    }
+
+    // We support TCP and UDP checksum calculations.
+    if (ip_proto == IP_PROTO_TCP) {
+        // Size of TCP header without options == 20
+        if (l4_size_bytes < 20) {
+            icli_session_self_printf("%% Need 20 bytes for TCP header, but only %u bytes left\n", l4_size_bytes);
+            return VTSS_RC_ERROR;
+        }
+
+        // Skip across sequence number and acknowledgement number
+        *p += 8;
+
+        // Data offset is the size of the TCP header in 32-bit words.
+        // This is always 20 bytes (5 words) in this implementation (no TCP
+        // options)
+        IP_ICLI_hton_08(p, 0x50);
+
+        // Skip across the next 3 bytes
+        *p += 3;
+
+        // This is where the TCP checksum must go
+        chksum_p = *p;
+
+        // In order for the caller of us to sanity check that we haven't
+        // overwritten the frame boundary, advance #p beyond the checksum and
+        // urgent pointer.
+        *p += 4;
+    } else if (ip_proto == IP_PROTO_UDP) {
+        if (l4_size_bytes < 8) {
+            icli_session_self_printf("%% Need 8 bytes for UDP header, but only %u bytes left\n", l4_size_bytes);
+            return VTSS_RC_ERROR;
+        }
+
+        // Length in bytes of the UDP header and its data.
+        IP_ICLI_hton_16(p, l4_size_bytes);
+
+        // This is where the UDP checksum must go
+        chksum_p = *p;
+
+        // In order for the caller of us to sanity check that we haven't
+        // overwritten the frame boundary, advance #p beyond the checksum.
+        *p += 2;
+    }
+
+    if (chksum_p) {
+        // The UDP/TCP checksum is done across the entire L4 payload.
+        IP_ICLI_hton_16(&chksum_p, vtss_ip_pseudo_header_checksum(start_p, l4_size_bytes, sip, dip, ip_proto));
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// IP_ICLI_l3_frame_compose()
+// p points to the location where the EtherType must be stored.
+// l3_size_bytes holds the number of bytes starting from the IP header up to,
+// but not including the FCS.
+/******************************************************************************/
+static mesa_rc IP_ICLI_l3_frame_compose(uint8_t **p, uint32_t l3_size_bytes, mesa_ip_addr_t &sip, mesa_ip_addr_t &dip, uint8_t dscp, bool dont_fragment, uint8_t ip_proto, uint16_t sport, uint16_t dport)
+{
+    uint32_t l4_size_bytes;
+    uint8_t  *chksum_p, *start_p = NULL;
+
+    switch (sip.type) {
+    case MESA_IP_TYPE_IPV4:
+        if (l3_size_bytes < 20) {
+            icli_session_self_printf("%% L3 size (%u) not big enough to hold IPv4 header of 20 bytes\n", l3_size_bytes);
+            return VTSS_RC_ERROR;
+        }
+
+        l4_size_bytes = l3_size_bytes - 20;
+
+        // EtherType (not included in l3_size_bytes)
+        IP_ICLI_hton_16(p, ETYPE_IPV4);
+
+        // For the sake of chksum computations, save a pointer to the
+        // start of the IP header.
+        start_p = *p;
+
+        // IPv4 version and header length
+        IP_ICLI_hton_08(p, 0x45);
+
+        // DiffServ (DSCP + ECN).
+        IP_ICLI_hton_08(p, dscp << 2);
+
+        // Length of IP header and its data (i.e. the L2 frame's payload size).
+        IP_ICLI_hton_16(p, l3_size_bytes);
+
+        // Identification
+        IP_ICLI_hton_16(p, 0);
+
+        // Flags && Fragment Offset
+        // Set fragment offset 0.
+        IP_ICLI_hton_16(p, dont_fragment ? 0x4000 : 0x0000);
+
+        // Time To Live.
+        IP_ICLI_hton_08(p, 128);
+
+        // Protocol
+        IP_ICLI_hton_08(p, ip_proto);
+
+        // Checksum (initially, we insert 0, and recalculate it afterwards.
+        // Save a copy of where we reached.
+        chksum_p = *p;
+        IP_ICLI_hton_16(p, 0);
+
+        // SIP
+        IP_ICLI_hton_32(p, sip.addr.ipv4);
+
+        // DIP
+        IP_ICLI_hton_32(p, dip.addr.ipv4);
+
+        // Time to compute the IP header checksum over the past 20 bytes
+        // (we don't have any IP options).
+        IP_ICLI_hton_16(&chksum_p, vtss_ip_checksum(start_p, 20));
+        break;
+
+    case MESA_IP_TYPE_IPV6:
+        if (l3_size_bytes < 40) {
+            icli_session_self_printf("%% L3 size (%u bytes) not big enough to hold IPv6 header of 40 bytes\n", l3_size_bytes);
+            return VTSS_RC_ERROR;
+        }
+
+        l4_size_bytes = l3_size_bytes - 40;
+
+        // EtherType
+        IP_ICLI_hton_16(p, ETYPE_IPV6);
+
+        // IPv6 version, DiffServ (DSCP + ECN), and Flow Label
+        IP_ICLI_hton_32(p, (6 << 28) | (dscp << 22));
+
+        // Payload length (length of L4 payload + extension headers).
+        IP_ICLI_hton_16(p, l4_size_bytes);
+
+        // Next Header (Protocol)
+        IP_ICLI_hton_08(p, ip_proto);
+
+        // Hop Limit.
+        IP_ICLI_hton_08(p, 128);
+
+        // SIP
+        IP_ICLI_hton_cp(p, sip.addr.ipv6.addr, sizeof(sip.addr.ipv6.addr));
+
+        // DIP
+        IP_ICLI_hton_cp(p, dip.addr.ipv6.addr, sizeof(dip.addr.ipv6.addr));
+        break;
+
+    default:
+        icli_session_self_printf("%% Unsupported IP type (%d)\n", sip.type);
+        return VTSS_RC_ERROR;
+    }
+
+    VTSS_RC(IP_ICLI_l4_frame_compose(p, l4_size_bytes, sip, dip, ip_proto, sport, dport));
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// IP_ICLI_frame_compose()
+// When invoked, #l2_size_bytes is supposed to include the size of possible tags
+// and FCS.
+/******************************************************************************/
+static mesa_rc IP_ICLI_frame_compose(uint8_t *frame, uint32_t l2_size_bytes, mesa_mac_t *dmac, mesa_mac_t *smac, IP_ICLI_tag_t *otag, IP_ICLI_tag_t *itag, mesa_ip_addr_t &sip, mesa_ip_addr_t &dip, uint8_t dscp, bool dont_fragment, uint8_t ip_proto, uint16_t sport, uint16_t dport)
+{
+    uint8_t  *temp, *p;
+    uint32_t l3_size_bytes, tag_cnt;
+
+    // We need an iteration pointer
+    p = frame;
+
+    // Better start out with a cleared frame
+    memset(p, 0, l2_size_bytes - 4 /* FCS */);
+
+    // DMAC
+    IP_ICLI_hton_cp(&p, dmac->addr, sizeof(dmac->addr));
+
+    // SMAC
+    IP_ICLI_hton_cp(&p, smac->addr, sizeof(smac->addr));
+
+    // Outer tag
+    tag_cnt = IP_ICLI_tag_compose(&p, otag);
+
+    // Inner tag
+    tag_cnt += IP_ICLI_tag_compose(&p, itag);
+
+    // Frame type and subsequent fields
+    l3_size_bytes = l2_size_bytes - (2 * 6 /* DMAC and SMAC */ + 4 * tag_cnt /* Tags */ + 2 /* EtherType */ + 4 /* FCS */);
+
+    VTSS_RC(IP_ICLI_l3_frame_compose(&p, l3_size_bytes, sip, dip, dscp, dont_fragment, ip_proto, sport, dport));
+
+    // The longest frame we can compose is an IPv6 with UDP or TCP header. In
+    // this case, we need 6 (DMAC) + 6 (SMAC) + 2 (EtherType) + 40 (IPv6 header)
+    // + 2 (SPORT) + 2 (DPORT) + 4 (ECE ID) + 4 (FCS) = 64 bytes
+    // which is the minimum frame size we can be invoked with (additional tags
+    // are already catered for).
+    // Double-check that this indeed is the case. #p now points to the first
+    // byte after the last byte we have written to the frame and #temp points to
+    // the first byte of the FCS.
+    temp = frame + l2_size_bytes - 4 /* FCS */;
+    if (p > temp) {
+        T_E("End-of-frame overwritten by %u bytes", (uint32_t)(p - temp));
+        return VTSS_RC_ERROR;
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// IP_ICLI_frame_tx_props_setup()
+/******************************************************************************/
+static mesa_rc IP_ICLI_frame_tx_props_setup(packet_tx_props_t *tx_props, uint8_t *buffer, uint32_t frame_size_bytes, bool switch_frm, IP_ICLI_tag_t *tag, uint64_t port_mask)
+{
+    packet_tx_props_init(tx_props);
+    tx_props->packet_info.modid  = VTSS_MODULE_ID_IP;
+    tx_props->packet_info.frm    = buffer;
+    tx_props->packet_info.len    = frame_size_bytes - 4 /* FCS */;
+    tx_props->tx_info.switch_frm = switch_frm;
+
+    if (switch_frm) {
+        tx_props->tx_info.tag.vid = tag->vid;
+        tx_props->tx_info.tag.pcp = tag->pcp;
+        tx_props->tx_info.tag.dei = tag->dei;
+    } else {
+        tx_props->tx_info.dst_port_mask = port_mask;
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// IP_ICLI_random_ip()
+/******************************************************************************/
+static void IP_ICLI_random_ip(mesa_ip_addr_t *ip)
+{
+    size_t  sz, i;
+    uint8_t *p;
+
+    if (ip->type == MESA_IP_TYPE_IPV6) {
+        sz = sizeof(ip->addr.ipv6);
+        p  = (uint8_t *)&ip->addr.ipv6;
+    } else {
+        sz = sizeof(ip->addr.ipv4);
+        p  = (uint8_t *)&ip->addr.ipv4;
+    }
+
+    for (i = 0; i < sz; i++) {
+        p[i] = rand();
+    }
+}
+
+FUNCTION_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_L3RT)
+COMMAND = ip routing
+
+DOC_CMD_DESC    = Enable routing
+DOC_CMD_USAGE   = ip routing
+
+HELP =
+HELP = Enable routing for IP
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    vtss_appl_ip_global_conf_t conf;
+    mesa_rc                    rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_ip_global_conf_get(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error getting global IP configuration: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    conf.routing_enable = true;
+    if ((rc = vtss_appl_ip_global_conf_set(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error setting global IP configuration: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_L3RT)
+COMMAND = no ip routing
+
+DOC_CMD_DESC  = Disable routing
+DOC_CMD_USAGE = ip routing
+
+HELP =
+HELP =
+HELP = Disable routing for IP
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+VARIABLE_BEGIN
+    vtss_appl_ip_global_conf_t conf;
+    mesa_rc                    rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = vtss_appl_ip_global_conf_get(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error getting global IP configuration: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    conf.routing_enable = false;
+    if ((rc = vtss_appl_ip_global_conf_set(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error setting global IP configuration: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! This is the version where we add the IP address as "a.b.c.d/e"
+! See next command for the other version and the one with DHCP
+! We cannot merge the two commands, since we don't have a "has_XXX"
+COMMAND = ip address <ipv4_subnet>
+DOC_CMD_DESC = IP address configuration
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlist
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = subnet
+
+HELP = IPv4 configuration
+HELP = Address configuration
+HELP = IP address/prefix-size
+
+VARIABLE_BEGIN
+    vtss_appl_ip_if_conf_ipv4_t ip_conf;
+    vtss_ifindex_t              ifindex;
+    u32                         error_cnt = 0;
+    uint32_t                    prefix;
+    mesa_rc                     rc;
+
+VARIABLE_END
+
+CODE_BEGIN
+    (void)vtss_appl_ip_if_conf_ipv4_default_get(&ip_conf);
+    ip_conf.enable = true;
+
+    if (vtss_conv_ipv4mask_to_prefix(subnet.netmask, &prefix) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Could not construct an IPv4 network from the given arguments.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    ip_conf.network.address     = subnet.ip;
+    ip_conf.network.prefix_size = prefix;
+
+    VTSS_ICLI_RANGE_FOREACH (vlist, u32, vid) {
+        if (vtss_ifindex_from_vlan(vid, &ifindex) != VTSS_RC_OK) {
+            T_EG(IP_TRACE_GRP_ICLI, "Huh?!? (%u)", vid);
+            error_cnt++;
+            continue;
+        }
+
+        if ((rc = vtss_appl_ip_if_conf_ipv4_set(ifindex, &ip_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Failed to add IPv4 address to VLAN %u: %s.\n", vid, error_txt(rc));
+            error_cnt++;
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+
+    if (error_cnt) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! This is the version where we add the IP address as "a.b.c.d e.f.g.h"
+! See previous command for the other version
+! We cannot merge the two commands, since we don't have a "has_XXX"
+COMMAND = ip address {{<ipv4_addr> <ipv4_netmask>} | {dhcp [fallback <ipv4_addr> <ipv4_netmask> [timeout <uint>]] [client-id {<port_type_id> | ascii <word31> | hex <word64>}] [hostname <domain_name63>]}}
+DOC_CMD_DESC = IP address configuration
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlist
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IP_ICLI_dhcp_client_id_ascii
+RUNTIME =
+RUNTIME = IP_ICLI_dhcp_client_id_hex
+RUNTIME =
+RUNTIME = IP_ICLI_dhcp_hostname
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = address
+CMD_VAR = netmask
+CMD_VAR = has_dhcp
+CMD_VAR = has_fallback
+CMD_VAR = fallback_address
+CMD_VAR = fallback_netmask
+CMD_VAR = has_fallback_timeout
+CMD_VAR = fallback_timeout
+CMD_VAR = has_client_id
+CMD_VAR = client_id_interface
+CMD_VAR = has_ascii
+CMD_VAR = ascii_str
+CMD_VAR = has_hex
+CMD_VAR = hex_str
+CMD_VAR = has_hostname
+CMD_VAR = hostname
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = seconds
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+HELP = IPv4 configuration
+HELP = Address configuration
+HELP = IP address
+HELP = IP netmask
+HELP = Enable DHCP
+HELP = DHCP fallback settings
+HELP = DHCP fallback address
+HELP = DHCP fallback netmask
+HELP = DHCP fallback timeout, Default value is 60 seconds
+HELP = DHCP fallback timeout in seconds. Legal values are 1 to 4294967295 seconds
+HELP = DHCP client identifier
+HELP = The interface's MAC address is taken for DHCP client identifier
+HELP = ASCII type for DHCP client identifier
+HELP = A unique ASCII string is taken for DHCP client identifier
+HELP = HEX type DHCP client identifier
+HELP = A unique hexadecimal value is taken for DHCP client identifier
+HELP = DHCP host name
+HELP = ##ICLI_HELP_DOMAIN_NAME
+
+VARIABLE_BEGIN
+    vtss_appl_ip_if_conf_ipv4_t ip_conf;
+    vtss_ifindex_t              ifindex;
+    u32                         error_cnt = 0;
+    uint32_t                    prefix;
+    mesa_rc                     rc;
+
+VARIABLE_END
+
+CODE_BEGIN
+    rc = VTSS_RC_OK;
+
+    (void)vtss_appl_ip_if_conf_ipv4_default_get(&ip_conf);
+    ip_conf.enable = true;
+
+    if (has_dhcp) {
+        ip_conf.dhcpc_enable = true;
+        if (has_fallback) {
+            // dhcp with fallback configuration
+            rc = vtss_conv_ipv4mask_to_prefix(fallback_netmask, &prefix);
+            if (rc != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Could not construct a IPv4 fallback network from the given arguments.\n");
+                return ICLI_RC_ERROR;
+            }
+
+            ip_conf.network.address = fallback_address;
+            ip_conf.network.prefix_size = prefix;
+
+            ip_conf.fallback_enable = true;
+            if (has_fallback_timeout) {
+                ip_conf.fallback_timeout_secs = fallback_timeout;
+            }
+        }
+
+        // client_id
+        if (has_client_id) {
+            if (has_ascii) { // ascii
+                ip_conf.dhcpc_params.client_id.type = VTSS_APPL_IP_DHCP4C_ID_TYPE_ASCII;
+                strcpy(ip_conf.dhcpc_params.client_id.ascii, ascii_str);
+            } else if (has_hex) { // hex
+                if (misc_str_is_hex(hex_str) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Invalid parameter of client identifier. The total length must be even since one byte hex value is presented as two octets string\n");
+                    return ICLI_RC_ERROR;
+                }
+
+                ip_conf.dhcpc_params.client_id.type = VTSS_APPL_IP_DHCP4C_ID_TYPE_HEX;
+                strcpy(ip_conf.dhcpc_params.client_id.hex, hex_str);
+            } else { // ifmac
+                if (vtss_ifindex_from_port(client_id_interface.isid, client_id_interface.begin_iport, &ip_conf.dhcpc_params.client_id.if_mac) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Invalid parameter of client identifier.\n");
+                    return ICLI_RC_ERROR;
+                }
+
+                ip_conf.dhcpc_params.client_id.type = VTSS_APPL_IP_DHCP4C_ID_TYPE_IF_MAC;
+            }
+        }
+
+        // hostname
+        if (has_hostname) {
+            strcpy(ip_conf.dhcpc_params.hostname, hostname);
+        }
+    } else {
+        // Normal address configuration
+        rc = vtss_conv_ipv4mask_to_prefix(netmask, &prefix);
+        if (rc != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Could not construct an IPv4 network from the given arguments.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        ip_conf.network.address = address;
+        ip_conf.network.prefix_size = prefix;
+    }
+
+    VTSS_ICLI_RANGE_FOREACH (vlist, u32, vid) {
+        if (vtss_ifindex_from_vlan(vid, &ifindex) != VTSS_RC_OK) {
+            T_EG(IP_TRACE_GRP_ICLI, "Huh?!? (%u)", vid);
+            error_cnt++;
+            continue;
+        }
+
+        if ((rc = vtss_appl_ip_if_conf_ipv4_set(ifindex, &ip_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Failed to add IPv4 address to VLAN %u: %s.\n", vid, error_txt(rc));
+            error_cnt++;
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+
+    if (error_cnt) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = VTSS_SW_OPTION_CPUPORT
+COMMAND = ip address {{<ipv4_subnet>} | {dhcp [fallback <ipv4_subnet> [timeout <uint>]] [client-id {<port_type_id> | ascii <word31> | hex <word64>}] [hostname <domain_name63>]}}
+DOC_CMD_DESC = IP address configuration
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME =  icli_is_cpuport_runtime
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IP_ICLI_dhcp_client_id_ascii
+RUNTIME =
+RUNTIME = IP_ICLI_dhcp_client_id_hex
+RUNTIME =
+RUNTIME = IP_ICLI_dhcp_hostname
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = subnet
+CMD_VAR = has_dhcp
+CMD_VAR = has_fallback
+CMD_VAR = fallback_subnet
+CMD_VAR = has_fallback_timeout
+CMD_VAR = fallback_timeout
+CMD_VAR = has_client_id
+CMD_VAR = client_id_interface
+CMD_VAR = has_ascii
+CMD_VAR = ascii_str
+CMD_VAR = has_hex
+CMD_VAR = hex_str
+CMD_VAR = has_hostname
+CMD_VAR = hostname
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = seconds
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+
+HELP = IPv4 configuration
+HELP = Address configuration
+HELP = IP address/prefix-size
+HELP = Enable DHCP
+HELP = DHCP fallback settings
+HELP = DHCP fallback address/prefix-size
+HELP = DHCP fallback timeout, Default value is 60 seconds
+HELP = DHCP fallback timeout in seconds. Legal values are 0 to 4294967295 seconds
+HELP = DHCP client identifier
+HELP = The interface's MAC address is taken for DHCP client identifier
+HELP = ASCII type for DHCP client identifier
+HELP = A unique ASCII string is taken for DHCP client identifier
+HELP = HEX type DHCP client identifier
+HELP = A unique hexadecimal value is taken for DHCP client identifier
+HELP = DHCP host name
+HELP = ##ICLI_HELP_DOMAIN_NAME
+
+VARIABLE_BEGIN
+    vtss_appl_ip_if_conf_ipv4_t ip_conf;
+    vtss_ifindex_t              ifindex;
+    u32                         error_cnt = 0;
+    uint32_t                    prefix;
+    char                        buf[256];
+    switch_iter_t               sit;
+    port_iter_t                 pit;
+    mesa_rc                     rc;
+VARIABLE_END
+
+CODE_BEGIN
+    (void)vtss_appl_ip_if_conf_ipv4_default_get(&ip_conf);
+    ip_conf.enable = true;
+
+    if (has_dhcp) {
+        ip_conf.dhcpc_enable = true;
+        if (has_fallback) {
+            // dhcp with fallback configuration
+            if (vtss_conv_ipv4mask_to_prefix(fallback_subnet.netmask, &prefix) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Could not construct a IPv4 fallback network from the given arguments.\n");
+                return ICLI_RC_ERROR;
+            }
+
+            ip_conf.network.address     = fallback_subnet.ip;
+            ip_conf.network.prefix_size = prefix;
+
+            if (has_fallback_timeout) {
+                ip_conf.fallback_timeout_secs = fallback_timeout;
+            }
+        }
+
+        // client_id
+        if (has_client_id) {
+            if (has_ascii) { // ascii
+                ip_conf.dhcpc_params.client_id.type = VTSS_APPL_IP_DHCP4C_ID_TYPE_ASCII;
+                strcpy(ip_conf.dhcpc_params.client_id.ascii, ascii_str);
+            } else if (has_hex) { // hex
+                if (misc_str_is_hex(hex_str) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Invalid parameter of client identifier. The total length must be even since one byte hex value is presented as two octets string\n");
+                    return ICLI_RC_ERROR;
+                }
+
+                ip_conf.dhcpc_params.client_id.type = VTSS_APPL_IP_DHCP4C_ID_TYPE_HEX;
+                strcpy(ip_conf.dhcpc_params.client_id.hex, hex_str);
+            } else { // ifmac
+                if (vtss_ifindex_from_port(client_id_interface.isid, client_id_interface.begin_iport, &ip_conf.dhcpc_params.client_id.if_mac) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Invalid parameter of client identifier.\n");
+                    return ICLI_RC_ERROR;
+                }
+
+                ip_conf.dhcpc_params.client_id.type = VTSS_APPL_IP_DHCP4C_ID_TYPE_IF_MAC;
+            }
+        }
+
+        // hostname
+        if (has_hostname) {
+            strcpy(ip_conf.dhcpc_params.hostname, hostname);
+        }
+    } else {
+        // Normal address configuration
+        if (vtss_conv_ipv4mask_to_prefix(subnet.netmask, &prefix) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Could not construct a IPv4 network from the given arguments.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        ip_conf.network.address     = subnet.ip;
+        ip_conf.network.prefix_size = prefix;
+    }
+
+    (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        VTSS_RC(icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_CPU));
+        while (icli_port_iter_getnext(&pit, plist)) {
+            if (vtss_ifindex_from_port(sit.isid, pit.iport, &ifindex) != VTSS_RC_OK) {
+                T_EG(IP_TRACE_GRP_ICLI, "Huh?!? (%u:%u)", sit.isid, pit.iport);
+                error_cnt++;
+            }
+
+            if ((rc = vtss_appl_ip_if_conf_ipv4_set(ifindex, &ip_conf)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Failed to add IPv4 address to interface %s: %s.\n", icli_port_info_txt(sit.usid, pit.uport, buf), error_txt(rc));
+                error_cnt++;
+            }
+        }
+    }
+
+    if (error_cnt) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = ip dhcp retry interface vlan <vlan_id>
+DOC_CMD_DESC = Restart the dhcp client
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_id
+
+HELP = IPv4 commands
+HELP = DHCP commands
+HELP = Restart the DHCP query process
+HELP = Interface
+HELP = VLAN interface
+HELP = VLAN ID
+
+VARIABLE_BEGIN
+    vtss_ifindex_t ifidx;
+VARIABLE_END
+
+CODE_BEGIN
+    (void)vtss_ifindex_from_vlan(vlan_id, &ifidx);
+    if (vtss_appl_ip_if_dhcp4c_control_restart(ifidx) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to restart DHCP client on VLAN = %u.\n", vlan_id);
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no ip address
+DOC_CMD_DESC = IP address configuration
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlist
+
+HELP =
+HELP = IPv4 configuration
+HELP = Address configuration
+
+VARIABLE_BEGIN
+    vtss_appl_ip_if_conf_ipv4_t ip4_conf = {};
+    vtss_ifindex_t              ifidx;
+VARIABLE_END
+
+CODE_BEGIN
+    VTSS_ICLI_RANGE_FOREACH (vlist, u32, vid) {
+        if (vtss_appl_ip_if_exists(vtss_ifindex_cast_from_u32(vid, VTSS_IFINDEX_TYPE_VLAN)) &&
+            vtss_ifindex_from_vlan(vid, &ifidx) == VTSS_RC_OK) {
+            (void)vtss_appl_ip_if_conf_ipv4_set(ifidx, &ip4_conf);
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = VTSS_SW_OPTION_CPUPORT
+COMMAND = no ip address
+DOC_CMD_DESC = IP address configuration
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME =  icli_is_cpuport_runtime
+RUNTIME =  icli_is_cpuport_runtime
+
+HELP =
+HELP = IPv4 configuration
+HELP = Address configuration
+
+VARIABLE_BEGIN
+    vtss_appl_ip_if_conf_ipv4_t ip4_conf = {};
+    vtss_ifindex_t              ifidx;
+    switch_iter_t               sit;
+    port_iter_t                 pit;
+VARIABLE_END
+
+CODE_BEGIN
+    (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        VTSS_RC(icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_CPU));
+        while (icli_port_iter_getnext(&pit, plist)) {
+            vtss_ifindex_from_port(sit.isid, pit.iport, &ifidx);
+            if (vtss_appl_ip_if_exists(ifidx)) {
+                (void)vtss_appl_ip_if_conf_ipv4_set(ifidx, &ip4_conf);
+            }
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! This is the version where we add the network as "a.b.c.d/e"
+! See next command for the other version
+! We cannot merge the two commands, since we don't have a "has_XXX"
+COMMAND = ip route <ipv4_subnet> {<ipv4_ucast> | blackhole} [distance <1-255>]
+
+DOC_CMD_DESC    = Add new IP route
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_ipv4_subnet
+CMD_VAR = v_ipv4_gw
+CMD_VAR = has_blackhole
+CMD_VAR = has_distance
+CMD_VAR = v_distance
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <ipv4_gateway>
+BYWORD =
+BYWORD =
+BYWORD =
+
+HELP = IPv4 configurations
+HELP = Add IP route
+HELP = Network/PrefixSize
+HELP = Gateway
+HELP = Create blackhole route
+HELP = Set a distance for this route
+HELP = Distance value for this route
+
+VARIABLE_BEGIN
+    mesa_rc                   rc;
+    vtss_appl_ip_route_key_t  rt   = {};
+    vtss_appl_ip_route_conf_t conf;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    mesa_rc                   rc;
+    vtss_appl_ip_route_key_t  rt = {};
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (has_blackhole) {
+        v_ipv4_gw = vtss_ipv4_blackhole_route;
+    }
+
+    rt.type                          = VTSS_APPL_IP_ROUTE_TYPE_IPV4_UC;
+    rt.route.ipv4_uc.network.address = v_ipv4_subnet.ip;
+    rt.route.ipv4_uc.destination     = v_ipv4_gw;
+    (void)vtss_conv_ipv4mask_to_prefix(v_ipv4_subnet.netmask, &rt.route.ipv4_uc.network.prefix_size);
+
+    if ((rc = vtss_appl_ip_route_conf_default_get(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_distance) {
+        conf.distance = v_distance;
+    }
+
+    if ((rc = vtss_appl_ip_route_conf_set(&rt, &conf)) != VTSS_RC_OK) {
+         ICLI_PRINTF("%% Failed to add IPv4 route: %s\n", error_txt(rc));
+         return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (has_blackhole) {
+        v_ipv4_gw = vtss_ipv4_blackhole_route;
+    }
+
+    rt.type                          = VTSS_APPL_IP_ROUTE_TYPE_IPV4_UC;
+    rt.route.ipv4_uc.network.address = v_ipv4_subnet.ip;
+    rt.route.ipv4_uc.destination     = v_ipv4_gw;
+    (void)vtss_conv_ipv4mask_to_prefix(v_ipv4_subnet.netmask, &rt.route.ipv4_uc.network.prefix_size);
+
+    if ((rc = vtss_appl_ip_route_conf_del(&rt)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to delete IPv4 route: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! This is the version where we add the network as "a.b.c.d e.f.g.h"
+! See previous command for the other version
+! We cannot merge the two commands, since we don't have a "has_XXX"
+COMMAND = ip route <ipv4_addr> <ipv4_netmask> {<ipv4_ucast> | blackhole} [distance <1-255>]
+
+DOC_CMD_DESC    = Add new IP route
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+NO_FORM_DOC_CMD_DESC    =
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_ipv4_addr
+CMD_VAR = v_ipv4_netmask
+CMD_VAR = v_ipv4_gw
+CMD_VAR = has_blackhole
+CMD_VAR = has_distance
+CMD_VAR = v_distance
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = <ipv4_gateway>
+BYWORD =
+BYWORD =
+BYWORD =
+
+HELP = IPv4 configurations
+HELP = Add IP route
+HELP = Network
+HELP = Netmask
+HELP = Gateway
+HELP = Create a blackhole route
+HELP = Set a distance for this route
+HELP = Distance value for this route
+
+VARIABLE_BEGIN
+    mesa_rc                   rc;
+    vtss_appl_ip_route_key_t  rt;
+    vtss_appl_ip_route_conf_t conf;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    mesa_rc                   rc;
+    vtss_appl_ip_route_key_t  rt;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (has_blackhole) {
+        v_ipv4_gw = vtss_ipv4_blackhole_route;
+    }
+
+    if (IP_ICLI_build_ipv4_uc_route(&rt, v_ipv4_addr, v_ipv4_netmask, v_ipv4_gw) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to construct an IPv4 unicast route from the given arguments.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if ((rc = vtss_appl_ip_route_conf_default_get(&conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_distance) {
+        conf.distance = v_distance;
+    }
+
+    if ((rc = vtss_appl_ip_route_conf_set(&rt, &conf)) != VTSS_RC_OK) {
+         ICLI_PRINTF("%% Failed to add IPv4 route: %s\n", error_txt(rc));
+         return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (has_blackhole) {
+        v_ipv4_gw = vtss_ipv4_blackhole_route;
+    }
+
+    if (IP_ICLI_build_ipv4_uc_route(&rt, v_ipv4_addr, v_ipv4_netmask, v_ipv4_gw) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to construct an IPv4 unicast route from the given arguments.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if ((rc = vtss_appl_ip_route_conf_del(&rt)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to delete IPv4 route: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show interface vlan [<vlan_list>]
+
+DOC_CMD_DESC    = VLAN interface status
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlist
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_SHOW_INTERFACE
+HELP = VLAN status
+HELP = List of VLANs to show status for. Omit to show for all defined.
+
+VARIABLE_BEGIN
+    uint32_t                 error_cnt = 0, cnt;
+    char                     buf[1024];
+    vtss_appl_ip_if_status_t st[8];
+    vtss_ifindex_t           ifindex;
+    mesa_rc                  rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if (vlist) {
+        VTSS_ICLI_RANGE_FOREACH (vlist, uint32_t, vid) {
+            if (vtss_ifindex_from_vlan(vid, &ifindex) != VTSS_RC_OK) {
+                continue;
+            }
+
+            if ((rc = vtss_appl_ip_if_status_get(ifindex, VTSS_APPL_IP_IF_STATUS_TYPE_ANY, ARRSZ(st), &cnt, st)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Error: VLAN %u: %s\n", vid, error_txt(rc));
+                error_cnt++;
+                continue;
+            }
+
+            (void)vtss_ip_if_status_to_txt(buf, sizeof(buf), st, cnt);
+            ICLI_PRINTF("%s", buf);
+        } VTSS_ICLI_RANGE_FOREACH_END();
+    } else {
+        (void)ip_util_if_print(icli_session_self_printf, VTSS_APPL_IP_IF_STATUS_TYPE_ANY, true);
+    }
+
+    if (error_cnt) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show ip interface [brief]
+
+DOC_CMD_DESC    = Brief IP interface status
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+HELP =
+HELP =
+HELP = IP interface status and configuration
+HELP = Brief IP interface status
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)ip_util_if_brief_print(MESA_IP_TYPE_IPV4, icli_session_self_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show ip arp
+
+DOC_CMD_DESC    = Print ARP table
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP =
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)ip_util_nb_print(MESA_IP_TYPE_IPV4, icli_session_self_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+! This command is identical to 'show ip arp', but unfortunately, it cannot be
+! merged into that command (ICLI will make a runtime merge error).
+COMMAND = show ip neighbor
+
+DOC_CMD_DESC    = Print ARP/neighbor table
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+HELP =
+HELP =
+HELP =
+HELP =
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void)ip_util_nb_print(MESA_IP_TYPE_IPV4, icli_session_self_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear ip arp
+DOC_CMD_DESC    = Clear ARP cache
+DOC_CMD_USAGE   = clear ip arp
+HELP =
+HELP =
+HELP = Clear ARP cache
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_EXEC
+VARIABLE_BEGIN
+    mesa_rc rc;
+VARIABLE_END
+CODE_BEGIN
+    rc = vtss_appl_ip_neighbor_clear(MESA_IP_TYPE_IPV4);
+    if (rc != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Failed to clear IP ARP: %s.\n", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show ip route
+
+DOC_CMD_DESC    = Routing table status
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+HELP =
+HELP =
+HELP = Display the current IP routing table
+
+VARIABLE_BEGIN
+     vtss::Set<vtss_appl_ip_route_status_t> result;
+     mesa_rc                                rc;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((rc = ip_util_route_print(VTSS_APPL_IP_ROUTE_TYPE_IPV4_UC, icli_session_self_printf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error: %s", error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = VTSS_SW_OPTION_IP_MISC
+COMMAND = ping [ip] { <domain_name> | <ipv4_addr> } [ ttl <1-255> ] [ repeat <1-60> ] [ { saddr <ipv4_addr> | sif { <port_type_id> | vlan <vlan_id> } } ] [ size <2-1452> ] [ data <0-255> ] [ { verbose | quiet } ]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! ping
+CMD_VAR =
+RUNTIME =
+HELP = ##ICLI_HELP_PING
+BYWORD = <HasPing : option>
+
+! ip
+CMD_VAR =
+HELP = ICMPv4 Echo Request
+BYWORD = <HasIp : option>
+
+! <domain_name>
+CMD_VAR = domain_name
+HELP = Destination hostname or FQDN
+BYWORD = <hostname>
+
+! <ipv4_addr>
+CMD_VAR = ip_addr
+HELP = Destination IPv4 address
+BYWORD = <ipv4_addr>
+
+! ttl
+CMD_VAR = has_ttl
+HELP = Set IPv4 Time-To-Live (TTL)
+BYWORD = <HasTtl: option>
+
+! <1-255>
+CMD_VAR = ttl_value
+HELP = IPv4 TTL: 1-255; Default is 64
+BYWORD = <Ttl : 1-255>
+
+! repeat
+CMD_VAR = has_repeat
+HELP = Specify repeat count
+BYWORD = <HasRepeat : option>
+
+! <count:1-60>
+CMD_VAR = count
+HELP = Packets: 1-60; Default is 5
+BYWORD = <Count : 1-60>
+
+! saddr
+CMD_VAR = has_saddr
+HELP = Send from interface with source address
+BYWORD = <HasSaddr: option>
+
+! <ipv4_addr>
+CMD_VAR = src_addr
+HELP = Source Address of interface
+BYWORD = <ipv4_addr>
+
+! sif
+CMD_VAR = has_sif
+HELP = Send from specified interface
+BYWORD = <HasSif: option>
+
+! <port_type_id>
+CMD_VAR = src_if
+HELP = Source interface
+BYWORD = <port_type_id>
+
+! vlan
+CMD_VAR = has_vlan
+HELP = Send from VLAN interface with source address
+BYWORD = <HasSaddr: option>
+
+! <vlan_id>
+CMD_VAR = vlan_id
+HELP = Source VLAN interface
+BYWORD = <vlan_id>
+
+! size
+CMD_VAR = has_size
+HELP = Specify datagram size
+BYWORD = <HasSize : option>
+
+! <size:2-1452>
+CMD_VAR = size
+HELP = Size (bytes): 2-1452; Default is 56 (excluding MAC, IP and ICMP headers)
+BYWORD = <Size : 2-1452>
+
+! data
+CMD_VAR = has_data
+HELP = Specify payload data byte value
+BYWORD = <HasData : option>
+
+! <data:0-255>
+CMD_VAR = data_value
+HELP = Payload data: 0-255; Default is 0
+BYWORD = <Data : 0-255>
+
+! verbose
+CMD_VAR =
+HELP = Set verbose output
+BYWORD = <HasVerbose: option>
+
+! quiet
+CMD_VAR = has_quiet
+HELP = Set quiet output
+BYWORD = <HasQuiet: option>
+
+VARIABLE_BEGIN
+    i32              irc = 0;
+    icli_line_mode_t line_mode;
+    i32              pktlen = PING_DEF_PACKET_LEN;
+    i32              pktcnt = PING_DEF_PACKET_CNT;
+    i32              pldata = PING_DEF_PACKET_PLDATA;
+    char             dest_host[VTSS_APPL_SYSUTIL_DOMAIN_NAME_LEN];
+    char             src_addr_str[VTSS_APPL_SYSUTIL_HOSTNAME_LEN];
+    BOOL             verbose = TRUE;
+
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_repeat) {
+        pktcnt = count;
+    }
+
+    if (has_size) {
+        pktlen = size;
+    }
+
+    if (has_data) {
+        pldata = data_value;
+    }
+
+    if (!has_ttl) {
+        ttl_value = 0;
+    }
+
+    memset(dest_host, 0x0, sizeof(dest_host));
+    memset(src_addr_str, 0x0, sizeof(src_addr_str));
+
+    if (domain_name && strlen(domain_name)) {
+        strncpy(dest_host, domain_name, strlen(domain_name));
+    } else if (ip_addr) {
+        (void)icli_ipv4_to_str(ip_addr, dest_host);
+    } else {
+        ICLI_PRINTF("%% Error: Invalid destination address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_saddr) {
+        (void)icli_ipv4_to_str(src_addr, src_addr_str);
+    } else if (has_sif) {
+        mesa_ipv4_network_t addr;
+
+        // Get the IP address for the specified IP VLAN interface or the
+        // specified physical interface.
+        if (!IP_ICLI_ip_by_vlan_or_port(has_vlan ? vlan_id : 0, has_vlan ? VTSS_PORT_NO_NONE : src_if.begin_iport, &addr)) {
+            if (has_vlan) {
+                ICLI_PRINTF("%% Error: Specified VLAN interface has no IP address\n");
+            } else {
+                ICLI_PRINTF("%% Error: Unable to get IP address for specified interface\n");
+            }
+
+            return ICLI_RC_ERROR;
+        }
+
+        if (!has_vlan) {
+            (void)icli_ipv4_to_str(addr.address, src_addr_str);
+        }
+    }
+
+    if (has_quiet) {
+        verbose = FALSE;
+    }
+
+    if (!has_vlan) {
+        vlan_id = 0;
+    }
+
+    /*
+     *  Set CLI line mode to flood, but save current mode
+     */
+    irc = ICLI_LINE_MODE_GET(&line_mode);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Error: Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    irc = ICLI_LINE_MODE_SET(ICLI_LINE_MODE_FLOOD);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Error: Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    // Call the ping function
+    (void)ping_test(icli_session_self_printf, dest_host, src_addr_str, vlan_id, pktcnt, 0, pktlen, pldata, ttl_value, verbose, FALSE);
+
+    // Restore saved line mode
+    (void)ICLI_LINE_MODE_SET(line_mode);
+
+    return ICLI_RC_OK;
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG = VTSS_SW_OPTION_IP_MISC
+COMMAND = traceroute ip {<domain_name> | <ipv4_addr>} [dscp <0-63>] [timeout <1-86400>] [{saddr <ipv4_addr> | sif {<port_type_id> | vlan <vlan_id>}}] [probes <1-60>] [firstttl <1-30>] [maxttl <1-255>] [icmp] [numeric]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+! traceroute
+CMD_VAR =
+HELP = ##ICLI_HELP_TRACEROUTE
+BYWORD = <HasTraceroute : option>
+
+! ip
+CMD_VAR =
+HELP = Traceroute (IPv4)
+BYWORD = <HasIp : option>
+
+! <domain_name>
+CMD_VAR = domain_name
+HELP = Destination hostname or FQDN
+BYWORD = <hostname>
+
+! <ipv4_addr>
+CMD_VAR = ip_addr
+HELP = Destination IPv4 address
+BYWORD = <ipv4_addr>
+
+! dscp
+CMD_VAR = has_dscp
+HELP = Specify DSCP value (default 0)
+BYWORD = <HasDscp : option>
+
+! <dscp:0-63>
+CMD_VAR = dscp
+HELP = DSCP value (decimal value, default 0)
+BYWORD = <Dscp:0-63>
+
+! timeout
+CMD_VAR = has_timeout
+HELP = Specify time to wait for a response in seconds (default 3)
+BYWORD = <HasTimeout: option>
+
+! <timeout:1-86400>
+CMD_VAR = timeout
+HELP = Time to wait for a response in seconds (default 3)
+BYWORD = <Timeout:1-86400>
+
+! saddr
+CMD_VAR = has_saddr
+HELP = Send from interface with source address
+BYWORD = <HasSaddr: option>
+
+! <ipv4_addr>
+CMD_VAR = src_addr
+HELP = Source Address of interface
+BYWORD = <ipv4_addr>
+
+! sif
+CMD_VAR = has_sif
+HELP = Send from specified interface
+BYWORD = <HasSif: option>
+
+! <port_type_id>
+CMD_VAR = src_if
+HELP = Source interface
+BYWORD = <port_type_id>
+
+! vlan
+CMD_VAR = has_vlan
+HELP = Send from VLAN interface with source address
+BYWORD = <HasSaddr: option>
+
+! <vlan_id>
+CMD_VAR = vlan_id
+HELP = Source VLAN interface
+BYWORD = <vlan_id>
+
+! probes
+CMD_VAR = has_probes
+HELP = Specify number of probes per hop (default 3)
+BYWORD = <HasProbes: option>
+
+! <probes:1-60>
+CMD_VAR = probes
+HELP = Number of probes per hop (default 3)
+BYWORD = <Probes:1-60>
+
+! firstttl
+CMD_VAR = has_firstttl
+HELP = Specify first number of hops (starting TTL) (default 1)
+BYWORD = <HasMinttl: option>
+
+! <firstttl:1-30>
+CMD_VAR = firstttl
+HELP = First number of hops (default 1)
+BYWORD = <Firstttl:1-30>
+
+! maxttl
+CMD_VAR = has_maxttl
+HELP = Specify max number of hops (max TTL) (default 30)
+BYWORD = <HasMaxttl: option>
+
+! <maxttl:1-255>
+CMD_VAR = maxttl
+HELP = Max number of hops (default 30)
+BYWORD = <Maxttl:1-255>
+
+! icmp
+CMD_VAR = has_icmp
+HELP = Use ICMP instead of UDP
+BYWORD = <HasIcmp: option>
+
+! numeric
+CMD_VAR = has_numeric
+HELP = Print numeric addresses
+BYWORD = <HasNumeric>
+
+CODE_BEGIN
+    i32               irc = 0;
+    icli_line_mode_t  line_mode;
+    char              dest_host[VTSS_APPL_SYSUTIL_DOMAIN_NAME_LEN];
+    char              src_addr_str[VTSS_APPL_SYSUTIL_HOSTNAME_LEN];
+    mesa_ip_addr_t    check_addr;
+
+    memset(dest_host, 0x0, sizeof(dest_host));
+    memset(src_addr_str, 0x0, sizeof(src_addr_str));
+
+    if (domain_name && strlen(domain_name)) {
+        strncpy(dest_host, domain_name, strlen(domain_name));
+    } else if (ip_addr) {
+        (void)icli_ipv4_to_str(ip_addr, dest_host);
+    } else {
+        ICLI_PRINTF("%% Invalid destination address.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (has_saddr) {
+        // Check that specified source IP address is used by a local interface
+        check_addr.type = MESA_IP_TYPE_IPV4;
+        check_addr.addr.ipv4 = src_addr;
+        vtss_appl_ip_if_status_t if_status;
+        if (vtss_appl_ip_if_status_find(&check_addr, &if_status) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Unknown source IP address.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        (void)icli_ipv4_to_str(src_addr, src_addr_str);
+
+    } else if (has_sif) {
+        mesa_ipv4_network_t addr;
+
+        // Get the IP address for the specified IP VLAN interface or the
+        // specified physical interface.
+        if (!IP_ICLI_ip_by_vlan_or_port(has_vlan ? vlan_id : 0, has_vlan ? VTSS_PORT_NO_NONE : src_if.begin_iport, &addr)) {
+            if (has_vlan) {
+                ICLI_PRINTF("%% Error: Specified VLAN interface has no IP address\n");
+            } else {
+                ICLI_PRINTF("%% Error: Unable to get IP address for specified interface\n");
+            }
+
+            return ICLI_RC_ERROR;
+        }
+
+        if (!has_vlan) {
+            (void)icli_ipv4_to_str(addr.address, src_addr_str);
+        }
+    }
+
+    if (!has_vlan) {
+        vlan_id = 0;
+    }
+
+    /*
+     *  Set CLI line mode to flood, but save current mode
+     */
+    irc = ICLI_LINE_MODE_GET(&line_mode);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    irc = ICLI_LINE_MODE_SET(ICLI_LINE_MODE_FLOOD);
+    if (irc != ICLI_RC_OK) {
+        ICLI_PRINTF("%% Invalid line mode operation.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    // Call the ping function
+    (void)traceroute_test(icli_session_self_printf, dest_host, src_addr_str,
+                          vlan_id,
+                          has_dscp ? dscp : -1,
+                          has_timeout ? timeout : -1,
+                          has_probes ? probes : -1,
+                          has_firstttl ? firstttl : -1,
+                          has_maxttl ? maxttl : -1,
+                          has_icmp, has_numeric);
+
+    // Restore saved line mode
+    (void)ICLI_LINE_MODE_SET(line_mode);
+
+    return ICLI_RC_OK;
+
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear ip statistics
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_CLEAR
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_STATISTICS
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    req.ipv4 = TRUE;
+    ICLI_RC(ip_icli_stats_clear(&req));
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show ip statistics [ system ]
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IP
+HELP = ##ICLI_HELP_STATISTICS
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    req.ipv4 = TRUE;
+    req.system = TRUE;
+    ICLI_RC(ip_icli_stats_show(&req));
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show ip acd
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP    = ##ICLI_HELP_SHOW
+HELP    = ##ICLI_HELP_IP
+HELP    = Address Conflict Detection
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    ICLI_RC(ip_icli_acd_show(&req));
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear ip acd
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP    = ##ICLI_HELP_CLEAR
+HELP    = ##ICLI_HELP_IP
+HELP    = Address Conflict Detection
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    ICLI_RC(ip_icli_acd_clear(&req));
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_L3RT)
+COMMAND = debug ip lpm stat ip <vlan_list>
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP = LPM debug functions
+HELP = Stats
+HELP = Clear
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+RUNTIME = IP_ICLI_l3_present
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CODE_BEGIN
+    ICLI_PRINTF("TYPE VLAN RX-Frames    RX-Octets       TX-Frames    TX-Octets\n");
+    ICLI_PRINTF("---- ---- ------------ --------------- ------------ ---------------\n");
+    VTSS_ICLI_RANGE_FOREACH (vlan_list, u32, vlan_id) {
+        IP_ICLI_cmd_debug_lpm_stat_get_single(session_id, vlan_id, true);
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_L3RT) && defined(VTSS_SW_OPTION_IPV6)
+COMMAND = debug ip lpm stat ipv6 <vlan_list>
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP = LPM debug functions
+HELP = Stats
+HELP = Clear
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+RUNTIME = IP_ICLI_l3_present
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CODE_BEGIN
+    ICLI_PRINTF("TYPE VLAN RX-Frames    RX-Octets       TX-Frames    TX-Octets\n");
+    ICLI_PRINTF("---- ---- ------------ --------------- ------------ ---------------\n");
+    VTSS_ICLI_RANGE_FOREACH (vlan_list, u32, vlan_id) {
+        IP_ICLI_cmd_debug_lpm_stat_get_single(session_id, vlan_id, false);
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_L3RT)
+COMMAND = debug ip lpm stat clear <vlan_list>
+HELP = ##ICLI_HELP_DEBUG
+HELP =
+HELP = LPM debug functions
+HELP = Stats
+HELP = Clear
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+RUNTIME = IP_ICLI_l3_present
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CODE_BEGIN
+    VTSS_ICLI_RANGE_FOREACH (vlan_list, u32, vlan_id) {
+        mesa_rc rc;
+        rc = vtss_ip_chip_counters_vlan_clear(vlan_id);
+        if (rc != VTSS_RC_OK) {
+            ICLI_PRINTF("Failed to clear counters on vlan %u\n", vlan_id);
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SNMP)
+COMMAND = debug ip global interface table change
+HELP = ##ICLI_HELP_DEBUG
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+CODE_BEGIN
+{
+    u64 t;
+    if (vtss_ip_interfaces_last_change(&t) == VTSS_RC_OK) {
+        ICLI_PRINTF("" VPRI64u"\n", t);
+    } else {
+        ICLI_PRINTF("Failed\n");
+    }
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SNMP)
+COMMAND = debug ip vlan ipv4 created <vlan_list>
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_DEBUG
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CODE_BEGIN
+    VTSS_ICLI_RANGE_FOREACH (vlan_list, u32, vlan_id) {
+        u64 t;
+
+        if (vtss_ip_address_created_ipv4(vtss_ifindex_cast_from_u32(vlan_id, VTSS_IFINDEX_TYPE_VLAN), &t) == VTSS_RC_OK) {
+            ICLI_PRINTF("" VPRI64u"\n", t);
+        } else {
+            ICLI_PRINTF("Failed\n");
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SNMP)
+COMMAND = debug ip vlan ipv4 changed <vlan_list>
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_DEBUG
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CODE_BEGIN
+    VTSS_ICLI_RANGE_FOREACH (vlan_list, u32, vlan_id) {
+        u64 t;
+
+        if (vtss_ip_address_changed_ipv4(vtss_ifindex_cast_from_u32(vlan_id, VTSS_IFINDEX_TYPE_VLAN), &t) == VTSS_RC_OK) {
+            ICLI_PRINTF("" VPRI64u"\n", t);
+        } else {
+            ICLI_PRINTF("Failed\n");
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SNMP) && defined(VTSS_SW_OPTION_IPV6)
+COMMAND = debug ip vlan ipv6 created <vlan_list>
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_DEBUG
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CODE_BEGIN
+    VTSS_ICLI_RANGE_FOREACH (vlan_list, u32, vlan_id) {
+        u64 t;
+
+        if (vtss_ip_address_created_ipv6(vtss_ifindex_cast_from_u32(vlan_id, VTSS_IFINDEX_TYPE_VLAN), &t) == VTSS_RC_OK) {
+            ICLI_PRINTF("" VPRI64u"\n", t);
+        } else {
+            ICLI_PRINTF("Failed\n");
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_SNMP) && defined(VTSS_SW_OPTION_IPV6)
+COMMAND = debug ip vlan ipv6 changed <vlan_list>
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_DEBUG
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CODE_BEGIN
+    VTSS_ICLI_RANGE_FOREACH (vlan_list, u32, vlan_id) {
+        u64 t;
+
+        if (vtss_ip_address_changed_ipv6(vtss_ifindex_cast_from_u32(vlan_id, VTSS_IFINDEX_TYPE_VLAN), &t) == VTSS_RC_OK) {
+            ICLI_PRINTF("" VPRI64u"\n", t);
+        } else {
+            ICLI_PRINTF("Failed\n");
+        }
+    } VTSS_ICLI_RANGE_FOREACH_END();
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG = defined(VTSS_SW_OPTION_L3RT)
+COMMAND = debug ip vrrp vlan <uint> [vrid0 <uint>] [vrid1 <uint>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+RUNTIME = IP_ICLI_l3_present
+HELP = ##ICLI_HELP_DEBUG
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vid
+CMD_VAR = vrid0_enable
+CMD_VAR = vrid0
+CMD_VAR = vrid1_enable
+CMD_VAR = vrid1
+CODE_BEGIN
+{
+    mesa_l3_rleg_conf_t c;
+    mesa_rc rc = mesa_l3_rleg_get_specific(0, vid, &c);
+
+    if (rc != VTSS_RC_OK) {
+        ICLI_PRINTF("Get failed\n");
+        return ICLI_RC_OK;
+    } else {
+        if (vrid0_enable) {
+            c.vrid0_enable = 1;
+            c.vrid0 = vrid0;
+        }
+
+        if (vrid0_enable) {
+            c.vrid0_enable = 1;
+            c.vrid0 = vrid0;
+        }
+
+        if (vrid1_enable) {
+            c.vrid1_enable = 1;
+            c.vrid1 = vrid1;
+        }
+    }
+
+    rc = mesa_l3_rleg_update(0, &c);
+    if (rc != VTSS_RC_OK) {
+        ICLI_PRINTF("Set failed\n");
+    }
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug netlink ifmux add <int> [<int>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = type
+CMD_VAR = i1
+HELP = ##ICLI_HELP_DEBUG
+CODE_BEGIN
+{
+    using namespace vtss::appl::ip::filter;
+    mesa_mac_t mac = {{ 0x90, 0xe2, 0xba, 0x1f, 0xa9, 0x67 }};
+    int i;
+    Rule r;
+    static Owner o;
+    Bitmask b = {};
+    PortMask pm;
+
+    switch (type) {
+        case 1:
+            ICLI_PRINTF("Port mask\n");
+            r.emplace_back(element_port_mask(5));
+            break;
+
+        case 2:
+            ICLI_PRINTF("Mac src\n");
+            r.emplace_back(element_mac_src(mac));
+            break;
+
+        case 3:
+            ICLI_PRINTF("Mac dst\n");
+            r.emplace_back(element_mac_dst(mac));
+            break;
+
+        case 4:
+            ICLI_PRINTF("Mac src or dst\n");
+            r.emplace_back(element_mac_src_or_dst(mac));
+            break;
+
+        case 5:
+            ICLI_PRINTF("ACL-ID %d\n", i1);
+            if (i1 >= 256) {
+                ICLI_PRINTF("ERROR ACL ID must be in the range from 0-255\n");
+                goto done;
+            } else if (i >= 128) {
+                b.offset = 1;
+                i1 -= 128;
+            } else {
+                b.offset = 0;
+            }
+
+            b.buf[i1 / 8] = (1 << (i1 % 8));
+            r.emplace_back(element_acl_id(b));
+            break;
+
+        case 100:
+            pm.set();
+            r.emplace_back(element_port_mask(pm));
+            r.emplace_back(element_vlan(5));
+            r.emplace_back(element_ether_type(10));
+            break;
+
+        default:
+            ICLI_PRINTF("ERROR\n");
+            goto done;
+    }
+
+    if (deny_list_rule_add(&i, &o, r, (Action)0) != VTSS_RC_OK) {
+        ICLI_PRINTF("ERROR\n");
+    } else {
+        ICLI_PRINTF("ID: %u\n", i);
+    }
+
+    done:
+    ;
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug netlink ifmux del <int>
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = id
+HELP = ##ICLI_HELP_DEBUG
+CODE_BEGIN
+{
+    using namespace vtss::appl::ip::filter;
+    if (rule_del(id) != VTSS_RC_OK) {
+        ICLI_PRINTF("ERROR\n");
+    } else {
+        ICLI_PRINTF("OK\n");
+    }
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug netlink ifmux update <int>
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = id
+HELP = ##ICLI_HELP_DEBUG
+CODE_BEGIN
+{
+    using namespace vtss::appl::ip::filter;
+    Rule r;
+    r.emplace_back(element_vlan(6));
+    r.emplace_back(element_ether_type(11));
+
+    if (rule_update(id, r) != VTSS_RC_OK) {
+        ICLI_PRINTF("ERROR\n");
+    } else {
+        ICLI_PRINTF("OK\n");
+    }
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug netlink ifmux dump
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_DEBUG
+CODE_BEGIN
+    system("cat /proc/vtss_if_mux_filter");
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = debug netlink ifmux port
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+HELP = ##ICLI_HELP_DEBUG
+CODE_BEGIN
+    system("cat /proc/vtss_if_mux_port_conf");
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND = debug show ip statistics [ interface vlan <vlan_list> ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! 2: show
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_SHOW
+BYWORD  =
+
+! 3: ip
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_IP
+BYWORD  =
+
+! 4: statistics
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_STATISTICS
+BYWORD  =
+
+! 5: interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_INTERFACE
+BYWORD  = interface : Option
+
+! 6: vlan
+CMD_VAR =
+RUNTIME =
+HELP    = IPv4/IPv6/ARP interface traffic
+BYWORD  =
+
+! 7: <vlan_list>
+CMD_VAR = vlan_list
+RUNTIME =
+HELP    = VLAN identifier (VID)
+BYWORD  =
+
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    req.vid_list = vlan_list;
+    ICLI_RC(ip_icli_if_stats_show(&req));
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug clear ip statistics
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! 2: clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_CLEAR
+BYWORD  =
+
+! 3: ip
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_IP
+BYWORD  =
+
+! 4: statistics
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_STATISTICS
+BYWORD  =
+
+CODE_BEGIN
+{
+    ip_icli_req_t req;
+
+    ip_icli_req_init(&req, session_id);
+    ICLI_RC(ip_icli_if_stats_clear(&req));
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug ip port add <int>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! 1: debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! 2: ip
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_IP
+BYWORD  =
+
+! 3: port
+CMD_VAR =
+RUNTIME =
+HELP    = Port
+BYWORD  =
+
+! 4: add
+CMD_VAR =
+RUNTIME =
+HELP    = Add
+BYWORD  =
+
+! 5: int
+CMD_VAR = chip_port
+RUNTIME =
+HELP    = Management chip port
+BYWORD  =
+
+CODE_BEGIN
+if (chip_port < 64 && ip_os_if_add_chip_port(chip_port) != VTSS_RC_OK) {
+    ICLI_PRINTF("%% Failed to add port interface.\n");
+}
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_IP_SHOW_CAPABILITIES = Show IP capabilities
+COMMAND         = debug show ip capabilities
+DOC_CMD_DESC    = ##HELP_IP_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_IP_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! ip
+HELP    = ##ICLI_HELP_IP
+CMD_VAR =
+RUNTIME =
+
+! capabilities
+HELP    = ##HELP_IP_SHOW_CAPABILITIES
+CMD_VAR =
+RUNTIME =
+CODE_BEGIN
+    ICLI_RC(IP_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = debug ip netlink poll {link | mac | addr4 | addr6 | route4 | route6 | neighbor4 | neighbor6}
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+HELP =
+HELP =
+HELP =
+HELP = Initiate a poll of a kernel table. Use 'deb tr mo l ip netlink {noise | debug | info}' to see output (noise for everything, debug for what is found, info for changes only)
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_link
+CMD_VAR = has_mac
+CMD_VAR = has_ipv4_state
+CMD_VAR = has_ipv6_state
+CMD_VAR = has_ipv4_route
+CMD_VAR = has_ipv6_route
+CMD_VAR = has_ipv4_neighbor
+CMD_VAR = has_ipv6_neighbor
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IP_ICLI_has_ipv6
+RUNTIME = IP_ICLI_has_l3rt
+RUNTIME = IP_ICLI_has_l3rt_and_ipv6
+RUNTIME =
+RUNTIME = IP_ICLI_has_ipv6
+
+CODE_BEGIN
+    ip_os_netlink_poll_t poll = {};
+
+    if (has_link) {
+        poll.link = true;
+    }
+
+    if (has_mac) {
+        poll.mac_addr_list = true;
+    }
+
+    if (has_ipv4_state) {
+        poll.ipv4_addr = true;
+    }
+
+#if defined(VTSS_SW_OPTION_IPV6)
+    if (has_ipv6_state) {
+        poll.ipv6_addr = true;
+    }
+#else
+    // Avoid warnings
+    has_ipv6_state = has_ipv6_state;
+#endif
+
+#if defined(VTSS_SW_OPTION_L3RT)
+    if (has_ipv4_route) {
+        poll.ipv4_route = true;
+    }
+#else
+    // Avoid warnings
+    has_ipv4_route = has_ipv4_route;
+#endif
+
+#if defined(VTSS_SW_OPTION_L3RT) && defined(VTSS_SW_OPTION_IPV6)
+    if (has_ipv6_route) {
+        poll.ipv6_route = true;
+    }
+#else
+    // Avoid warnings
+    has_ipv6_route = has_ipv6_route;
+#endif
+
+    if (has_ipv4_neighbor) {
+        poll.ipv4_neighbor = true;
+    }
+
+#if defined(VTSS_SW_OPTION_IPV6)
+    if (has_ipv6_neighbor) {
+        poll.ipv6_neighbor = true;
+    }
+#else
+    // Avoid warnings
+    has_ipv6_neighbor = has_ipv6_neighbor;
+#endif
+
+    ip_os_debug_netlink_poll(&poll);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG   =
+COMMAND   = debug ip tx [interface <port_type_list>] [packet-length <uint>] [dmac <mac_addr>] [smac <mac_addr>] [otag vid <0-4095> [tpid <0-65535>] [pcp <0-7>] [dei <0-1>]] [itag vid <0-4095> [tpid <0-65535>] [pcp <0-7>] [dei <0-1>]] [{sip4 <ipv4_addr> | sip6 <ipv6_addr>}] [{dip4 <ipv4_addr> | dip6 <ipv6_addr>}] [dscp <0-63>] [dont-fragment] [proto {tcp | udp | <0-255>}] [sport <0-65535>] [dport <0-65535>]
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+FUNC_NAME = IP_ICLI_debug_frame_tx
+
+HELP    = ##ICLI_HELP_DEBUG
+HELP    = IPv4 frame
+HELP    = Transmit
+
+HELP    = Optional port list. If this is not specified, the frame will be transmitted switched on otag if specified, otherwise on itag if specified, otherwise on VLAN 1.
+HELP    = Port list
+
+HELP    = Packet length, excluding FCS. Defaults to 60 bytes.
+HELP    = Bytes, excluding FCS
+
+HELP    = Destination MAC. Defaults to B/C if not specified.
+HELP    = MAC address
+
+HELP    = Source MAC. Defaults to this switch's MAC address if not specified.
+HELP    = MAC address
+
+HELP    = Specify an outer tag
+HELP    = Specify Outer tag VLAN ID
+HELP    = Outer tag VLAN ID value
+HELP    = Specify outer tag TPID
+HELP    = Outer tag TPID (defaults to 0x88a8)
+HELP    = Specify outer tag PCP (defaults to 0)
+HELP    = Outer tag DEI value
+HELP    = Specify outer tag DEI (defaults to 0)
+HELP    = Outer tag DEI value
+
+HELP    = Specify an inner tag
+HELP    = Specify inner tag VLAN ID
+HELP    = Inner tag VLAN ID value
+HELP    = Specify inner tag TPID
+HELP    = Inner tag TPID (defaults to 0x8100)
+HELP    = Specify inner tag PCP (defaults to 0)
+HELP    = Inner tag DEI value
+HELP    = Specify inner tag DEI (defaults to 0)
+HELP    = Inner tag DEI value
+
+HELP    = Specify Source IPv4 address. Random of same type as DIP if not specified.
+HELP    = Source IPv4 address
+HELP    = Specify Source IPv6 address. Random of same type as SIP if not specified.
+HELP    = Source IPv6 address
+
+HELP    = Specify Destination IPv4 address. Random of same type as SIP if not specified.
+HELP    = Destination IPv4 address
+HELP    = Specify Destination IPv6 address. Random of same type as SIP if not specified.
+HELP    = Destination IPv6 address
+
+HELP    = Select DSCP value. Random if not specified.
+HELP    = DSCP value
+
+HELP    = If specified, the DF bit in the IPv4 header gets set.
+
+HELP    = Select IP protocol. If not specified, a random will be chosen.
+HELP    = Use TCP
+HELP    = Use UDP
+HELP    = Specify IP protocol yourself
+
+HELP    = Select IP protocol's source port. If not specified, a random will be chosen.
+HELP    = Source port
+
+HELP    = Select IP protocol's destination port. If not specified, a random will be chosen.
+HELP    = Destination port
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+
+CMD_VAR = has_interface
+CMD_VAR = plist
+
+CMD_VAR = has_packet_length
+CMD_VAR = packet_length
+
+CMD_VAR = has_dmac
+CMD_VAR = dmac
+
+CMD_VAR = has_smac
+CMD_VAR = smac
+
+CMD_VAR = has_otag
+CMD_VAR =
+CMD_VAR = ovid
+CMD_VAR = has_otpid
+CMD_VAR = otpid
+CMD_VAR = has_opcp
+CMD_VAR = opcp
+CMD_VAR = has_odei
+CMD_VAR = odei
+
+CMD_VAR = has_itag
+CMD_VAR =
+CMD_VAR = ivid
+CMD_VAR = has_itpid
+CMD_VAR = itpid
+CMD_VAR = has_ipcp
+CMD_VAR = ipcp
+CMD_VAR = has_idei
+CMD_VAR = idei
+
+CMD_VAR = has_sip4
+CMD_VAR = sip4
+CMD_VAR = has_sip6
+CMD_VAR = sip6
+
+CMD_VAR = has_dip4
+CMD_VAR = dip4
+CMD_VAR = has_dip6
+CMD_VAR = dip6
+
+CMD_VAR = has_dscp
+CMD_VAR = dscp
+
+CMD_VAR = has_dont_fragment
+
+CMD_VAR = has_proto
+CMD_VAR = has_tcp
+CMD_VAR = has_udp
+CMD_VAR = ip_proto
+
+CMD_VAR = has_sport
+CMD_VAR = sport
+
+CMD_VAR = has_dport
+CMD_VAR = dport
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = IP_ICLI_runtime_packet_length
+
+VARIABLE_BEGIN
+    mesa_port_no_t    iport;
+    uint8_t           *buffer = NULL;
+    uint32_t          i, j, port_cnt = 0;
+    uint64_t          port_mask = 0;
+    bool              switch_frm;
+    mesa_rc           rc = VTSS_RC_OK;
+    packet_tx_props_t tx_props;
+    IP_ICLI_tag_t     otag, itag, *tag;
+    uint32_t          frame_sizes_bytes; // Includes FCS
+    mesa_ip_addr_t    sip, dip;
+    conf_board_t      board_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    // frame_sizes_bytes includes FCS, packet_length doesn't here.
+    frame_sizes_bytes = has_packet_length ? packet_length + 4 /* FCS */ : 64;
+    packet_length     = frame_sizes_bytes;
+
+    memset(&otag, 0, sizeof(otag));
+    memset(&itag, 0, sizeof(itag));
+
+    if (has_otag) {
+        otag.enable = true;
+        otag.tpid   = has_otpid ? otpid : 0x88a8;
+        otag.vid    = ovid;
+        otag.pcp    = has_opcp ? opcp : 0;
+        otag.dei    = has_odei ? odei : 0;
+    }
+
+    if (has_itag) {
+        itag.enable = true;
+        itag.tpid   = has_itpid ? itpid : 0x8100;
+        itag.vid    = ivid;
+        itag.pcp    = has_ipcp ? ipcp : 0;
+        itag.dei    = has_idei ? idei : 0;
+    } else {
+        // For the sake of switched Tx with no specified VID.
+        itag.vid    = VTSS_APPL_VLAN_ID_DEFAULT;
+    }
+
+    if (!has_smac) {
+        if (conf_mgmt_board_get(&board_conf) < 0) {
+            ICLI_PRINTF("%% Unable to obtain board configuration\n");
+            return VTSS_RC_ERROR;
+        }
+
+        smac = board_conf.mac_address;
+    }
+
+    if (!has_dmac) {
+        memset(dmac.addr, 0xff, sizeof(dmac));
+    }
+
+    tag = has_otag ? &otag : &itag;
+
+    if ((has_dip4 && has_sip6) || (has_dip6 && has_sip4)) {
+        ICLI_PRINTF("%% Source and destination IP addresses must be of the same type\n");
+        return VTSS_RC_ERROR;
+    }
+
+    memset(&dip, 0, sizeof(dip));
+    memset(&sip, 0, sizeof(sip));
+
+    // Use IPv4 if neither sip or dip is specified.
+    sip.type = dip.type = has_dip6 || has_sip6 ? MESA_IP_TYPE_IPV6 : MESA_IP_TYPE_IPV4;
+
+    if (!has_sip4 && !has_sip6) {
+        IP_ICLI_random_ip(&sip);
+    } else {
+        if (sip.type == MESA_IP_TYPE_IPV4) {
+            sip.addr.ipv4 = sip4;
+        } else {
+            sip.addr.ipv6 = sip6;
+        }
+    }
+
+    if (!has_dip4 && !has_dip6) {
+        IP_ICLI_random_ip(&dip);
+    } else {
+        if (dip.type == MESA_IP_TYPE_IPV4) {
+            dip.addr.ipv4 = dip4;
+        } else {
+            dip.addr.ipv6 = dip6;
+        }
+    }
+
+    if (!has_dscp) {
+        dscp = rand() & 0x3F;
+    }
+
+    if (has_proto) {
+        if (has_tcp) {
+            ip_proto = IP_PROTO_TCP;
+        } else if (has_udp) {
+            ip_proto = IP_PROTO_UDP;
+        } else {
+            // Leave it at its value
+        }
+    } else {
+       // Pick random
+       ip_proto = rand();
+    }
+
+    if (!has_sport) {
+        sport = rand();
+    }
+
+    if (!has_dport) {
+        dport = rand();
+    }
+
+    switch_frm = !has_interface;
+    if (!switch_frm) {
+        for (i = 0; i < plist->cnt; ++i) {
+            for (j = 0; j < plist->switch_range[i].port_cnt; j++) {
+                iport = plist->switch_range[i].begin_iport + j;
+
+                port_mask |= VTSS_BIT64(iport);
+                port_cnt++;
+            }
+        }
+
+        if (port_cnt == 0) {
+            ICLI_PRINTF("%% No ports selected\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    T_D("Frame size = %u bytes (incl. FCS)", frame_sizes_bytes);
+
+    if ((buffer = packet_tx_alloc(frame_sizes_bytes - 4 /* FCS */)) == NULL) {
+        ICLI_PRINTF("%% Couldn't allocate Tx buffer\n");
+        rc = VTSS_RC_ERROR;
+        goto do_exit;
+    }
+
+    if ((rc = IP_ICLI_frame_compose(buffer, frame_sizes_bytes, &dmac, &smac, &otag, &itag, sip, dip, dscp, has_dont_fragment, ip_proto, sport, dport)) != VTSS_RC_OK) {
+        goto do_exit;
+    }
+
+    if ((rc = IP_ICLI_frame_tx_props_setup(&tx_props, buffer, frame_sizes_bytes, switch_frm, tag, port_mask)) != VTSS_RC_OK) {
+        goto do_exit;
+    }
+
+    // packet_tx() prints an error if it fails, so don't need to print anything
+    // here. If rc == VTSS_RC_OK, packet_tx() frees the frame.
+    rc = packet_tx(&tx_props);
+
+do_exit:
+    if (rc != VTSS_RC_OK) {
+
+        if (buffer) {
+            packet_tx_free(buffer);
+        }
+
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+

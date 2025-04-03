@@ -1,0 +1,463 @@
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "udld_api.h"
+#include "msg_api.h"
+#include "netdb.h"
+#include "port_api.h"
+INCLUDE_END
+FUNCTION_BEGIN
+#define PRINTF                   (void)icli_session_self_printf
+
+static void icli_udld_config_set(
+    u32                        session_id,
+    icli_switch_port_range_t   *spr,
+    BOOL                       has_aggressive,
+    BOOL                       has_enable,
+    BOOL                       has_time,
+    u32                        interval,
+    BOOL                       has_no)
+{
+    u32                   uport, i;
+    vtss_isid_t           isid;
+    mesa_port_no_t        iport;
+    meba_port_cap_t       port_cap;
+    vtss_appl_udld_mode_t mode = VTSS_APPL_UDLD_MODE_NORMAL;
+    u32                   probe_msg_interval = 0;
+
+    isid = spr->isid;
+
+    if (has_aggressive) {
+        mode = VTSS_APPL_UDLD_MODE_AGGRESSIVE; 
+    }
+
+    if (has_enable) {
+        mode = VTSS_APPL_UDLD_MODE_NORMAL; 
+    }
+
+    for (i = 0; i < spr->port_cnt; i++) {
+        iport = spr->begin_iport + i;
+        uport  = spr->begin_port + i;
+
+        if (port_cap_get(iport, &port_cap) == VTSS_RC_OK) {
+            if (port_cap & MEBA_PORT_CAP_1G_PHY) {
+                ICLI_PRINTF("%% Only fiber ports are allowed, port_no: %u\n", uport);
+                continue;
+            }
+        }
+
+        if (has_no) {
+            if (has_aggressive) {
+                mode = VTSS_APPL_UDLD_MODE_NORMAL;
+                if (vtss_appl_udld_port_mode_set(isid, iport, mode) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% failed to set mode, port: %u\n", uport);
+                }
+            } else {
+                if (vtss_appl_udld_port_admin_set(isid, iport, VTSS_APPL_UDLD_ADMIN_DISABLE)!= VTSS_RC_OK) {
+                    ICLI_PRINTF("%% failed to set admin, port: %u\n", uport);
+                }
+                if (vtss_appl_udld_port_mode_set(isid, iport, VTSS_APPL_UDLD_MODE_DISABLE) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% failed to set mode, port: %u\n", uport);
+                }
+            }
+
+            continue;
+        }
+
+        if (has_aggressive || has_enable) {
+            if (vtss_appl_udld_port_admin_set(isid, iport, VTSS_APPL_UDLD_ADMIN_ENABLE) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% failed to set admin, port: %u\n", uport);
+            }
+            if (vtss_appl_udld_port_mode_set(isid, iport, mode) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% failed to set mode, port: %u\n", uport);
+            }
+        }
+
+        if (has_time) {
+            probe_msg_interval = interval;
+            if (vtss_appl_udld_port_probe_msg_interval_set(isid, iport, probe_msg_interval) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% failed to set msg_interval, port: %u\n", uport);
+            }
+        }
+    }
+}
+static void icli_udld_port_mode_set( 
+        u32                        session_id, 
+        icli_stack_port_range_t    *plist, 
+        BOOL                       has_aggressive, 
+        BOOL                       has_time, 
+        u32                        interval, 
+        BOOL                       has_no 
+)
+{
+    u32                         i;
+    u32                         j;
+    vtss_isid_t                 isid;
+    mesa_port_no_t              iport;
+    vtss_appl_udld_mode_t       mode;
+    u32                         port;
+    vtss_appl_udld_admin_t      admin;
+    mode = VTSS_APPL_UDLD_MODE_NORMAL;
+    if (!msg_switch_is_primary()) {
+        ICLI_PRINTF("%% Error - this is not the primary switch switch\n");
+        return;
+    }
+    if(has_aggressive) {
+        mode = VTSS_APPL_UDLD_MODE_AGGRESSIVE;
+    } else {
+        mode = VTSS_APPL_UDLD_MODE_NORMAL;
+    }
+
+    if (has_no) {
+        admin = VTSS_APPL_UDLD_ADMIN_DISABLE;
+        mode  = VTSS_APPL_UDLD_MODE_DISABLE;
+        interval = UDLD_DEFAULT_MESSAGE_INTERVAL;
+    } else {
+        admin = VTSS_APPL_UDLD_ADMIN_ENABLE;
+    }
+
+    for (i = 0; i < plist->cnt; i++) {
+        isid = plist->switch_range[i].isid;
+        for (j = 0; j < plist->switch_range[i].port_cnt; j++) {
+            iport = plist->switch_range[i].begin_iport + j;
+            port  = plist->switch_range[i].begin_port + j;
+            if (vtss_appl_udld_port_admin_set(isid, iport, admin) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Error - failed to admin, port:%u\n", port);
+            }
+            if (vtss_appl_udld_port_mode_set(isid, iport, mode) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Error - failed to mode, port:%u\n", port);
+            }
+            if ((has_time || has_no) && vtss_appl_udld_port_probe_msg_interval_set (isid, iport, interval) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Error - failed to set time interval, port:%u\n", port);
+            }
+        }
+    }
+}
+static const char *icli_udld_detection_state_str(vtss_udld_detection_state_t detection_state)
+{
+    const char *str;
+    switch(detection_state) {
+        case VTSS_UDLD_DETECTION_STATE_LOOPBACK:
+            str = "Loopback";
+            break;
+        case VTSS_UDLD_DETECTION_STATE_BI_DIRECTIONAL:
+            str = "Bi-directional";
+            break;
+        case VTSS_UDLD_DETECTION_STATE_UNI_DIRECTIONAL:
+            str = "Uni-directional";
+            break;
+        case VTSS_UDLD_DETECTION_STATE_NEIGHBOR_MISMATCH:
+            str = "Neighbor mismatch";
+            break;
+        case VTSS_UDLD_DETECTION_STATE_MULTIPLE_NEIGHBOR:
+            str = "Multiple neighbors connected";
+            break;
+        case VTSS_UDLD_DETECTION_STATE_UNKNOWN:
+        default:
+        str = "Indeterminant";
+    }
+
+    return str;
+}
+static void icli_udld_conf_show(
+    vtss_isid_t       isid,
+    mesa_port_no_t    iport,
+    u32               uport
+)
+{
+    vtss_appl_udld_mode_t                 mode;
+    vtss_appl_udld_admin_t                admin;
+    u32 probe_msg_interval                =0;
+    vtss_appl_udld_neighbor_info_t        info;
+    vtss_appl_udld_port_info_t            port_info;
+
+    if (vtss_appl_udld_port_mode_get(isid, iport, &mode) != VTSS_RC_OK) {
+        PRINTF("Failed to get mode, port:%u", uport);
+    }
+    if (vtss_appl_udld_port_admin_get(isid, iport, &admin) != VTSS_RC_OK) {
+        PRINTF("Failed to get admin, port:%u", uport);
+    }
+    if (vtss_appl_udld_port_probe_msg_interval_get(isid, iport, &probe_msg_interval) != VTSS_RC_OK) {
+        PRINTF("Failed to get msg_interval, port:%u", uport);
+    }
+    if (vtss_appl_udld_port_info_get(isid, iport, &port_info) != VTSS_RC_OK) {
+        PRINTF("Failed to get port info, port:%u", uport);
+    }
+    
+    PRINTF("UDLD Mode                 : %s \n", mode == VTSS_APPL_UDLD_MODE_NORMAL ? "Normal" : (mode == VTSS_APPL_UDLD_MODE_AGGRESSIVE) ? "Aggressive" : "Disable" );
+    PRINTF("Admin State               : %s \n", admin == VTSS_APPL_UDLD_ADMIN_ENABLE ? "Enable" : "Disable");
+    PRINTF("Message Time Interval(Sec): %u \n", probe_msg_interval);
+    PRINTF("Device ID(local)          : %s \n", port_info.device_id);
+    PRINTF("Device Name(local)        : %s \n", port_info.device_name);
+    PRINTF("Bidirectional state       : %s \n", icli_udld_detection_state_str(port_info.detection_state));
+    
+    if (vtss_appl_udld_neighbor_info_get_first(isid, iport , &info) == VTSS_RC_OK) {
+        PRINTF("\nNeighbor cache information\n");
+        PRINTF("--------------------------\n");
+        PRINTF("%-10s%-20s%-20s%s","Port","Device ID","Link Status","Device Name\n");
+        PRINTF("%-10s%-20s%-20s%s","----","---------","-----------","-----------\n");
+        PRINTF("%-10s%-20s%-20s%s\n", info.port_id, info.device_id, icli_udld_detection_state_str(info.detection_state), info.device_name);
+        while (info.next != NULL) {
+            if (vtss_appl_udld_neighbor_info_get_next(isid, iport , &info)  != VTSS_RC_OK) {
+                break;
+            }
+            PRINTF("%-10s%-20s%-20s%s\n", info.port_id, info.device_id, icli_udld_detection_state_str(info.detection_state), info.device_name);
+        }
+        PRINTF("\n");
+    } else {
+        PRINTF("\nNo neighbor cache information stored\n");
+        PRINTF("---------------------\n");
+    }
+}
+static void icli_udld_show(
+    u32                         session_id,
+    icli_switch_port_range_t    *spr,
+    BOOL                        has_interface,
+    BOOL                        has_first
+)
+{
+    u32               i;
+    u32               uport;
+    vtss_isid_t       isid;
+    mesa_port_no_t    iport;
+    isid = spr->isid;
+    for (i = 0; i < spr->port_cnt; i++) {
+        iport = spr->begin_iport + i;
+        uport  = spr->begin_port  + i;
+        ICLI_PRINTF("\n%s %u/%u\n", icli_port_type_get_name ( spr->port_type ), spr->switch_id, uport);
+        ICLI_PRINTF("----------------------------------------------------------------------\n");
+        icli_udld_conf_show ( isid, iport, uport);
+    }
+}
+FUNCTION_END
+EXPORT_BEGIN
+EXPORT_END
+HELP_PROBE_TIMER = Configures the period of time between UDLD probe messages on ports that are in the advertisement phase and are determined to be bidirectional. The range is from 7 to 90 seconds (Currently default message time interval 7 sec is supported).
+!==============================================================================
+CMD_BEGIN
+COMMAND = no udld { aggressive | enable }
+DOC_CMD_DESC    = Disable  UDLD mode of operation.
+DOC_CMD_DEFAULT = UDLD is disabled by default.
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no udld enable
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+RUNTIME =
+
+! 1: no
+! 2: udld
+! 3: aggressive
+! 4: enable
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_aggressive
+CMD_VAR = has_enable
+
+HELP = 
+HELP = Disable UDLD configurations on all fiber-optic ports.
+
+HELP = Disable UDLD aggressive mode on all fiber-optic interfaces.
+HELP = Disable UDLD on all fiber-optic interfaces.
+
+VARIABLE_BEGIN
+    icli_switch_port_range_t    spr;
+VARIABLE_END
+
+CODE_BEGIN
+    if (icli_port_get_first(&spr) == FALSE) {
+        ICLI_PRINTF("%% Fail to get first switch port\n");
+        return ICLI_RC_ERROR;
+    }
+    icli_udld_config_set(session_id, &spr, has_aggressive, has_enable, FALSE, 0, TRUE);
+    while (icli_port_get_next(&spr)) {
+        icli_udld_config_set(session_id, &spr, has_aggressive, has_enable, FALSE, 0, TRUE);
+    }
+CODE_END
+CMD_END
+!==============================================================================
+CMD_BEGIN
+COMMAND = udld { aggressive | enable | message time-interval <7-90> }
+DOC_CMD_DESC    = Specify the UDLD mode of operation.
+DOC_CMD_DEFAULT = UDLD is disabled by default.
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = udld enable
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+RUNTIME =
+
+! 1: udld
+! 2: aggressive
+! 3: enable
+! 4: message
+! 5: time-interval
+! 6: <v_interval:7-90>
+
+CMD_VAR =
+CMD_VAR = has_aggressive
+CMD_VAR = has_enable
+CMD_VAR = 
+CMD_VAR = has_time
+CMD_VAR = v_interval
+
+VARIABLE_BEGIN
+    icli_switch_port_range_t    spr;
+VARIABLE_END
+
+HELP = Enable UDLD in the aggressive or normal mode and to set the configurable message timer on all fiber-optic ports.
+HELP = Enables UDLD in aggressive mode on all fiber-optic ports.
+HELP = Enables UDLD in normal mode on all fiber-optic ports.
+HELP = ##HELP_PROBE_TIMER
+HELP = ##HELP_PROBE_TIMER
+HELP = ##HELP_PROBE_TIMER
+
+CODE_BEGIN
+    if (icli_port_get_first(&spr) == FALSE) {
+        ICLI_PRINTF("%% Fail to get first switch port\n");
+        return ICLI_RC_ERROR;
+    }
+    icli_udld_config_set(session_id, &spr, has_aggressive, has_enable, has_time, v_interval, FALSE);
+    while (icli_port_get_next(&spr)) {
+        icli_udld_config_set(session_id, &spr, has_aggressive, has_enable, has_time, v_interval, FALSE);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no udld port 
+
+DOC_CMD_DESC    = Disable UDLD on an interface
+DOC_CMD_DEFAULT = UDLD mode is disable
+DOC_CMD_USAGE   =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+HELP = 
+HELP = Disable UDLD 
+HELP = Disable UDLD on an Interface
+
+CODE_BEGIN
+    icli_udld_port_mode_set(session_id, plist, FALSE, FALSE, 0, TRUE);
+CODE_END
+
+CMD_END
+!==============================================================================
+CMD_BEGIN
+COMMAND = udld port [aggressive][message time-interval <7-90>]
+
+DOC_CMD_DESC    = Set UDLD mode Normal or Aggressive on an interface
+DOC_CMD_DEFAULT = UDLD mode is nornal
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = udld port aggressive 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: udld
+! 2: port
+! 3: aggressive
+! 4: message
+! 5: time-interval
+! 6: <v_interval:7-90>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_aggressive
+CMD_VAR =
+CMD_VAR = has_time
+CMD_VAR = v_interval
+
+HELP = UDLD configurations.
+HELP = UDLD configuration on the interface
+HELP = Enable UDLD in the aggressive mode on an interface
+HELP = ##HELP_PROBE_TIMER
+HELP = ##HELP_PROBE_TIMER
+HELP = ##HELP_PROBE_TIMER
+
+CODE_BEGIN
+    icli_udld_port_mode_set(session_id, plist, has_aggressive, has_time, v_interval, FALSE);
+CODE_END
+CMD_END
+!==============================================================================
+CMD_BEGIN
+COMMAND = show udld [ interface <port_type_list> ]
+DOC_CMD_DESC    = Show UDLD configuration,statistics and status
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+RUNTIME =
+! 1: show
+! 2: udld
+! 3: interface
+! 4: <port_type_list>
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_interface
+CMD_VAR = plist
+
+HELP = 
+HELP = Unidirectional Link Detection (UDLD) configurations, statistics and status 
+HELP = Choose port
+HELP = Interface 
+
+VARIABLE_BEGIN
+    u32                         i;
+    icli_switch_port_range_t    spr;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_interface) {
+        for (i = 0; i < plist->cnt; i++) {
+            icli_udld_show(session_id, &(plist->switch_range[i]),
+                    has_interface, TRUE);
+        }
+    } else {
+        if (icli_port_get_first(&spr) == FALSE) {
+            ICLI_PRINTF("%% Fail to get first switch port\n");
+            return ICLI_RC_ERROR;
+        }
+        icli_udld_show(session_id, &spr, has_interface, TRUE);
+        while (icli_port_get_next(&spr)) {
+            icli_udld_show(session_id, &spr, has_interface, FALSE);
+        }
+    }
+CODE_END
+CMD_END
+

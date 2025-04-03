@@ -1,0 +1,256 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>FRER Statistics</title>
+
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="stream_lib.js"></script> <!-- Needed by frer_lib.js -->
+ <script type="text/javascript" src="frer_lib.js"></script>
+ <script type="text/javascript">
+
+var help_page = "/help/help_frer_statistics.htm";
+
+var statiTable, globals, variables, prev_inst, prev_ifname;
+
+/******************************************************************************/
+// on_submit_done()
+/******************************************************************************/
+function on_submit_done(inst, err_msg, last)
+{
+    if (err_msg) {
+        alert("Instance " + inst + ": " + err_msg);
+    }
+
+    if (last) {
+        // Done with all of them. Refresh the page
+        requestUpdate();
+    }
+}
+
+/******************************************************************************/
+// on_clear_button_click()
+/******************************************************************************/
+function on_clear_button_click(inst)
+{
+    var insts = [];
+
+    if (inst == 'all') {
+        variables.conf.forEach(function(key) {
+            insts.push([key.key, true]);
+        });
+    } else {
+         insts.push([inst, true]);
+    }
+
+    frer_lib_json_submit("frer.control.statisticsClear.set", insts, on_submit_done);
+}
+
+/******************************************************************************/
+// add_header()
+/******************************************************************************/
+function add_header(table_rows)
+{
+    table_rows.push({fields: [
+        {type: "disp_hdr", params: ["Clear"]},
+        {type: "disp_hdr", params: ["Instance"]},
+        {type: "disp_hdr", params: ["Mode"]},
+        {type: "disp_hdr", params: ["Egress Port"]},
+        {type: "disp_hdr", params: ["Ingress Stream"]},
+        {type: "disp_hdr", params: ["Out of Order"]},
+        {type: "disp_hdr", params: ["Rogue"]},
+        {type: "disp_hdr", params: ["Passed"]},
+        {type: "disp_hdr", params: ["Discarded"]},
+        {type: "disp_hdr", params: ["Lost"]},
+        {type: "disp_hdr", params: ["Tagless"]},
+        {type: "disp_hdr", params: ["Latent Error Resets"]},
+        {type: "disp_hdr", params: ["Generation Matches"]},
+        {type: "disp_hdr", params: ["Resets"]}]
+    });
+}
+
+/******************************************************************************/
+// add_row()
+/******************************************************************************/
+function add_row(inst, ifname, stream_id, stati, conf)
+{
+    var same_inst_as_previous, same_ifname_as_previous, clear_cell, clear_button_name, ifname_str;
+
+    // The same instance may provide several rows in the table. Only show the
+    // Clear button, Instance, and Mode for the first of them.
+    same_inst_as_previous = inst == prev_inst;
+    prev_inst = inst;
+
+    // The same goes with interface name. In individual recovery mode, we get
+    // counters per interface name per stream ID. We only print the interface
+    // name if it's not the same as the previous.
+    if (same_inst_as_previous) {
+        same_ifname_as_previous = ifname == prev_ifname;
+        clear_cell = {type: "text", params: [""]};
+    } else {
+        same_ifname_as_previous = false;
+        clear_button_name       = "ClearButton_" + inst;
+        frer_lib_disable_button_add(clear_button_name);
+        clear_cell = {type: "button",  params: ["Clear", "c", clear_button_name, function() {on_clear_button_click(inst);}]};
+    }
+
+    prev_ifname = ifname;
+
+    if (conf.Mode == "recovery" && !same_ifname_as_previous) {
+        ifname_str = ifname + " (" + frer_lib_port_map[ifname] + ")";
+    } else {
+        ifname_str = "";
+    }
+
+    return {fields: [
+               clear_cell,
+               {type: "digit",   params: [same_inst_as_previous   ? ""  : inst]},
+               {type: "text",    params: [same_inst_as_previous   ? ""  : frer_lib_mode_map[conf.Mode], "cl"]},
+               {type: "text",    params: [conf.Mode != "recovery" ? "-" : ifname_str]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : stream_id == "0" ? "Compound" : stream_id]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : stati.OutOfOrder]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : stati.Rogue]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : stati.Passed]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : stati.Discarded]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : stati.Lost]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : stati.Tagless]},
+               {type: "digit",   params: [conf.Mode != "recovery" ? "-" : same_inst_as_previous ? "" : stati.LaErrResets]},
+               {type: "digit",   params: [conf.Mode == "recovery" ? "-" : stati.GenerationMatches]},
+               {type: "digit",   params: [conf.Mode == "recovery" ? stati.RecoveryResets : stati.GenerationResets]}]
+    };
+}
+
+/******************************************************************************/
+// add_rows()
+/******************************************************************************/
+function add_rows()
+{
+    var table_rows, inst_conf;
+
+    table_rows = new Array();
+    add_header(table_rows);
+
+    prev_inst   = -1;
+    prev_ifname = "";
+
+    // Add data rows
+    Object.each(variables.stati, function(record) {
+        // record.key[0] = inst
+        // record.key[1] = interface name
+        // record.key[2] = Stream ID
+        inst_conf = frer_lib_inst_get(variables.conf,  record.key[0]);
+        table_rows.push(add_row(record.key[0], record.key[1], record.key[2], record.val, inst_conf.val));
+    });
+
+    // Empty row
+    if (!variables.stati.length) {
+        table_rows.push({fields: [{type: "empty_row", params: [15, "No FRER instances"]}]});
+    }
+
+    return table_rows;
+}
+
+/******************************************************************************/
+// processUpdate()
+/******************************************************************************/
+function processUpdate()
+{
+    // Add table rows
+    statiTable.addRows(add_rows());
+
+    // Update this dynamic table
+    statiTable.update();
+
+    // Refresh timer
+    frer_lib_autorefresh_update();
+}
+
+/******************************************************************************/
+// requestUpdate()
+/******************************************************************************/
+function requestUpdate()
+{
+    variables = {conf: {}, stati: {}};
+    frer_lib_json_request(variables, processUpdate);
+}
+
+/******************************************************************************/
+// on_globals_received()
+/******************************************************************************/
+function on_globals_received()
+{
+    frer_lib_port_map = {};
+    Object.each(globals.port_name_map, function(record, idx) {
+        // This sets frer_lib_port_map to e.g. {'Gi 1/1': 1}, ..., {'Gi 1/24': 24}, ...
+        // where the key is the interface name and the value is the port_no.
+        frer_lib_port_map[record.key] = record.val;
+    });
+
+    requestUpdate();
+}
+
+/******************************************************************************/
+// window::domready()
+/******************************************************************************/
+window.addEvent('domready', function() {
+    statiTable = new DynamicTable("statiTableContent", "display");
+
+    frer_lib_disable_button_add("autorefresh");
+    frer_lib_disable_button_add("refresh_button");
+    frer_lib_disable_button_add("clear_all_button");
+
+    globals = {port_name_map: {}};
+    frer_lib_json_request(globals, on_globals_received);
+});
+
+ </script>
+</head>
+
+<body class="content">
+
+<h1>FRER Statistics</h1>
+
+<div class="refreshbar">
+  <label for="autorefresh">Auto-refresh</label>
+  <input type="checkbox" name="autorefresh" id="autorefresh"   onclick="frer_lib_on_autorefresh_click();">
+  <input type="button" id="refresh_button"   value="Refresh"   onclick="requestUpdate();               this.blur();">
+  <input type="button" id="clear_all_button" value="Clear All" onclick="on_clear_button_click('all');  this.blur();">
+  <img id="frer_update" alt="" src="images/updating.gif">
+</div>
+
+<div id="statiTableContent"></div>
+
+</body>
+</html>
+

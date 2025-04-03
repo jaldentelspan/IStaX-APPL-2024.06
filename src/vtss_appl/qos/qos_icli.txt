@@ -1,0 +1,542 @@
+! This is a plain-text template file for specification of CLI commands.
+!
+! Please read icli-cmd-spec-README.txt for details and guidance.
+!
+! Generate stubs with:
+! ../../build/tools/asm_specs.rb -o=qos_icli.template -g qos_icli.txt
+!
+! NOTE: Delete all irrelevant modes; add any new modes.
+
+user exec
+  !!
+
+privileged exec
+  ! QoS Configuration show command
+  show qos [
+    {interface [<port:port_type_list>]} |
+    wred |
+    {maps [dscp-cos] [dscp-ingress-translation] [dscp-classify] [cos-dscp] [dscp-egress-translation] [{ingress [<ing_id:0-255>]}] [{egress [<egr_id:0-511>]}]} |
+    storm |
+    {qce [<qce:1-256>]} ]
+
+  ! Show 802.1Qbv (TAS) status
+  show qos tas status [interface <port:port_type_list>]
+
+  ! Show 802.1Qbu (frame-preemption) status
+  show qos frame-preemption status [interface <port:port_type_list>]
+
+  ! Show 802.1Qci PSFP Stream Parameter Table
+  show qos spt
+
+  ! Show 802.1Qci PSFP Stream Filter Instance statistics
+  show qos sfi statistics [<sfi_id:uint>]
+
+  ! Clear 802.1Qci PSFP Stream Filter Instance statistics
+  clear qos sfi statistics [<sfi_id:uint>]
+
+  ! Show 802.1Qci PSFP Stream Gate Instance status
+  show qos sgi status [<sgi_id:uint>]
+
+  ! QoS Capabilities debug show command
+  debug show qos capabilities
+
+  ! Serval DLB shaper debug show command
+  debug show qos shapers
+
+  !! Debug QoS CMEF [enable|disable]
+  debug qos cmef [{ enable | disable }]
+
+  !! Debug QoS Registrations [clear]
+  debug qos registrations [clear]
+
+global config
+  ! dscp-cos maps dscp to cos and dpl and enables trust
+  qos map dscp-cos {<dscp_num:0~63> | <dscp_name:dscp>} cos <cos:0-7> dpl <dpl:dpl>
+  no qos map dscp-cos {<dscp_num:0~63> | <dscp_name:dscp>}
+  ! show qos maps dumps this map
+
+  !! QoS DSCP Translation [<dscp_list>] [<trans_dscp>]
+  qos map dscp-ingress-translation {<dscp_num:0~63> | <dscp_name:dscp>} to {<dscp_num_tr:0-63> | <dscp_name_tr:dscp>}
+  no qos map dscp-ingress-translation {<dscp_num:0~63> | <dscp_name:dscp>}
+  ! show qos maps dumps this map
+
+  !! QoS DSCP Classification Mode [<dscp_list>] [enable|disable]
+  qos map dscp-classify {<dscp_num:0~63> | <dscp_name:dscp>}
+  no qos map dscp-classify {<dscp_num:0~63> | <dscp_name:dscp>}
+  ! show qos maps dumps this map
+
+  !! QoS DSCP Classification Map [<class_list>] [<dpl_list>] [<dscp>]
+  ! dpl parameter is not supported on Jag1
+  qos map cos-dscp <cos:0~7> dpl <dpl:0~1> dscp {<dscp_num:0-63> | <dscp_name:dscp>}
+  no qos map cos-dscp <cos:0~7> dpl <dpl:0~1>
+  ! show qos maps dumps this map
+
+  !! QoS DSCP EgressRemap [<dscp_list>] [<dpl_list>] [<dscp>]
+  ! dpl parameter is not supported on Jag1
+  qos map dscp-egress-translation {<dscp_num:0~63> | <dscp_name:dscp>} <dpl:0~1> to {<dscp_num_tr:0-63> | <dscp_name_tr:dscp>}
+  no qos map dscp-egress-translation {<dscp_num:0~63> | <dscp_name:dscp>} <dpl:0~1>
+  ! show qos maps dumps this map
+
+  ! Jag1 only:
+  !! QoS WRED [<queue_list>] [enable|disable] [<min_th>] [<mdp_1>] [<mdp_2>] [<mdp_3>]
+  qos wred queue <queue:0~5> min-th <min_th:0-100> mdp-1 <mdp_1:0-100> mdp-2 <mdp_2:0-100> mdp-3 <mdp_3:0-100> 
+  ! Same as on Serval1
+  ! no qos wred queue <queue:0~5> 
+
+  ! Serval1 only:
+  !! QoS WRED [<queue_list>] [enable|disable] [<min_fl>] [<max>] [dp|fl]
+  qos wred queue <queue:0~5> min-fl <min_fl:0-100> max <max:1-100> [fill-level] 
+  no qos wred queue <queue:0~5> 
+
+  ! Jag2 only (same as Serval1 but with group and dpl parameter added):
+  qos wred group <group:1~3> queue <queue:0~5> dpl <dpl:1~3> min-fl <min_fl:0-100> max <max:1-100> [fill-level] 
+  no qos wred group <group:1~3> queue <queue:0~5> dpl <dpl:1~3> 
+
+  ! Lu26 and Serval only:
+  !! QoS Storm Unicast [enable|disable] [<packet_rate>]
+  !! QoS Storm Multicast [enable|disable] [<packet_rate>]
+  !! QoS Storm Broadcast [enable|disable] [<packet_rate>]
+  ! Lu26 and Serval: <rate:1-1024000> fps. Jag2: TBD
+  qos storm {unicast | multicast | broadcast} <rate:uint> [fps | kfps | kbps | mbps]
+  no qos storm {unicast | multicast | broadcast}
+
+  !!QoS QCL Add [<qce_id>] [<qce_id_next>]
+                [<port_list>]
+                [<tag>] [<vid>] [<pcp>] [<dei>] [<smac>] [<dmac_type>]
+                [(etype [<etype>]) |
+                 (LLC  [<DSAP>] [<SSAP>] [<control>]) |
+                 (SNAP  [<PID>]) |
+                 (ipv4  [<protocol>] [<sip>] [<dscp>] [<fragment>] [<sport>] [<dport>]) |
+                 (ipv6  [<protocol>] [<sip_v6>] [<dscp>] [<sport>] [<dport>])]
+                [<class>] [<dp>] [<classified_dscp>]
+
+  ! qos qce <id> creates or overwrites a qce. Any unspecified parameter is set to its default value.
+  ! qos qce update <id> modifies an existing qce. Only specified parameter are modified.
+
+  qos qce {[update]} <qce_id:uint>
+          [{next <qce_id_next:uint>} | last]
+          [interface <port_list:port_type_list>]
+          [smac {<smac:mac_addr> | <smac_24:oui> | has_smac_any:any}]
+          [dmac {<dmac:mac_addr> | unicast | multicast | broadcast | has_dmac_any:any}]
+          [tag
+           {[has_ot_type:type {has_ot_untagged:untagged | has_ot_tagged:tagged | has_ot_c_tagged:c-tagged | has_ot_s_tagged:s-tagged | has_ot_type_any:any}]
+            [has_ot_vid:vid {<ot_vid:vcap_vr> | has_ot_vid_any:any}]
+            [has_ot_pcp:pcp {<ot_pcp:pcp> | has_ot_pcp_any:any}]
+            [has_ot_dei:dei {<ot_dei:0-1> | has_ot_dei_any:any}]}*1]
+          [inner-tag
+           {[has_it_type:type {has_it_untagged:untagged | has_it_tagged:tagged | has_it_c_tagged:c-tagged | has_it_s_tagged:s-tagged | has_it_type_any:any}]
+            [has_it_vid:vid {<it_vid:vcap_vr> | has_it_vid_any:any}]
+            [has_it_pcp:pcp {<it_pcp:pcp> | has_it_pcp_any:any}]
+            [has_it_dei:dei {<it_dei:0-1> | has_it_dei_any:any}]}*1]
+          [frame-type
+            {has_frame_type_any:any |
+             {etype [{<etype_type:0x600-0x7ff,0x801-0x86dc,0x86de-0xffff> | has_etype_type_any:any}]} |
+             {llc   [has_llc_dsap:dsap {<llc_dsap:0-0xff> | has_llc_dsap_any:any}]
+                    [has_llc_ssap:ssap {<llc_ssap:0-0xff> | has_llc_ssap_any:any}]
+                    [has_llc_control:control {<llc_control:0-0xff> | has_llc_control_any:any}]} |
+             {snap  [{<snap_data:0-0xffff> | has_snap_data_any:any}]} |
+             {ipv4  [has_pr4:proto {<pr4:0-255> | has_pr4_tcp:tcp | has_pr4_udp:udp | has_pr4_any:any}]
+                    [has_sip4:sip {<sip4:ipv4_subnet> | has_sip4_any:any}]
+                    [has_dip4:dip {<dip4:ipv4_subnet> | has_dip4_any:any}]
+                    [has_dscp4:dscp {<dscp4:vcap_vr> | <dscp4_name:dscp> | has_dscp4_any:any}]
+                    [has_fr4:fragment {has_fr4_yes:yes | has_fr4_no:no | has_fr4_any:any}]
+                    [has_sp4:sport {<sp4:vcap_vr> | has_sp4_any:any}]
+                    [has_dp4:dport {<dp4:vcap_vr> | has_dp4_any:any}]} |
+             {ipv6  [has_pr6:proto {<pr6:0-255> | has_pr6_tcp:tcp | has_pr6_udp:udp | has_pr6_any:any}]
+                    [has_sip6:sip {<sip6:ipv4_subnet> | has_sip6_any:any}]
+                    [has_dip6:dip {<dip6:ipv4_subnet> | has_dip6_any:any}]
+                    [has_dscp6:dscp {<dscp6:vcap_vr> | <dscp6_name:dscp> | has_dscp6_any:any}]
+                    [has_sp6:sport {<sp6:vcap_vr> | has_sp6_any:any}]
+                    [has_dp6:dport {<dp6:vcap_vr> | has_dp6_any:any}]}
+            }
+          ]
+          [action
+           {[has_action_cos:cos {<action_cos:0-7> | has_action_cos_default:default}]
+            [has_action_dpl:dpl {<action_dpl:dpl> | has_action_dpl_default:default}]
+            [has_action_pcp_dei:pcp-dei {<action_pcp:0-7> <action_dei:0-1> | has_action_pcp_dei_default:default}]
+            [has_action_dscp:dscp {<action_dscp:0-63> | <action_dscp_name:dscp> | has_action_dscp_default:default}]
+            [has_action_policy:policy {<action_policy:uint> | has_action_policy_default:default}]
+            [has_action_ingress_map:ingress-map {<action_ingress_map:uint> | has_action_ingress_map_default:default}]}*1]
+
+  !! QoS QCL Delete <qce_id>
+  no qos qce <qce_id_range:'QCE_ID_START'~'QCE_ID_END'>
+
+  !! QoS QCL Lookup [<qce_id>]
+  ! show qos [qce [<1-256>]] dumps the configuration
+
+  !! QoS QCL Status [combined|static|voice_vlan|conflicts]
+  ! show qos [qce [<1-256>]] dumps the status
+
+  !! QoS QCL Refresh
+  qos qce refresh
+
+  !----------------------------------------------------------------------------------------------------------------
+  ! Specification of QoS 802.1Qci PSFP Stream Filter Instance commands:
+  !----------------------------------------------------------------------------------------------------------------
+  ! Set/reset Stream Filter Instance StreamHandleSpec (StreamID)
+  qos sfi <sfi_id:uint> sid <sid:uint>
+  no qos sfi <sfi_id:uint> sid
+
+  ! Set/reset Stream Filter Instance PrioritySpec
+  qos sfi <sfi_id:uint> priority <prio:uint>
+  no qos sfi <sfi_id:uint> priority
+
+  ! Set/reset Stream Filter Instance InterfaceSpec (not part of public MIB)
+  qos sfi <sfi_id:uint> interface <interface:port_type_id>
+  no qos sfi <sfi_id:uint> interface
+
+  ! Set/reset Stream Filter Instance StreamGateInstanceID
+  qos sfi <sfi_id:uint> sgi-id <sgi_id:uint>
+  no qos sfi <sfi_id:uint> sgi-id
+
+  ! Set/reset Stream Filter Instance MaximumSDUSize
+  qos sfi <sfi_id:uint> max-sdu <sdu:uint>
+  no qos sfi <sfi_id:uint> max-sdu
+
+  ! Set/reset Stream Filter Instance FlowMeterInstanceID
+  qos sfi <sfi_id:uint> fmi-id <fmi_id:uint>
+  no qos sfi <sfi_id:uint> fmi-id
+
+  ! Set/reset Stream Filter Instance StreamBlockedDueToOversizeFrameEnable
+  qos sfi <sfi_id:uint> block-oversize-enable
+  no qos sfi <sfi_id:uint> block-oversize-enable
+
+  ! Set/reset Stream Filter Instance StreamBlockedDueToOversizeFrame
+  qos sfi <sfi_id:uint> block-oversize
+  no qos sfi <sfi_id:uint> block-oversize
+
+  ! Delete Stream Filter Instance
+  no qos sfi <sfi_id:uint>
+
+  !----------------------------------------------------------------------------------------------------------------
+  ! Specification of QoS 802.1Qci PSFP Stream Gate Instance commands:
+  !----------------------------------------------------------------------------------------------------------------
+
+  ! GateEnabled
+  qos sgi <sgi_id:uint> gate-enabled
+  no qos sgi <sgi_id:uint> gate-enabled
+
+  ! AdminGateStates
+  qos sgi <sgi_id:uint> gate-states { open | closed }
+  no qos sgi <sgi_id:uint> gate-states
+
+  ! AdminControlListLength
+  qos sgi <sgi_id:uint> control-list-length <length:uint>
+  no qos sgi <sgi_id:uint> control-list-length
+
+  ! AdminControlList
+  qos sgi <sgi_id:uint> control-list index <index:uint> gate-state { open | closed } time-interval <interval:uint> [ ipv <ipv:uint> ]
+  no qos sgi <sgi_id:uint> control-list index <index:uint>
+
+  ! AdminCycleTimeNumerator and AdminCycleTimeDenominator
+  qos sgi <sgi_id:uint> cycle-time numerator <numerator:uint> denominator <denominator:uint>
+  no qos sgi <sgi_id:uint> cycle-time
+
+  ! AdminCycleTimeExtension
+  qos sgi <sgi_id:uint> cycle-time-extension <extension:uint>
+  no qos sgi <sgi_id:uint> cycle-time-extension
+
+  ! AdminBaseTime
+  qos sgi <sgi_id:uint> base-time seconds <seconds:0-4294967295> nanoseconds <nanoseconds:0-999999999>
+  no qos sgi <sgi_id:uint> base-time
+
+  ! AdminIPV
+  qos sgi <sgi_id:uint> ipv <ipv:uint>
+  no qos sgi <sgi_id:uint> ipv
+
+  ! ConfigChange
+  qos sgi <sgi_id:uint> config-change
+
+  ! Set/reset Stream Gate Instance GateClosedDueToInvalidRxEnable
+  qos sgi <sgi_id:uint> close-invalid-rx-enable
+  no qos sgi <sgi_id:uint> close-invalid-rx-enable
+
+  ! Set/reset Stream Gate Instance GateClosedDueToInvalidRx
+  qos sgi <sgi_id:uint> close-invalid-rx
+  no qos sgi <sgi_id:uint> close-invalid-rx
+
+  ! Delete Stream Gate Instance
+  no qos sgi <sgi_id:uint>
+
+  !----------------------------------------------------------------------------------------------------------------
+  ! Specification of QoS 802.1Qci PSFP Flow Meter Instance commands:
+  !----------------------------------------------------------------------------------------------------------------
+  ! CIR
+  qos fmi <fmi_id:uint> cir <cir:uint>
+  no qos fmi <fmi_id:uint> cir
+
+  ! CBS
+  qos fmi <fmi_id:uint> cbs <cbs:uint>
+  no qos fmi <fmi_id:uint> cbs
+
+  ! Set/reset Flow Meter Instance FlowMeterMarkAllFramesRedEnable
+  qos fmi <fmi_id:uint> mark-red-enable
+  no qos fmi <fmi_id:uint> mark-red-enable
+
+  ! Set/reset Flow Meter Instance FlowMeterMarkAllFramesRed
+  qos fmi <fmi_id:uint> mark-red
+  no qos fmi <fmi_id:uint> mark-red
+
+  ! Delete Flow Meter Instance
+  no qos fmi <fmi_id:uint>
+
+  !----------------------------------------------------------------------------------------------------------------
+  ! Specification of QoS Ingress Map commands:
+  !----------------------------------------------------------------------------------------------------------------
+  ! Delete ingress map
+  ! Note that the coresponding 'qos map ingress <id:0-255>' switches to a new mode
+  ! and is implemented in vtss_appl/icli/platform/script/icli_config.icli
+  no qos map ingress <id:0~255>
+
+! Switches to new mode
+qos map ingress <id:0-255>
+
+  ! Preset an ingress map with default values
+  preset classes <classes:1-8> [color-aware]
+
+  ! Select what key to use
+  key { pcp | pcp-dei | dscp | dscp-pcp-dei }
+
+  ! Configure the mappings
+  map { { key_dscp:dscp { <dscp_num:0~63> | <dscp_name:dscp> }} | { key_pcp:pcp <pcp_num:0~7> [ key_dei:dei <dei_num:0~1> ] } } to
+      { [ class <cosid:0-7> ]
+        [ cos <cos:0-7> ]
+        [ dpl <dpl:0-3> ]
+        [ pcp <pcp:0-7> ]
+        [ dei <dei:0-1> ]
+        [ dscp <dscp:0-63> ] }*1
+
+  ! Associate action(s)
+  action { [ class ] [ cos ] [dpl] [pcp] [dei] [dscp] }*1
+
+  ! Disassociate all actions
+  no action
+
+  !----------------------------------------------------------------------------------------------------------------
+  ! Specification of QoS Egress Map commands:
+  !----------------------------------------------------------------------------------------------------------------
+  ! Delete egress map
+  ! Note that the coresponding 'qos map egress <id:0-511>' switches to a new mode
+  ! and is implemented in vtss_appl/icli/platform/script/icli_config.icli
+  no qos map egress <id:0~511>
+
+! Switches to new mode
+qos map egress <id:0-511>
+
+  ! Preset an egress map with default values
+  preset classes <classes:1-8> [color-aware]
+
+  ! Select what key to use
+  key { class | class-dpl | dscp | dscp-dpl }
+
+  ! Configure the mappings
+  map { { { key_dscp:dscp { <dscp_num:0~63> | <dscp_name:dscp> }} | { key_class:class <class_num:0~7> } } [ key_dpl:dpl <dpl_num:0~3> ] } to
+      { [ pcp <pcp:0-7> ]
+        [ dei <dei:0-1> ]
+        [ dscp <dscp:0-63> ] }*1
+
+  ! Associate action(s)
+  action { [pcp] [dei] [dscp] }*1
+
+  ! Disassociate all actions
+  no action
+
+vlan <vlan_id>
+  !!
+
+interface common
+  !!
+
+interface vlan <vlan_id>
+  !!
+
+interface ethernet <port_id>
+  !! QoS Port Classification Class [<port_list>] [<class>]
+  qos cos <cos:0-7>
+  ! set qos to 0:
+  no qos cos
+
+  !! QoS Port Classification DPL [<port_list>] [<dpl>]
+  qos dpl <dpl:dpl>
+  ! set dpl to 0:
+  no qos dpl
+
+  !! QoS Port Classification PCP [<port_list>] [<pcp>]
+  qos pcp <pcp:0-7>
+  ! set pcp to 0:
+  no qos pcp
+
+  !! QoS Port Classification DEI [<port_list>] [<dei>]
+  qos dei <dei:0-1>
+  ! set dei to 0:
+  no qos dei
+
+  !! QoS Port Classification Tag [<port_list>] [enable|disable]
+  qos trust tag
+  no qos trust tag
+
+  !! QoS Port Classification DSCP [<port_list>] [enable|disable]
+  qos trust dscp
+  no qos trust dscp
+
+  !! QoS Port Classification Map [<port_list>] [<pcp_list>] [<dei_list>] [<class>] [<dpl>]
+  qos map tag-cos pcp <pcp:0~7> dei <dei:0~1> cos <cos:0-7> dpl <dpl:dpl>
+  ! set mapping to default:
+  no qos map tag-cos pcp <pcp:0~7> dei <dei:0~1>
+  ! show qos [interface [<port_list>]] dumps this map
+
+  !! QoS Port Policer Mode [<port_list>] [enable|disable]
+  !! QoS Port Policer Rate [<port_list>] [<rate>]
+  !! QoS Port Policer Unit [<port_list>] [kbps|fps]
+  !! QoS Port Policer FlowControl [<port_list>] [enable|disable]
+  qos policer <rate:uint> [kbps | mbps | fps | kfps] [flowcontrol]
+  no qos policer
+
+  !! QoS Port QueuePolicer Mode [<port_list>] [<queue_list>] [enable|disable]
+  !! QoS Port QueuePolicer Rate [<port_list>] [<queue_list>] [<bit_rate>]
+  qos queue-policer queue <queue:0~7> <rate:uint> [kbps | mbps]
+  no qos queue-policer queue <queue:0~7> 
+
+  !! QoS Port Scheduler Mode [<port_list>] [strict|weighted]
+  !! QoS Port Scheduler Weight [<port_list>] [<queue_list>] [<weight>]
+  ! set mode to 'weighted round robin':
+  qos wrr <w0:1-100> <w1:1-100> <w2:1-100> <w3:1-100> <w4:1-100> <w5:1-100>
+  ! set mode to 'strict':
+  no qos wrr
+
+  !! QoS Port Shaper Mode [<port_list>] [enable|disable]
+  !! QoS Port Shaper Rate [<port_list>] [<bit_rate>]
+  qos shaper <rate:uint> [kbps | mbps]
+  no qos shaper
+
+  !! QoS Port QueueShaper Mode [<port_list>] [<queue_list>] [enable|disable]
+  !! QoS Port QueueShaper Rate [<port_list>] [<queue_list>] [<bit_rate>]
+  !! QoS Port QueueShaper Excess [<port_list>] [<queue_list>] [enable|disable]
+  qos queue-shaper queue <queue:0~7> <rate:uint>  [kbps | mbps] [excess]
+  no qos queue-shaper queue <queue:0~7> 
+
+  !! QoS Port TagRemarking Mode [<port_list>] [classified|default|mapped]
+  !! QoS Port TagRemarking PCP [<port_list>] [<pcp>]
+  !! QoS Port TagRemarking DEI [<port_list>] [<dei>]
+  !! QoS Port TagRemarking DPL [<port_list>] [<dpl>] [<dpl>] [<dpl>] [<dpl>]
+  ! Use fixed or mapped values in tag (yellow is only supported on Jag1 and default is 3):
+  qos tag-remark {pcp <pcp:0-7> dei <dei:0-1> | mapped [yellow <yellow:0-4>]}
+  ! Use classified values in tag:
+  no qos tag-remark
+
+  !! QoS Port TagRemarking Map [<port_list>] [<class_list>] [<dpl_list>] [<pcp>] [<dei>]
+  qos map cos-tag cos <cos:0~7> dpl <dpl:0~1> pcp <pcp:0-7> dei <dei:0-1>
+  ! set mapping to default:
+  no qos map cos-tag cos <cos:0~7> dpl <dpl:0~1>
+  ! show qos [interface [<port_list>]] dumps this map
+
+  !! QoS Port DSCP Translation [<port_list>] [enable|disable]
+  qos dscp-translate
+  no qos dscp-translate
+
+  !! QoS Port DSCP Classification [<port_list>] [none|zero|selected|all]
+  qos dscp-classify {zero | selected | any}
+  no qos dscp-classify
+
+  !! QoS Port DSCP EgressRemark [<port_list>] [disable|enable|remap_dp_unaware|remap_dp_aware]
+  !! QoS Port DSCP EgressRemark [<port_list>] [disable|enable|remap]
+  ! Jag1: No support of remap-dp:
+  qos dscp-remark {rewrite | remap | remap-dp}
+  ! Disable remarking:
+  no qos dscp-remark
+
+  ! Jag1 only:
+  !! QoS Port Storm Unicast [<port_list>] [enable|disable] [<rate>] [kbps|fps]
+  !! QoS Port Storm Broadcast [<port_list>] [enable|disable] [<rate>] [kbps|fps]
+  !! QoS Port Storm Unknown [<port_list>] [enable|disable] [<rate>] [kbps|fps]
+  qos storm {unicast | broadcast | unknown} <rate:uint> [fps | kfps | kbps | mbps]
+  no qos storm {unicast | broadcast | unknown}
+
+  ! Lu26 and Serval only:
+  !! QoS QCL Port Addr [<port_list>] [dmac_dip|smac_sip]
+  qos qce
+      {[addr {source | destination}]
+       [key {double-tag | normal | ip-addr | mac-ip-addr}]}*1
+  no qos qce
+         {[addr]
+          [key]}*1
+
+  ! Jag2 and Serval-T only:
+  qos wred-group <wred_group:1-3>
+  ! set wred group to 1:
+  no qos wred-group
+
+  ! Serval DLB shaper debug commands : <cir and eir:100-3300000>. <cbs and ebs:4096-13200000>
+  debug qos shaper cir {<cir:100-3300000> [cbs <cbs:4096-258048>]} {[eir <eir:100-3300000> [ebs <ebs:4096-258048>]]}
+  no debug qos shaper
+  debug qos queue-shaper queue <queue:0~7> {cir <cir:100-3300000> [cbs <cbs:4096-258048>]} {[eir <eir:100-3300000> [ebs <ebs:4096-258048>]]} [excess]
+  no debug qos queue-shaper queue <queue:0~7> 
+
+  ! Jag2 and Serval-T only:
+  ! Associate interface(s) with an ingress map
+  qos ingress-map <id:0-255>
+  ! Disassociate interface(s) from an ingress map
+  no qos ingress-map
+
+  ! Jag2 and Serval-T only:
+  ! Associate interface(s) with an egress map
+  qos egress-map <id:0-511>
+  ! Disassociate interface(s) from an egress map
+  no qos egress-map
+
+  ! Jag2 and Serval-T only:
+  ! Classification of cosid (called class in iCLI)
+  qos class <cosid:0-7>
+  ! set cosid to 0:
+  no qos class
+
+  !---------------------------------------------------------------------------------------------
+  ! Specification of QoS Qbv commands:
+  !---------------------------------------------------------------------------------------------
+  ! MaxSDU
+  qos tas max-sdu queue <queue:0~7> <sdu:uint>
+  no qos tas max-sdu queue <queue:0~7>
+
+  ! GateEnabled
+  qos tas gate-enabled
+  no qos tas gate-enabled
+
+  ! AdminGateStates
+  qos tas gate-states queue <queue:0~7> { open | closed }
+  no qos tas gate-states
+
+  ! AdminControlListLength
+  qos tas control-list-length <length:uint>
+  no qos tas control-list-length
+
+  ! AdminControlList
+  qos tas control-list index <index:uint> gate-state queue <queue:0~7> { open | closed } time-interval <interval:uint>
+  no qos tas control-list index <index:uint>
+
+  ! AdminCycleTimeNumerator and AdminCycleTimeDenominator
+  qos tas cycle-time numerator <numerator:uint> denominator <denominator:uint>
+  no qos tas cycle-time
+
+  ! AdminCycleTimeExtension
+  qos tas cycle-time-extension <extension:uint>
+  no qos tas cycle-time-extension
+
+  ! AdminBaseTime
+  qos tas base-time seconds <seconds:0-4294967295> nanoseconds <nanoseconds:0-999999999>
+  no qos tas base-time
+
+  ! ConfigChange
+  qos tas config-change
+
+  !----------------------------------------------------------------------------------------------------------------
+  ! Specification of QoS Qbu (frame-preemption) commands:
+  !----------------------------------------------------------------------------------------------------------------
+  qos frame-preemption [verify-disable]
+  no qos frame-preemption
+
+  qos frame-preemption queue <queue:0~7>
+  no qos frame-preemption queue <0~7>
+
+line
+  !!
+

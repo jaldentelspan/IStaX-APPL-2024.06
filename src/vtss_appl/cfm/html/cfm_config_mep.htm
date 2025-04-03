@@ -1,0 +1,336 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>CFM Mep Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript" src="lib/json.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_cfm_config_mep.htm";
+
+// Global variables
+var myDynamicTable, myCapabilities, myPortInfo, myMaInfo;
+
+var oTPort = Array(), oVPort = Array();
+var oTMa = Array(), oVMa = Array();
+var oTMd = Array(), oVMd = Array();
+var oTMda = Array();
+var oTDirection   = Array("Up", "Down");
+var oVDirection   = Array("up", "down");
+
+var oTPcp = genArrayStr(0, 7);
+var oVPcp = genArrayInt(0, 7);
+var oTAlarmLevel = genArrayStr(1, 6);
+var oVAlarmLevel = genArrayInt(1, 6);
+
+function updateMdKeyField()
+{
+    var new_key_prefix = myDynamicTable.getRowPrefixs("newrowKeyPrefix");
+    var i, new_key_fld;
+    var mepCntMax = myCapabilities.MepCntPortMax + myCapabilities.MepCntServiceMax;
+
+    // The new row key index start from 1
+    for (i = 1; i <= mepCntMax; i++) {
+        // First we look for new mep fields
+        new_key_fld = $(new_key_prefix + i + "_mep");
+        if (!new_key_fld) {
+            continue;
+        }
+        // Then we take reference to the corresponding ma key value
+        new_key_common_fld = $(new_key_prefix + i + "_ma");
+        // index corresponds to the user selection of the Service drop down selection
+        var index = new_key_common_fld.options.selectedIndex;
+
+        // then we take reference to the md field (which can't be configured on the web page)
+        new_key_md_fld = $(new_key_prefix + i + "_md");
+        // and assign value corresponfing to the index of Service drop down selection
+        new_key_md_fld.value = oTMd[index];
+    }
+
+    return true;
+}
+
+function checkForm()
+{
+    // update Md Key Field values
+    if (!updateMdKeyField()) {
+        return false;
+    }
+    return true;
+}
+
+function geRowDefaultValue()
+{
+    var def_val = {"Direction":"down","IfIndex":"Gi 1/1","Vid":1,"Pcp":0,"Smac":"00:00:00:00:00:00","AlarmLevel":2,"AlarmPresentMs":2500,"AlarmAbsentMs":10000,"CcmEnable":true,"AdminActive":false,"RmepId":0};
+    return def_val;
+}
+
+function geKeyDefaultValue()
+{
+    var key_def =  {"md":"domain","ma":"service","mep":1};
+    return key_def;
+}
+
+function addHeader(table_rows)
+{
+    var row;
+
+    // 1st row
+    row = {fields:[
+             {type:"disp_hdr", params:["Delete", 1, 2]},
+             {type:"disp_hdr", params:["Domain", 1, 2]},
+             {type:"disp_hdr", params:["Service", 1, 2]},
+             {type:"disp_hdr", params:["MEPID", 1, 2]},
+             {type:"disp_hdr", params:["Direction", 1, 2]},
+             {type:"disp_hdr", params:["Port", 1, 2]},
+             {type:"disp_hdr", params:["VLAN", 1, 2]},
+             {type:"disp_hdr", params:["PCP", 1, 2]},
+             {type:"disp_hdr", params:["SMAC", 1, 2]},
+             {type:"disp_hdr", params:["Alarm Control", 3]},
+             {type:"disp_hdr", params:["State Control", 2]},
+             {type:"disp_hdr", params:["Remote MEPID", 1, 2]}
+            ]
+          };
+    table_rows.push(row);
+
+    // 2nd row
+    row = {fields:[
+             {type:"disp_hdr", params:["Level"]},
+             {type:"disp_hdr", params:["Present"]},
+             {type:"disp_hdr", params:["Absent"]},
+             {type:"disp_hdr", params:["CCM"]},
+             {type:"disp_hdr", params:["Admin"]}
+            ]
+          };
+    table_rows.push(row);
+}
+
+function addRow(key, val, key_prefix)
+{
+    var use_defval = false;
+
+    if (!val) { // Use default value, it is used for new row
+        use_defval = true;
+        val = geRowDefaultValue();
+        new_idx = key;
+    }
+
+    var row_affix = (use_defval ? key_prefix : myDynamicTable.getRowPrefixs("rowKeyPrefix"))  + rowKey2Id(key);
+    var row = {
+        "key":key,
+        fields:[
+            {type:"chkbox",       params:[0, "c",  key_prefix + rowKey2Id(key)]},
+            {type:"text",         params:[key.md,  "cl"]},
+            {type:"text",         params:[key.ma,  "cl"]},
+            {type:"text",         params:[key.mep, "cr"]},
+            {type:"select",       params:[oTDirection, oVDirection, val.Direction, "c", "Direction_" + row_affix, null, null, !myCapabilities.HasUpMeps ]},
+            {type:"select",       params:[oTPort, oVPort, val.IfIndex, "cr", "IfIndex_" + row_affix]},
+            {type:"input",        params:[val.Vid, "cr", "Vid_" + row_affix, 4, 4],
+                                  validate:{func:isWithinRange, params:["Vid_" + row_affix, 0, configVlanIdMax, "Vid"]}},
+            {type:"select",       params:[oTPcp, oVPcp, val.Pcp, "cr", "Pcp_" + row_affix]},
+            {type:"input",        params:[val.Smac, "cr", "Smac_" + row_affix, 17, 17],
+                                  validate:{func:IsValidMacAddress, params:["Smac_" + row_affix]}},
+            {type:"select",       params:[oTAlarmLevel, oVAlarmLevel, val.AlarmLevel, "c", "AlarmLevel_" + row_affix]},
+            {type:"input",        params:[val.AlarmPresentMs, "cr", "AlarmPresentMs_" + row_affix, 4, 5],
+                                  validate:{func:isWithinRange, params:["AlarmPresentMs_" + row_affix, 2500, 10000, "AlarmPresentMs"]}},
+            {type:"input",        params:[val.AlarmAbsentMs, "cr", "AlarmAbsentMs_" + row_affix, 4, 5],
+                                  validate:{func:isWithinRange, params:["AlarmAbsentMs_" + row_affix, 2500, 10000, "AlarmAbsentMs"]}},
+            {type:"chkbox",       params:[val.CcmEnable, "cr", "CcmEnable_" + row_affix]},
+            {type:"chkbox",       params:[val.AdminActive, "cr", "AdminActive_" + row_affix]},
+            {type:"input",        params:[val.RmepId, "cr", "RmepId_" + row_affix, 4, 4 ],
+                                   validate:{func:isWithinRange, params:["RmepId_" + row_affix, 0, 8192, "RmepId", key]}}
+           ]
+    };
+
+    if (use_defval) { // Change field for new row
+        row.fields[1] =  {type:"input",  params:["Select Service", "cr" , key_prefix + new_idx + "_" + "md" , 13, 13, null, null, true] };
+        row.fields[2] =  {type:"select", params:[oTMda, oVMa, 0, "cr" , key_prefix + new_idx + "_" + "ma"]};
+        row.fields[3] =  {type:"input",  params:[1,            "cr",  key_prefix + new_idx + "_" + "mep", 4, 4]};
+        console.log(key_prefix + new_idx + "_" + "mep");
+        row.key = geKeyDefaultValue();
+    }
+
+    return row;
+}
+
+function addRows(recv_json)
+{
+    var row, empty_colspan = 15;
+    var table_rows = new Array();
+
+    // Add table header
+    addHeader(table_rows);
+
+    // Add single row
+    Object.each(recv_json, function(record) {
+        table_rows.push(addRow(record.key, record.val, myDynamicTable.getRowPrefixs("rowDelPrefix")));
+    });
+
+    // Empty row
+    if (!recv_json.length) {
+        table_rows.push({fields:[{type:"empty_row", params:[empty_colspan]}]});
+    }
+
+    return table_rows;
+}
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("Get dynamic data failed.");
+        return;
+    }
+
+    myDynamicTable.saveRecvJson(name, recv_json);
+
+    // Add table rows
+    var table_rows = addRows(recv_json);
+    myDynamicTable.addRows(table_rows);
+
+    // Update this dynamic table.
+    myDynamicTable.update();
+
+    // Add header control bar
+    var cBar = new HeaderControlBar([
+                                    { text: "*", className: "c" },
+                                    "", "", "",
+                                    { name: "Direction_", options: [oTDirection, oVDirection] },
+                                    { name: "IfIndex_", options: [oTPort, oVPort] },
+                                    "",
+                                    { name: "Pcp_", options: [oTPcp, oVPcp] },
+                                    "",
+                                    { name: "AlarmLevel_", options: [oTAlarmLevel, oVAlarmLevel]},
+                                    "", "",
+                                    { name: "CcmEnable_" },
+                                    { name: "AdminActive_" },
+                                    ""]);
+
+    cBar.construct($("myTableContentTbody"), 'config_odd');
+
+    // Add buttons
+    myDynamicTable.addNewRowButton(addRow, myCapabilities.MepCntPortMax + myCapabilities.MepCntServiceMax);
+    myDynamicTable.addSubmitButton(name, "cfm.config.mepr", requestUpdate);
+    myDynamicTable.addResetButton();
+}
+
+function requestUpdate(recv_json, name)
+{
+    myDynamicTable.restore(); // Reset myDynamicTable to default
+
+    if (myCapabilities && myPortInfo && myMaInfo) {
+        requestJsonDoc("cfm.config.mepr.get", null, processUpdate, "config");
+    }
+}
+
+function requestUpdateGlobals(recv_json, name)
+{
+    console.log("requestUpdateGlobals name=", name , "endofname");
+    if (name == "capabilities") {
+        if (recv_json) {
+            // Clone a new one and save to global variable
+            myCapabilities = myDynamicTable.cloneRecvJson(recv_json);
+        } else {
+            alert("Get dynamic data failed.");
+            return;
+        }
+    } else if (name == "portInfo") {
+        if (recv_json && recv_json.length) {
+            // Clone a new one and save to global variable
+            myPortInfo = true;
+            oTPort.length = 0;
+            oVPort.length = 0;
+            Object.each(recv_json, function(record, idx) {
+                oTPort.push(record.val);
+                oVPort.push(record.key);
+            });
+        } else {
+            alert("Get port info failed.");
+            return;
+        }
+    } else if (name == "configMa") {
+        if (recv_json) {
+            myMaInfo = true; // set to true for the case where there are no MA (Serices)
+            if (recv_json.length) {
+                // Clone a new one and save to global variable
+                oTMa.length = 0;
+                oVMa.length = 0;
+                oTMd.length = 0;
+                oVMd.length = 0;
+                oTMda.length = 0;
+                Object.each(recv_json, function(record, idx) {
+                    oTMa.push(record.key.ma);
+                    oVMa.push(record.key.ma);
+                    oTMd.push(record.key.md);
+                    oVMd.push(record.key.md);
+                    oTMda.push(String(record.key.md) + ":" + String(record.key.ma));
+                });
+            }
+        }
+    }
+    if (myCapabilities && myPortInfo && myMaInfo) {
+        requestJsonDoc("cfm.config.mepr.get", null, processUpdate, "config");
+    }
+}
+
+
+window.addEvent('domready', function() {
+    myDynamicTable = new DynamicTable("myTableContent", "config", "plusNewRow", {func:checkForm, params:[]});
+
+    // This table requires three JSON data(portInfo/capabilities/config).
+    // To ensure the completed data, we request the configured data after the
+    // capabilities data is received and it is requrested only one time.
+    requestJsonDoc("cfm.capabilities.get", null, requestUpdateGlobals, "capabilities");
+    requestJsonDoc("cfm.config.ma.get", null, requestUpdateGlobals, "configMa");
+    requestJsonDoc("port.namemap.get", null, requestUpdateGlobals, "portInfo");
+
+});
+ </script>
+</head>
+
+<body class="content">
+<h1>CFM Mep Configuration</h1>
+
+<div class="refreshbar">
+    <input type="button" value="Refresh" onClick='requestUpdate(); this.blur();'>
+    <img id="update" alt="" src="images/updating.gif">
+</div>
+
+<div id="myTableContent"></div>
+
+</body>
+</html>
+

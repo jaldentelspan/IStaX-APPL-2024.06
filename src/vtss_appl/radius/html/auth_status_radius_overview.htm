@@ -1,0 +1,216 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ 
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+ 
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>RADIUS Server Overview</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" language="JavaScript">
+
+// Refresh timer
+var timerID;
+
+// Help page magic
+var help_page = "/help/help_auth_status_radius_overview.htm";
+
+function radius_server(attrs)
+{
+    var ServerStateTyp  = ["Disabled", "Not Ready", "Ready", "Dead"];
+
+    this.ip;        // PARM_IDX_IP_ADDR
+    this.port;      // PARM_IDX_UDP_PORT
+    this.state;     // PARM_IDX_SERVER_STATE
+    this.dead_time; // PARM_IDX_DEAD_TIME_LEFT_SECS
+
+    arr            = attrs.split("/");
+    this.host      = unescape(arr[0]);
+    this.port      = parseInt(arr[1], 10);
+    this.state     = parseInt(arr[2], 10);
+    this.dead_time = parseInt(arr[3], 10);
+
+    this.get_host  = function() {
+                         return (this.state !== 0) ? this.host : "";
+                     };
+
+    
+    this.get_port  = function() {
+                         return (this.state !== 0) ? this.port : "";
+                     };
+
+    this.get_stat  = function() {
+                         var msg = ServerStateTyp[this.state];
+                         if (this.state == 3) {
+                             msg = msg + " (" + this.dead_time + " seconds left)";
+                         }
+                         return msg;
+                     };
+}
+
+// Add a radius server to table
+function merge_and_add_radius_server_row(idx, frag, s1, s2)
+{
+    var tr = CreateStyledElement("tr", idx % 2 ? "display_odd" : "display_even");
+
+    // Server number with href.
+    var td   = CreateStyledElement("td", "cr");
+    var txt  = document.createTextNode(idx);
+    var link = document.createElement("a");
+
+    link.href = "auth_status_radius_details.htm?server=" + idx;
+    link.appendChild(txt);
+    td.  appendChild(link);
+    tr.  appendChild(td);
+
+    addTextCell(tr, s1.get_host(), "cl");
+    addTextCell(tr, s1.get_port(), "cl");
+    addTextCell(tr, s1.get_stat(), "cl");
+    if (s2) {
+        addTextCell(tr, s2.get_port(), "cl");
+        addTextCell(tr, s2.get_stat(), "cl");
+    }
+    
+    frag.appendChild(tr); // Add row to fragment
+}
+
+// Process Update for new table
+function processUpdate(req, ref)
+{
+    // Format: <auth_servers>|<acct_servers>
+    // Format <auth_servers> and <acct_servers>: <server_state_1>#<server_state_2>#...#<server_state_N>
+    var values = req.responseText.split("|");
+    var frag, s, tbody, server_auth, server_acct, autorefresh;
+
+    document.getElementById("update").style.visibility = "hidden";
+
+    if (redirectOnError(req)) {
+        return;
+    }
+
+    if (values.length === 0) {
+        return;
+    }
+
+    server_auth = values[0].split("#");
+    if (values.length > 1) {
+        server_acct = values[1].split("#");
+        if (server_auth.length !== server_acct.length) {
+            alert("Server count not match (" + server_auth.length + " != " + server_acct.length);
+            return;
+        }
+    } else {
+        server_acct = [];
+    }
+
+    // RADIUS Server Status Overview
+    frag = document.createDocumentFragment();
+
+    for (s = 0; s < server_auth.length; s++) {
+        merge_and_add_radius_server_row(
+            s + 1,
+            frag,
+            new radius_server(server_auth[s]),
+            (!server_acct[s]) ? null : new radius_server(server_acct[s]));
+    }
+
+    tbody = document.getElementById('server_state_table');
+    clearChildNodes(tbody);
+    tbody.appendChild(frag);
+
+    // Update the timer
+    autorefresh = document.getElementById('autorefresh');
+    if (autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+function requestUpdate() {
+    document.getElementById("update").style.visibility = "visible";
+    loadXMLDoc("/stat/auth_status_radius_overview", processUpdate, null);
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        requestUpdate();
+    }
+}
+
+ </script>
+</head>
+
+  <body class="content" onload="requestUpdate();">
+
+    <h1>RADIUS Server Status Overview</h1>
+
+    <div class="refreshbar">
+      <form action="#">
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+        <input type="button" value="Refresh" onClick="requestUpdate(); this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+     </form>
+    </div>
+
+    <table summary="RADIUS Server Status Overview" class="display">
+      <thead>
+        <tr class="display_header">
+          <th>#</th>
+          <th style="width: 8em;">IP Address</th>
+          <th style="width: 10em;">Authentication Port</th>
+          <th style="width: 12em;">Authentication Status</th>
+          <th style="width: 10em;" class="has_dot1x_acct">Accounting Port</th>
+          <th style="width: 12em;" class="has_dot1x_acct">Accounting Status</th>
+        </tr>
+      </thead>
+      <tbody id="server_state_table">
+    </table>
+
+  </body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

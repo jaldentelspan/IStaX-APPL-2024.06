@@ -1,0 +1,1629 @@
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_MAC)
+
+INCLUDE_BEGIN
+#include "mac_api.h"
+#include "mgmt_api.h"
+#include "msg_api.h"
+#include "icli_api.h"
+#include "icli_porting_util.h"
+#include "misc_api.h"
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+/* Define module name of memory allocation */
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_MAC
+
+/* Check if the uport/usid is a member of the portlist */
+static BOOL icli_chk_port_is_included(vtss_usid_t usid, mesa_port_no_t uport, icli_stack_port_range_t *plist, BOOL all_ports)
+{
+    u32             rdx;
+    u16             bgn, cnt;
+
+    if (all_ports) {
+        return TRUE;
+    }
+    if (!plist) {
+        return FALSE;
+    }
+    for (rdx = 0; rdx < plist->cnt; rdx++) {
+        if (usid != plist->switch_range[rdx].usid) {
+            continue;
+        }
+        cnt = plist->switch_range[rdx].port_cnt;
+        bgn = plist->switch_range[rdx].begin_uport;
+        if ((uport >= bgn) && (uport < bgn+cnt)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static i32 icli_mac_entry_print(u32 session_id, vtss_isid_t isid, mesa_mac_table_entry_t *mac_entry, BOOL first)
+{
+    char *buf = (char*)VTSS_MALLOC(ICLI_STR_MAX_LEN); /* Using dynamic memory to prevent stack size overflow */
+
+    if (buf == NULL) {
+        return ICLI_RC_OK;
+    }
+
+    if (first) {
+        ICLI_PRINTF("Type    VID  MAC Address       Ports\n");
+    }
+
+    ICLI_PRINTF("%s %-4d %s ",
+                mac_entry->locked ? "Static " : "Dynamic",
+                mac_entry->vid_mac.vid, icli_mac_txt(mac_entry->vid_mac.mac.addr, buf));
+
+    ICLI_PRINTF("%s%s", icli_port_list_info_txt(isid, mac_entry->destination, buf, FALSE),
+                mac_entry->copy_to_cpu ? " CPU" : (buf[0] == '\0') ? "None" : "");
+
+    VTSS_FREE(buf);
+    return icli_session_printf(session_id, "\n");
+}
+
+static i32 icli_mac_entry_print_stack(u32 session_id, mac_mgmt_table_stack_t *mac_entry, BOOL first)
+{
+    char buf[MGMT_PORT_BUF_SIZE];
+    u32 i;
+    vtss_isid_t isid;
+
+    if (first) {
+        ICLI_PRINTF("ISID   Type    VID  MAC Address        Ports\n");
+    }
+
+    for (isid = VTSS_ISID_START; isid < VTSS_ISID_END; isid++) {
+        for (i = VTSS_PORT_NO_START; i < fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT); i++) {
+            if (mac_entry->destination[isid][i] || mac_entry->copy_to_cpu) {
+                goto search_end;
+            }
+        }
+    }
+search_end:
+    if (isid == VTSS_ISID_END) {
+        isid = VTSS_ISID_START;
+    }
+
+    ICLI_PRINTF("%-6d %s %-4d %s  ", isid,
+            mac_entry->locked ? "Static " : "Dynamic",
+            mac_entry->vid_mac.vid, misc_mac_txt(mac_entry->vid_mac.mac.addr, buf));
+
+    return icli_session_printf(session_id, "%s%s\n",
+            icli_port_list_info_txt(isid, mac_entry->destination[isid], buf, FALSE),
+            mac_entry->copy_to_cpu ? ",CPU" : "");
+
+}
+
+static BOOL icli_cmd_mac_stats(u32 session_id, icli_stack_port_range_t *plist)
+{
+    port_iter_t           pit;
+    switch_iter_t         sit;
+    BOOL                  stack;
+    BOOL                  found_port = 0, first;
+    mac_table_stats_t     stats;
+    char str_buf[ICLI_PORTING_STR_BUF_SIZE];
+
+    // Get existing switches in USID order
+    (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+    stack = sit.remaining > 1;
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        first = 1;
+        if (mac_mgmt_table_stats_get(sit.isid, &stats) != VTSS_RC_OK) {
+                ICLI_PRINTF("Could not get mac address-table count\n");
+                return 1;      
+        }
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, plist)) {
+            if (first) {
+                if (stack) {
+                    ICLI_PRINTF("Switch:%u\n", sit.usid);
+                }
+                ICLI_PRINTF("Port Dynamic addresses\n");
+                first = 0;
+            }
+            (void) icli_port_info_txt(sit.usid, pit.uport, str_buf);
+            ICLI_PRINTF("%-30s    %lu\n",str_buf, stats.learned[pit.iport]);
+            found_port = 1;
+        }
+        if (found_port) {
+            ICLI_PRINTF("\nTotal learned dynamic addresses for the switch: %lu\n", stats.learned_total);
+            ICLI_PRINTF("Total static addresses in table: %lu\n", stats.static_total);
+        } 
+        found_port = 0;
+    }
+    return 1;
+}
+
+static BOOL icli_cmd_mac_vlan_stats(u32 session_id, mesa_vid_t vlan)
+{
+    switch_iter_t         sit;
+    BOOL                  stack;
+    BOOL                  first;
+    mac_table_stats_t     stats;
+
+    // Get existing switches in USID order
+    (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+    stack = sit.remaining > 1;
+    while (icli_switch_iter_getnext(&sit, NULL)) {
+        first = 1;
+        if (mac_mgmt_table_vlan_stats_get(sit.isid, vlan, &stats) != VTSS_RC_OK) {
+            continue;      
+        }
+        if (first) {
+            if (stack) {
+                ICLI_PRINTF("Switch:%u\n", sit.usid);
+            }
+            first = 0;
+        }
+        if (stats.learned_total + stats.static_total > 0) {
+            ICLI_PRINTF("Mac entry count for Vlan %u:\n", vlan);
+            ICLI_PRINTF("----------------------------\n");
+            ICLI_PRINTF("Dynamic address count  : %lu\n", stats.learned_total);
+            ICLI_PRINTF("Static address count   : %lu\n", stats.static_total);
+            ICLI_PRINTF("Total entry count      : %lu\n", stats.learned_total + stats.static_total);
+        }
+    }
+    return 1;
+}
+
+static BOOL icli_cmd_mac_vlan_learn(u32 session_id, mesa_vid_t vid, BOOL enable, BOOL show)
+{
+    vtss_appl_mac_vid_learn_mode_t mode;
+    mesa_rc                        rc;
+    
+    if (show) {
+        if (mac_mgmt_vlan_learn_mode_get(vid, &mode) == VTSS_RC_OK) {
+            ICLI_PRINTF("Vlan %u learning is %s\n",vid, mode.learning ? "enabled" : "disabled");
+        }
+    } else {
+        mode.learning = enable;
+        if ((rc = mac_mgmt_vlan_learn_mode_set(vid, &mode)) != VTSS_RC_OK) {
+            ICLI_PRINTF("Error: %s\n", mac_error_txt(rc));
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static BOOL icli_cmd_mac_learn(u32 session_id, icli_stack_port_range_t *plist, BOOL secure, BOOL enable, BOOL show)
+{
+    mesa_learn_mode_t     mode;
+    BOOL                  chg_allowed, first, stack;
+    port_iter_t           pit;
+    switch_iter_t         sit;
+    mesa_rc               rc;
+   
+    // Get or show MAC learning configuration for all configurable switches
+    (void)icli_switch_iter_init(&sit);
+    stack = sit.remaining > 1;
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        if (show && stack) {
+            ICLI_PRINTF("Switch:%u\n", sit.usid);
+        }
+        first = 1;
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, plist)) {
+            (void)mac_mgmt_learn_mode_get(sit.isid, pit.iport, &mode, &chg_allowed);
+            if (show) {
+                if (first) {
+                    ICLI_PRINTF("Port                Learning\n");
+                    first = 0;
+                }
+                icli_print_port_info_txt(session_id, sit.usid, pit.uport);
+                ICLI_PRINTF("%-2s     %s\n",
+                            mode.automatic ? "Auto" : mode.discard ? "Secure" : "Disabled",
+                            chg_allowed    ? "" : " (R/O)");
+            } else {            
+                if (!secure) {
+                    mode.automatic = enable;  
+                    mode.discard = 0;
+                } else if (secure) {
+                    mode.discard = enable;
+                    mode.automatic = !enable;  
+                } else {
+                    return 0; // Must choose 
+                }
+                if ((rc = mac_mgmt_learn_mode_set(sit.isid, pit.iport, &mode)) == MAC_ERROR_LEARN_FORCE_SECURE) {
+                    ICLI_PRINTF("The learn mode can not be changed on port %u while the learn mode is forced to 'secure' (probably by Port Security module)\n", pit.uport);
+                } else if (rc != VTSS_RC_OK) {
+                    return 0;
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+static BOOL icli_cmd_mac_add(u32 session_id, mesa_mac_t *mac, u32 vlan, icli_stack_port_range_t *plist, BOOL has_interface, BOOL no)
+{
+    port_iter_t           pit;
+    switch_iter_t         sit;
+    int                   i=0;
+    mac_mgmt_addr_entry_t mac_entry;
+    mac_mgmt_addr_entry_t return_mac;
+    mesa_port_list_t      tmp;
+    BOOL                  found_port, found_and_delete = 0;
+    mesa_rc               rc;
+
+    vtss_clear(mac_entry);
+    mac_entry.vid_mac.vid = vlan;
+    for (i = 0; i < 6; i++) {
+        mac_entry.vid_mac.mac.addr[i] = mac->addr[i];
+    }
+    
+    (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_ISID);
+    while (switch_iter_getnext(&sit)) {
+        if (mac_mgmt_static_get_next(sit.isid, &mac_entry.vid_mac, &return_mac, 0, 0) == VTSS_RC_OK) {
+            if (mac_mgmt_table_del(sit.isid, &mac_entry.vid_mac, 0) != VTSS_RC_OK) {
+                ICLI_PRINTF("Address exists but could not delete it\n");
+                return 0;
+            }
+            found_and_delete = 1;
+        }
+    }
+    
+    if (no) {
+        if (!found_and_delete) {
+          ICLI_PRINTF("Address not found\n");
+          return 0;
+        }
+        memcpy(mac_entry.destination, return_mac.destination, sizeof(BOOL) * fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT));
+    }
+    // Allow add of MAC address on all configurable switches
+    (void)icli_switch_iter_init(&sit);
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        found_port = 0;
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, plist)) {
+          found_port = mac_entry.destination[pit.iport] = (has_interface == 0 || no) ? 0 : 1;
+        }
+        if (!has_interface) {
+          found_port = 1;
+        }
+        if (no) {
+            if (memcmp(mac_entry.destination, tmp, sizeof(BOOL) * fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT)) == 0) {
+                return 1; 
+            } else {
+                found_port = 1;
+                if (memcmp(mac_entry.destination, return_mac.destination, sizeof(BOOL) * fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT)) == 0) {
+                    ICLI_PRINTF("Could not remove destination(s)\n");
+                } 
+            }
+        }
+        if (found_port) {
+            if ((rc = mac_mgmt_table_add(sit.isid, &mac_entry)) != VTSS_RC_OK) {
+                ICLI_PRINTF("Error: %s\n", mac_error_txt(rc));
+                return 0;
+            }
+            memset(mac_entry.destination,0,sizeof(BOOL) * fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT));
+        } else {
+            ICLI_PRINTF("(sit.isid:%d)Invalid destination port\n", sit.isid);
+        }
+    }
+    return 1;
+}
+
+static BOOL icli_cmd_mac_age(u32 session_id, u32 age_time, BOOL show)    
+{
+    mac_age_conf_t conf;
+
+    (void)mac_mgmt_age_time_get(&conf);
+    if (show) {
+        ICLI_PRINTF("MAC Age Time: %u\n", conf.mac_age_time);
+    } else {
+        conf.mac_age_time=age_time;
+        if (mac_mgmt_age_time_set(&conf) != VTSS_RC_OK) {
+            ICLI_PRINTF("mac age time set operation failed\n");
+            return 0;
+        } 
+    }
+    return 1;
+}
+
+static BOOL icli_cmd_mac_dump(u32 session_id, BOOL conf, BOOL static_mac, mesa_mac_t *mac, u32 *vlan, icli_stack_port_range_t *plist)    
+{
+    mac_mgmt_addr_entry_t  mac_entry;
+    mesa_mac_table_entry_t table_entry;
+    mesa_vid_mac_t         vid_mac, vid_mac_org;
+    BOOL                   vol, first = TRUE, found_port, vol_header, stack, next;
+    switch_iter_t          sit;
+    port_iter_t            pit;
+    u32                    i;
+
+    // If showing the statically configured MAC addresses, loop over configurable switches.
+    // Otherwise loop over existing switches.
+    if (conf) {
+        (void)icli_switch_iter_init(&sit);
+    } else {
+        (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID);
+    }
+    memset(&vid_mac_org, 0, sizeof(vid_mac_org));
+    stack = sit.remaining > 1;
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        memset(&vid_mac, 0, sizeof(vid_mac));
+        vid_mac.vid = (vlan == NULL) ? 1 : *vlan;
+        for (i = 0; i < 6; i++) {
+            vid_mac.mac.addr[i] = (mac == NULL) ? 0 : mac->addr[i];
+        }
+        first = 1;
+        if (conf) {
+            for(vol = 0; vol <= 1; vol++) { // The search criteria is addresses added via MAC application module
+                memset(&vid_mac, 0, sizeof(vid_mac));
+                vtss_clear(table_entry);
+                vol_header = 1;
+                while (mac_mgmt_static_get_next(sit.isid, &vid_mac, &mac_entry, 1, vol) == VTSS_RC_OK) {
+                    vid_mac = mac_entry.vid_mac;
+                    if (stack && first) {
+                        ICLI_PRINTF("Switch:%u\n",sit.usid);
+                    }
+                    if (vol_header) {
+                        ICLI_PRINTF("%s",vol?"\nVolatile static:\n":"\nNon-volatile static:\n");
+                        vol_header = 0;
+                    }
+                   table_entry.vid_mac = mac_entry.vid_mac;
+                   for (i = VTSS_PORT_NO_START; i < fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT); i++) {
+                     table_entry.destination[i] = mac_entry.destination[i];
+                   }
+                   table_entry.copy_to_cpu = mac_entry.copy_to_cpu;
+                   table_entry.locked = 1;
+
+                   if (icli_mac_entry_print(session_id, sit.isid, &table_entry, first) != ICLI_RC_OK) {
+                       break;
+                   }
+                   first = 0;
+                }
+            }
+        } else {
+            if (mac == NULL) {
+                next = 1;
+            } else if (mac != NULL && vlan == NULL) {
+                vid_mac_org = vid_mac;
+                if (mac_mgmt_table_get_next(sit.isid, &vid_mac, &table_entry, 0) == VTSS_RC_OK) {
+                    next = 0;
+                } else {
+                    next = 1;
+                }
+            } else {
+                next = 0;
+            }
+                     
+            while (mac_mgmt_table_get_next(sit.isid, &vid_mac, &table_entry, next) == VTSS_RC_OK) {
+                vid_mac = table_entry.vid_mac;
+                if (static_mac) { // The criteria is static Mac based search
+                    if (!table_entry.locked) {
+                        continue;
+                    }
+                }
+                if (mac != NULL && vlan == NULL) { // The criteria is a Mac based search across vlans
+                    next = 1;
+                    if (memcmp(table_entry.vid_mac.mac.addr, vid_mac_org.mac.addr, 6) == 0) {
+                        memset(&vid_mac, 0, sizeof(vid_mac));
+                        vid_mac.vid = table_entry.vid_mac.vid + 1; // Found but keep searhing in the next vlan
+                    } else {
+                        vid_mac = table_entry.vid_mac; 
+                        continue;
+                    }
+                }
+                if (plist != NULL) { // The criteria is Port based search
+                    found_port = 0;
+                    (void) port_iter_init(&pit, NULL, sit.isid, PORT_ITER_SORT_ORDER_IPORT, PORT_ITER_FLAGS_NORMAL);
+                    while (port_iter_getnext(&pit)) {
+                        if (icli_chk_port_is_included(sit.usid, pit.uport, plist, 0)) {
+                            if (table_entry.destination[pit.iport]) {
+                                found_port = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (!found_port) {
+                        continue;
+                    }
+                }
+                if (vlan != NULL) { // The criteria is VLAN based search
+                    if (table_entry.vid_mac.vid != *vlan) {
+                        break;
+                    }
+                }    
+                if (stack && first) {
+                    ICLI_PRINTF("Switch:%u\n",sit.usid);
+                }        
+                if (icli_mac_entry_print(session_id, sit.isid, &table_entry, first) != ICLI_RC_OK) {
+                    break;
+                }
+                if (next == 0) {
+                    break;
+                }
+                first = 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static BOOL icli_debug_cmd_mac_add(u32 session_id, mesa_mac_t *mac, u32 vlan, 
+                                   icli_stack_port_range_t *plist, BOOL has_cpu, BOOL has_interface, BOOL no)
+{
+    port_iter_t           pit;
+    switch_iter_t         sit;
+    int                   i=0;
+    mac_mgmt_addr_entry_t mac_entry;
+    mesa_rc               rc;
+    mesa_vid_mac_t        vid_mac;
+    
+    if (no) {
+        vid_mac.vid = MAC_ALL_VLANS;
+        for (i = 0; i < 6; i++) {
+            vid_mac.mac.addr[i] = mac->addr[i];
+        }
+    } else {
+        vtss_clear(mac_entry);
+        mac_entry.volatil = 1;
+        mac_entry.vid_mac.vid = vlan;
+        for (i = 0; i < 6; i++) {
+            mac_entry.vid_mac.mac.addr[i] = mac->addr[i];
+        }
+    }
+
+    (void)icli_switch_iter_init(&sit);
+
+   while (icli_switch_iter_getnext(&sit, plist)) {
+       if (no) {
+           if ( (rc = mac_mgmt_table_del(sit.isid, &vid_mac, 1)) != VTSS_RC_OK) {
+               ICLI_PRINTF("Error: %s\n", mac_error_txt(rc));
+               return 0;
+           }
+       } else {
+           if (has_cpu) {
+               mac_entry.copy_to_cpu =  has_cpu;
+           } 
+           if (has_interface) {
+               (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+               while (icli_port_iter_getnext(&pit, plist)) {
+                   mac_entry.destination[pit.iport] = no ? 0 : 1;
+               }
+           }
+           if (!has_cpu && !has_interface) {  //Default behaviour ALL ports and CPU
+               (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+               while (icli_port_iter_getnext(&pit, plist)) {
+                   mac_entry.destination[pit.iport] = no ? 0 : 1;
+               }
+               mac_entry.copy_to_cpu =  TRUE;
+           }
+           
+           if ((rc = mac_mgmt_table_add(sit.isid, &mac_entry)) != VTSS_RC_OK) {
+               ICLI_PRINTF("Error: %s\n", mac_error_txt(rc));
+               return 0;
+           }
+       }
+       memset(mac_entry.destination, 0, sizeof(BOOL) * fast_cap(MEBA_CAP_BOARD_PORT_MAP_COUNT));
+   }
+   return 1;
+}
+
+static BOOL debug_icli_cmd_mac_dump(u32 session_id, uint max_count)
+{
+    ulong                  count, max, static_count = 0, dynamic_count = 0, first = 1;
+    mesa_vid_mac_t         vid_mac;
+    mesa_mac_table_entry_t mac_entry;
+    mesa_rc                rc;
+    
+    vid_mac.vid = 1;
+    for (count = 0; count < 6; count++) {
+        vid_mac.mac.addr[count] = 0 ;
+    }
+    max = max_count;
+    if (max == 0) {
+        max = 0xFFFFFFFF;
+    }
+    for (count = 0; count < max; count++) {
+        rc = mesa_mac_table_get_next(NULL, &vid_mac, &mac_entry);
+        if (rc != VTSS_RC_OK) {
+            break;
+        }
+        if (icli_mac_entry_print(session_id, VTSS_ISID_START, &mac_entry, first) != ICLI_RC_OK) {
+            break;
+        }
+        first = 0;
+        vid_mac = mac_entry.vid_mac;
+        if (mac_entry.locked) {
+            static_count++;
+        } else {
+            dynamic_count++;
+        }
+    }
+    ICLI_PRINTF("\nDynamic Addresses: %lu\n", dynamic_count);
+    ICLI_PRINTF("Static Addresses : %lu\n", static_count); 
+    return VTSS_RC_OK;
+}
+
+static BOOL debug_icli_cmd_stack_mac_dump(u32 session_id)
+{
+    ulong                  i, max, first;
+    mesa_vid_mac_t         vid_mac;
+    mac_mgmt_table_stack_t stack_entry_next;
+    mac_mgmt_addr_type_t mac_type;
+
+    max = 0xFFFFFFFF;
+
+    memset(&vid_mac, 0, sizeof(vid_mac));
+    memset(&mac_type, 0, sizeof(mac_type));
+    first = 1;
+    for (i = 0; i < max; i++) {
+        if (mac_mgmt_stack_get_next(&vid_mac, &stack_entry_next, &mac_type, 1) != VTSS_RC_OK) {
+            return 0;
+        }
+        if (icli_mac_entry_print_stack(session_id, &stack_entry_next, first) != ICLI_RC_OK) {
+            break;
+        }
+        first = 0;
+        vid_mac = stack_entry_next.vid_mac;
+    }
+    return 1;
+}
+
+static vtss_isid_t get_local_isid (void)
+{
+    vtss_isid_t      isid;
+
+    for (isid = VTSS_ISID_START; isid < VTSS_ISID_END; isid++) {
+        if (!msg_switch_exists(isid)) {
+            continue;
+        }
+        if (msg_switch_is_local(isid)) {
+            break;
+        }
+    }
+    return isid;
+}
+
+static BOOL icli_debug_cmd_mac_eat(u32 session_id, mesa_mac_t *mac, icli_stack_port_range_t *plist, uint count, u32 *vlan, BOOL has_eat, BOOL has_vol_eat)
+{
+    uint                  a;
+    mac_mgmt_addr_entry_t mac_entry;
+    port_iter_t           pit;
+    switch_iter_t         sit;
+    int                   i;
+
+    vtss_clear(mac_entry);
+    mac_entry.vid_mac.vid = (*vlan == 0) ? 1 : *vlan;
+
+    if (has_eat) {
+        (void)icli_switch_iter_init(&sit);
+        while (icli_switch_iter_getnext(&sit, plist)) {
+           (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+            while (icli_port_iter_getnext(&pit, plist)) {
+                mac_entry.destination[pit.iport] =  1;
+            }
+            if (sit.isid == VTSS_ISID_END) {
+                continue;
+            }
+            for (i = 0; i < 6; i++) {
+                mac_entry.vid_mac.mac.addr[i] = mac->addr[i];
+            }
+            for (a = 1; a <= count; a++) {
+                if (mac_mgmt_table_add(sit.isid, &mac_entry) != VTSS_RC_OK) {
+                    ICLI_PRINTF("mac table add operation failed\n");
+                    return 0;
+                }
+                for (i = 5; i >= 0; i--) {
+                    if (++mac_entry.vid_mac.mac.addr[i] != 0) {
+                        break;
+                    }
+                }
+            }
+        }
+    } else if (has_vol_eat) {
+        mac_entry.volatil = 1;
+        (void)icli_port_iter_init(&pit, get_local_isid(), PORT_ITER_FLAGS_NORMAL);
+        while (icli_port_iter_getnext(&pit, plist)) {
+            mac_entry.destination[pit.iport] =  1;
+        }
+        // Only set on the primary switch - independent of what has been selected with /stack sel
+        for (i = 0; i < 6; i++) {
+            mac_entry.vid_mac.mac.addr[i] = mac->addr[i];
+        }
+        for (a = 1; a <= count; a++) {
+            if (mac_mgmt_table_add(VTSS_ISID_LOCAL, &mac_entry) != VTSS_RC_OK) {
+                ICLI_PRINTF("mac table add operation failed\n");
+                return 0;
+            }
+            for (i = 5; i >= 0; i--) {
+                if (++mac_entry.vid_mac.mac.addr[i] != 0) {
+                    break;
+                } 
+            }
+        }
+    }
+    return 1;
+}
+
+static BOOL icli_debug_cmd_mac_del(u32 session_id, mesa_mac_t *mac, BOOL has_vlan, uint cnt, u32 *vlan) 
+{
+    vtss_isid_t           isid;
+    int                   i;
+    mesa_vid_mac_t        vid_mac;
+    uint                  a;
+    switch_iter_t         sit;
+    
+    if (has_vlan) {
+        vid_mac.vid = *vlan;
+    } else {
+        vid_mac.vid = 1;
+    }
+    for (i = 0; i < 6; i++) {
+        vid_mac.mac.addr[i] = mac->addr[i];
+    }
+
+    (void)icli_switch_iter_init(&sit);
+    while (icli_switch_iter_getnext(&sit, NULL)) {
+        if ((isid = sit.isid) != VTSS_ISID_END) {
+            for (a = 1; a <= cnt; a++) {
+                if (mac_mgmt_table_del(isid, &vid_mac, 0) != VTSS_RC_OK) {
+                    ICLI_PRINTF("mac table del operation failed\n");
+                    return 0;
+                }
+
+                for (i = 5; i >= 0; i--) {
+                    if (++vid_mac.mac.addr[i] != 0) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = mac address-table learning [secure]
+
+DOC_CMD_DESC    = Enable learning on port
+DOC_CMD_DEFAULT = Learning is enabled
+DOC_CMD_USAGE   = mac address-table learning
+DOC_CMD_EXAMPLE =  
+
+NO_FORM_DOC_CMD_DESC    = Disable learning on port
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = no mac address-table learning
+NO_FORM_DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+! 1: mac
+! 2: address-table
+! 3: learning
+! 4: secure
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_secure
+
+HELP = MAC keyword
+HELP = MAC table configuration
+HELP = Port learning mode  
+HELP = Port Secure mode
+
+BYWORD = 
+BYWORD = 
+BYWORD = Enable mac address learning 
+BYWORD = Enable mac address Secure mode
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_mac_learn(session_id, plist, has_secure, 1, 0)) {
+        ICLI_PRINTF("Could not set learn mode\n");    
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (has_secure) { /* quiet lint */ }
+    if (!icli_cmd_mac_learn(session_id, plist, 0, 0, 0)) {
+        ICLI_PRINTF("Could not set learn mode\n");    
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = show mac address-table [ conf | static | aging-time | { { learning | count } [ interface <port_type_list> | vlan <vlan_id>] } | { address <mac_addr> [ vlan <vlan_id> ] } | vlan <vlan_id> | interface <port_type_list> ]
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: show
+! 2: mac
+! 3: address-table
+! 4: conf
+! 5: static
+! 6: aging-time
+! 7: learning
+! 8: count
+! 9: interface
+! 10: <port_type_list>
+! 11: vlan
+! 12: <vlan_id>
+! 13: address
+! 14: <mac_addr>
+! 15: vlan
+! 16: <vlan_id>
+! 17: vlan
+! 18: <vlan_id>
+! 19: interface
+! 20: <port_type_list>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_conf
+CMD_VAR = has_static
+CMD_VAR = has_aging_time
+CMD_VAR = has_learning
+CMD_VAR = has_count
+CMD_VAR = has_interface
+CMD_VAR = v_port_type_list
+CMD_VAR = has_vlan_2
+CMD_VAR = v_vlan_id_2
+CMD_VAR = has_address
+CMD_VAR = v_mac_addr
+CMD_VAR = has_vlan
+CMD_VAR = v_vlan_id
+CMD_VAR = has_vlan_1
+CMD_VAR = v_vlan_id_1
+CMD_VAR = has_interface_1
+CMD_VAR = v_port_type_list_1
+
+HELP =  ##ICLI_HELP_SHOW
+HELP = Mac Address Table information
+HELP = Mac Address Table
+HELP = User added static mac addresses
+HELP = All static mac addresses  
+HELP = Aging time
+HELP = Learn/disable/secure state
+HELP = Total number of mac addresses
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##ICLI_HELP_PORT_LIST
+HELP = VLAN lookup
+HELP = VLAN IDs 1-4095
+HELP = MAC address lookup
+HELP = 48 bit MAC address: xx:xx:xx:xx:xx:xx
+HELP = VLAN lookup
+HELP = VLAN IDs 1-4095
+HELP = Addresses in this VLAN
+HELP = VLAN IDs 1-4095
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##ICLI_HELP_PORT_LIST
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = <Conf : option>
+BYWORD = <Static : option>
+BYWORD = <AgingTime : option>
+BYWORD = <Learning : option>
+BYWORD = <Count : option>
+BYWORD = <Interface : option>
+BYWORD = 
+BYWORD = <Vlan : option>
+BYWORD = 
+BYWORD = <Address : option>
+BYWORD = 
+BYWORD = <Vlan : option>
+BYWORD = 
+BYWORD = <Vlan : option>
+BYWORD = 
+BYWORD = <Interface : option>
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_aging_time) {
+        if (!icli_cmd_mac_age(session_id, MAC_AGE_TIME_DEFAULT, 1)) {
+            ICLI_PRINTF("Could not show aging time\n");    
+            return ICLI_RC_ERROR;
+        }
+    } else if (has_conf) {
+        if (!icli_cmd_mac_dump(session_id, 1, 0, NULL, NULL, NULL)) {
+            ICLI_PRINTF("Could not show address\n");    
+            return ICLI_RC_ERROR;
+        }    
+    } else if (has_static) {
+        if (!icli_cmd_mac_dump(session_id, 0, 1, NULL, NULL, NULL)) {
+            ICLI_PRINTF("Could not show address\n");    
+            return ICLI_RC_ERROR;
+        }    
+    } else if (has_count && has_vlan_2) {
+        if (!icli_cmd_mac_vlan_stats(session_id, v_vlan_id_2)) {
+            ICLI_PRINTF("Could not show info\n");    
+            return ICLI_RC_ERROR;
+        }    
+    } else if (has_count) {
+        if (!has_interface) {
+            v_port_type_list = NULL;
+        }
+        if (!icli_cmd_mac_stats(session_id, v_port_type_list)) {
+            ICLI_PRINTF("Could not show info\n");    
+            return ICLI_RC_ERROR;
+        }    
+    } else if (has_learning && has_vlan_2) {
+      if (!icli_cmd_mac_vlan_learn(session_id, v_vlan_id_2, 1, 1)) {
+        ICLI_PRINTF("Could not show info\n");    
+      }          
+    } else if (has_learning) {
+      if (!icli_cmd_mac_learn(session_id, (has_interface ? v_port_type_list : NULL), 0, 0, 1)) {
+        ICLI_PRINTF("Could not show info\n");    
+        return ICLI_RC_ERROR;
+      }          
+    } else if (has_address) {
+        if (!icli_cmd_mac_dump(session_id, 0, 0, &v_mac_addr, (has_vlan ? &v_vlan_id : NULL), NULL)) {
+            ICLI_PRINTF("Could not show address\n");    
+            return ICLI_RC_ERROR;
+        }    
+    } else if (has_vlan_1) {
+        if (!icli_cmd_mac_dump(session_id, 0, 0, NULL, &v_vlan_id_1, NULL)) {
+            ICLI_PRINTF("Could not show address\n");    
+            return ICLI_RC_ERROR;
+        }    
+    } else if (has_interface_1) {
+        if (!icli_cmd_mac_dump(session_id, 0, 0, NULL, NULL, v_port_type_list_1)) {
+            ICLI_PRINTF("Could not show address\n");    
+            return ICLI_RC_ERROR;
+        }    
+    } else {
+        if (!icli_cmd_mac_dump(session_id, 0, 0, NULL, NULL, NULL)) {
+            ICLI_PRINTF("Could not show address\n");    
+            return ICLI_RC_ERROR;
+        }    
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug show mac address-table { [ max-count <uint> ] | [stack] }
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2: show
+! 3: mac
+! 4: address-table
+! 5: max-count
+! 6: <uint>
+! 7: stack
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = 
+CMD_VAR = v_uint
+CMD_VAR = has_stack
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##ICLI_HELP_SHOW 
+HELP = Mac Address Table information
+HELP = Mac Address Table
+HELP = Shows Maximum number of MAC addresses, default: Show all addresses
+HELP = Number of entries to Display
+HELP = Show MAC address table across stack
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = max-count : Option
+BYWORD =
+BYWORD =
+
+CODE_BEGIN
+    if (has_stack) {
+        if (debug_icli_cmd_stack_mac_dump(session_id) != VTSS_RC_OK) {
+            ICLI_PRINTF("debug mac dump operation failed\n");
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        if (debug_icli_cmd_mac_dump(session_id, v_uint) != VTSS_RC_OK) {
+            ICLI_PRINTF("debug mac dump operation failed\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = clear mac address-table
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: clear
+! 2: mac
+! 3: address-table
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+
+HELP = Clear command
+HELP = MAC Address Table
+HELP = Flush MAC Address table
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    if (mac_mgmt_table_flush() != VTSS_RC_OK) {
+        ICLI_PRINTF("mac clear operation failed\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = mac address-table static <mac_addr> vlan <vlan_id> [ interface <port_type_list> ]
+
+DOC_CMD_DESC    = Assign a static mac address to this port
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = mac address-table static 00:00:00:00:00:01 vlan 2 interface GigabitEthernet 2/1
+
+NO_FORM_DOC_CMD_DESC    = Remove  static mac address from this port
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE =  no mac address-table static 00:00:00:00:00:01 vlan 2 interface GigabitEthernet 2/1
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+! mac
+CMD_VAR = 
+RUNTIME = 
+HELP    = MAC table entries/configuration
+BYWORD  = 
+
+! address-table
+CMD_VAR = 
+RUNTIME = 
+HELP    = MAC table entries/configuration
+BYWORD  = 
+
+! static
+CMD_VAR = 
+RUNTIME = 
+HELP    = Static MAC address
+BYWORD  = 
+
+! <mac_addr>
+CMD_VAR = v_mac_addr
+RUNTIME = 
+HELP    = 48 bit MAC address: xx:xx:xx:xx:xx:xx
+BYWORD  = 
+
+! vlan
+CMD_VAR = 
+RUNTIME = 
+HELP    = VLAN keyword
+BYWORD  = 
+
+! <vlan_id>
+CMD_VAR = v_vlan_id
+RUNTIME = 
+HELP    = VLAN IDs 1-4095
+BYWORD  = 
+
+! interface
+CMD_VAR = has_interface
+RUNTIME = 
+HELP    = ##ICLI_HELP_INTERFACE
+BYWORD  = interface : Option
+
+! <port_type_list>
+CMD_VAR = v_port_type_list
+RUNTIME = 
+HELP    = ##ICLI_HELP_PORT_LIST
+BYWORD  = 
+
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_mac_add(session_id, &v_mac_addr, v_vlan_id, v_port_type_list, has_interface, 0)) {
+        ICLI_PRINTF("Could not add mac address\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    if (!icli_cmd_mac_add(session_id, &v_mac_addr, v_vlan_id, v_port_type_list, has_interface, 1)) {
+        ICLI_PRINTF("Could not remove mac address\n");
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = mac address-table aging-time <0,10-1000000>
+
+DOC_CMD_DESC    = Set switch aging time, 0 to disable.
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+NO_FORM_DOC_CMD_DESC    = 
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = 
+NO_FORM_DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: mac
+! 2: address-table
+! 3: aging-time
+! 4: <0,10-1000000>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = v_0_10_to_1000000
+
+HELP = Mac Address Table
+HELP = Mac Address Table
+HELP = Mac address aging time
+HELP = Aging time in seconds, 0 disables aging
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_mac_age(session_id, v_0_10_to_1000000, 0)) {
+        ICLI_PRINTF("Could not set age time:%u\n", v_0_10_to_1000000);
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+NO_FORM_CODE_BEGIN    
+    if (!icli_cmd_mac_age(session_id, MAC_AGE_TIME_DEFAULT, 0)) {
+        ICLI_PRINTF("Could not set age time to default (%u)\n", v_0_10_to_1000000);
+        return ICLI_RC_ERROR;
+    }
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = no mac address-table aging-time
+
+DOC_CMD_DESC    = Default aging time.
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+NO_FORM_DOC_CMD_DESC    = 
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = 
+NO_FORM_DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+RUNTIME = 
+
+! 1: no
+! 2: mac
+! 3: address-table
+! 4: aging-time
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR =
+
+HELP = 
+HELP = Mac Address Table
+HELP = Mac Address Table
+HELP = Mac address aging time
+
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    if (!icli_cmd_mac_age(session_id, MAC_AGE_TIME_DEFAULT, 0)) {
+        ICLI_PRINTF("Could not set age time to default\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = mac address-table learning vlan <vlan_list>
+
+DOC_CMD_DESC    = VLAN learning
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+NO_FORM_DOC_CMD_DESC    = 
+NO_FORM_DOC_CMD_DEFAULT = 
+NO_FORM_DOC_CMD_USAGE   = 
+NO_FORM_DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = 
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR = 
+
+! 1: mac
+! 2: address-table
+! 3: learning
+! 4: vlan
+! 5: <vlan_list>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = vlan_list
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+
+HELP = 
+HELP = Mac Address Table
+HELP = Mac Learning
+HELP = VLAN
+HELP = 
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    u32               idx;
+    mesa_vid_t        vid;
+    for (idx = 0; idx < vlan_list->cnt; idx++) {
+        for (vid = vlan_list->range[idx].min; vid <= vlan_list->range[idx].max; vid++) {
+            if (!icli_cmd_mac_vlan_learn(session_id, vid, 1, 0)) {
+                ICLI_PRINTF("Could not set vlan learning\n");
+                return ICLI_RC_ERROR;
+            }
+        }
+    }   
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    u32               idx;
+    mesa_vid_t        vid;
+    for (idx = 0; idx < vlan_list->cnt; idx++) {
+        for (vid = vlan_list->range[idx].min; vid <= vlan_list->range[idx].max; vid++) {
+            if (!icli_cmd_mac_vlan_learn(session_id, vid, 0, 0)) {
+                ICLI_PRINTF("Could not set vlan learning\n");
+                return ICLI_RC_ERROR;
+            }
+        }
+    }   
+NO_FORM_CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug mac address-table static <mac_addr> vlan <vlan_id> [ cpu ] [ interface <port_type_list> ]
+
+DOC_CMD_DESC    = Assign a Volatile static mac address to port
+DOC_CMD_EXAMPLE = mac address-table static 00:00:00:00:00:01 vlan 2 interface GigabitEthernet 2/1
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: debug
+! 2: mac
+! 3: address-table
+! 4: static
+! 5: <mac_addr>
+! 6: vlan
+! 7: <vlan_id>
+! 8: cpu
+! 9: interface
+! 10: <port_type_list>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_mac_addr
+CMD_VAR =
+CMD_VAR = v_vlan_id
+CMD_VAR = has_cpu
+CMD_VAR = has_interface
+CMD_VAR = v_port_type_list
+
+HELP =
+HELP = MAC table entries/configuration
+HELP = MAC table entries/configuration
+HELP = Static MAC address
+HELP = 48 bit MAC address: xx:xx:xx:xx:xx:xx
+HELP = VLAN keyword
+HELP = VLAN IDs 1-4095
+HELP = CPU or port list. Default all ports and CPU
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##ICLI_HELP_PORT_LIST
+
+CODE_BEGIN
+    if (!icli_debug_cmd_mac_add(session_id, &v_mac_addr, v_vlan_id, v_port_type_list, has_cpu, has_interface, 0)) {
+        ICLI_PRINTF("Could not add mac address\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug no mac address-table static <mac_addr>
+
+DOC_CMD_DESC    = Remove Static MAC Entries
+DOC_CMD_EXAMPLE = no debug mac address-table static 01:02:03:04:05:06 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: no
+! 2: debug
+! 3: mac
+! 4: address-table
+! 5: static
+! 6: <mac_addr>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_mac_addr
+
+HELP = Debugging functions
+HELP = Negate a command or set its defaults
+HELP = MAC table entries/configuration
+HELP = MAC table entries/configuration
+HELP = Static MAC address
+HELP = 48 bit MAC address: xx:xx:xx:xx:xx:xx
+
+CODE_BEGIN
+    if (!icli_debug_cmd_mac_add(session_id, &v_mac_addr, 0, 0, FALSE, FALSE, 1)) {
+        ICLI_PRINTF("Could not remove mac address\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug mac { eat | voleat } address <mac_addr> interface <port_type_list> count <uint> [ vlan <vlan_id> ]
+
+DOC_CMD_DESC    = Adding Static or Volatile Mac Entries
+DOC_CMD_EXAMPLE = debug mac eat address 00:00:00:00:00:01 inter gi 1/5 count 3 vlan 123
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! 1: debug
+! 2: mac
+! 3: eat
+! 4: voleat
+! 5: address
+! 6: <mac_addr>
+! 7: interface
+! 8: <port_type_list>
+! 9: count
+! 10: <uint>
+! 11: vlan
+! 12: <vlan_id>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_eat
+CMD_VAR = has_voleat
+CMD_VAR =
+CMD_VAR = v_mac_addr
+CMD_VAR =
+CMD_VAR = v_port_type_list
+CMD_VAR =
+CMD_VAR = v_uint
+CMD_VAR = 
+CMD_VAR = v_vlan_id
+
+HELP =
+HELP = MAC table entries/configuration
+HELP = Add some static entries
+HELP = Add some volatile entries
+HELP = Mac Address
+HELP = 48 bit MAC address: xx:xx:xx:xx:xx:xx
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##ICLI_HELP_PORT_LIST
+HELP = Count Keyword
+HELP = No of Mac entries to be added
+HELP = VLAN keyword
+HELP = VLAN IDs 1-4095
+
+BYWORD =
+BYWORD =
+BYWORD = eat : Option
+BYWORD = voleat : Option
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = vlan : Option
+BYWORD =
+
+CODE_BEGIN
+    if (!icli_debug_cmd_mac_eat(session_id, &v_mac_addr, v_port_type_list, v_uint, &v_vlan_id, has_eat, has_voleat)) {
+        ICLI_PRINTF("Could not add static mac address\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND = debug no mac address <mac_addr> count <uint> [ vlan <vlan_id> ]
+
+DOC_CMD_DESC    = Delete MAC adresses from MAC address table
+DOC_CMD_EXAMPLE = debug no mac address 00:00:00:01:00:00 count 3 
+
+PRIVILEGE = ICLI_PRIVILEGE_0
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! 1: debug
+! 2: no
+! 3: mac
+! 4: address
+! 5: <mac_addr>
+! 6: count
+! 7: <uint>
+! 8: vlan
+! 9: <vlan_id>
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = v_mac_addr
+CMD_VAR =
+CMD_VAR = v_uint
+CMD_VAR = has_vlan
+CMD_VAR = v_vlan_id
+
+HELP = Debugging functions
+HELP = Negate a command or set its defaults
+HELP = MAC table entries/configuration
+HELP = Static MAC address
+HELP = 48 bit MAC address: xx:xx:xx:xx:xx:xx
+HELP = Count Keyword
+HELP = No of Mac entries to be added
+HELP = VLAN keyword
+HELP = VLAN IDs 1-4095
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = vlan : Option
+BYWORD =
+
+CODE_BEGIN
+    if (!icli_debug_cmd_mac_del(session_id, &v_mac_addr, has_vlan, v_uint, &v_vlan_id)) {
+        ICLI_PRINTF("Could not remove mac address\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+!==============================================================================

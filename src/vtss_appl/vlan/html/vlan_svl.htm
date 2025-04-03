@@ -1,0 +1,500 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Shared VLAN Learning Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_vlan_svl.htm";
+var fid_conf = Array();
+var row_cnt = 0;
+
+//------------------------------------------------------------------------------
+// update_add_button()
+//------------------------------------------------------------------------------
+function update_add_button()
+{
+    $('add_button').disabled = row_cnt >= vlan_svl_fid_cnt;
+}
+
+//------------------------------------------------------------------------------
+// delete_button_click()
+//------------------------------------------------------------------------------
+function delete_button_click(id)
+{
+    var table = $('svl_table');
+
+    if (row_cnt === 0) {
+        alert("Internal error: Delete button clicked while expected row_cnt == 0");
+        return;
+    }
+
+    row_cnt--;
+
+    // Remove the row
+    var tr = $('fid_' + id).parentElement.parentElement;
+    table.deleteRow(tr.rowIndex - 1 /* Gotta subtract one, because the table has a header row, which also counts in the rowIndex, which otherwise is 0-based */);
+
+    // Update the color of the rows if needed.
+    var rows = table.childNodes;
+    for (var row_idx = 0; row_idx < rows.length; row_idx++) {
+        var cl = row_idx % 2 ? "config_odd" : "config_even";
+        rows[row_idx].setAttribute("class", cl);
+        rows[row_idx].setAttribute("className", cl);
+    }
+
+    // And finally update the add button state.
+    update_add_button();
+}
+
+//------------------------------------------------------------------------------
+// add_row()
+//------------------------------------------------------------------------------
+function add_row(index, frag, v, id)
+{
+    var tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var fld, td;
+
+    row_cnt++;
+
+    // Delete-button
+    fld = document.createElement('input');
+    fld.setAttribute('type', 'button');
+    fld.setAttribute('value', ' Delete ');
+    fld.onclick = function() {delete_button_click(id);};
+    fld.id = 'delete_button_' + id;
+    td = CreateTd("c");
+    td.appendChild(fld);
+    tr.appendChild(td);
+
+    // FID. The 9586 is the maximum string length required to hold a worst-case VLAN string
+    fld = addInputCell(tr, v[0], "cl", 'fid_' + id, 4, 4);
+    fld.setAttribute("maxLength", 4); // 'camelCase' required for maxLength for this to work with IE.
+
+    // VLANs
+    var vlans = unescape(v[1]);
+    fld = addInputCell(tr, vlans, "cl", 'vlans_' + id, 50, 9685);
+    fld.setAttribute("maxLength", 9685); // 'camelCase' required for maxLength for this to work with IE.
+
+    frag.appendChild(tr);       // Add row to fragment
+    update_add_button();
+}
+
+//------------------------------------------------------------------------------
+// update_table()
+//------------------------------------------------------------------------------
+function update_table()
+{
+    row_cnt = 0;
+
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < fid_conf.length; i++) {
+        add_row(i, frag, fid_conf[i].split("/"), i);
+    }
+
+    var tbody = $('svl_table');
+    clearChildNodes(tbody);
+    tbody.appendChild(frag);
+}
+
+//------------------------------------------------------------------------------
+// process_update()
+//------------------------------------------------------------------------------
+function process_update(req)
+{
+    // Format: <fid_cnt>|<fid_conf_1>#<fid_conf_2>#...#<fid_conf_N>
+    //         <fid_conf_x> = fid/vids
+    // <fid_cnt> is just to always make it non-empty to avoid the SpomHandleError() below
+
+    if (redirectOnError(req)) {
+        return;
+    }
+
+    if (!req.responseText) {
+        SpomHandleError();
+        return;
+    }
+
+    var temp = req.responseText.split("|");
+    fid_conf = temp[1].split("#");
+    fid_conf.length = parseInt(temp[0], 10);
+    update_table();
+}
+
+function request_update()
+{
+    if (SpomNavigationLoading()) {
+        return; // Bail out, navigation will trigger update
+    }
+
+    loadXMLDoc(SpomAddSidArg("/config/vlan_svl"), process_update);
+    SpomUpdateFormSid("submit_sid");
+}
+
+//------------------------------------------------------------------------------
+// remove_ws()
+// Returns (in x.str) a string where all white space is removed.
+// If two consecutive numbers are only having white space between them,
+// the function returns false. Otherwise true.
+//------------------------------------------------------------------------------
+function remove_ws(x)
+{
+    var result = "", whitespace_seen = false;
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c != ' ') {
+            if (whitespace_seen && result.length > 0 && result.charAt(result.length - 1) >= '0' && result.charAt(result.length - 1) <= '9') {
+                return false;
+            }
+            result += c;
+            whitespace_seen = false;
+        } else {
+            whitespace_seen = true;
+        }
+
+        x.idx++;
+    }
+
+    x.str = result;
+    x.idx = 0;
+    x.len = x.str.length;
+    return true;
+}
+
+//------------------------------------------------------------------------------
+// strtoul()
+//------------------------------------------------------------------------------
+function strtoul(x)
+{
+    var len = x.str.length;
+    var sub = "";
+
+    if (x.idx == x.len) {
+        // No more characters in string
+        return -1;
+    }
+
+    while (x.idx < x.len) {
+        var c = x.str.charAt(x.idx);
+
+        if (c < '0' || c > '9') {
+            break;
+        }
+
+        x.idx++;
+        sub += c;
+    }
+
+    if (sub.length === 0) {
+        return -1;
+    }
+
+    return parseInt(sub, 10);
+}
+
+//------------------------------------------------------------------------------
+// is_vlan_list()
+//------------------------------------------------------------------------------
+function is_vlan_list(id, list)
+{
+    var fld = $(id);
+
+    if (!fld) {
+        alert("Ehh: " + id);
+    }
+
+    var x = {str:fld.value};
+    x.idx = 0;
+    x.len = x.str.length;
+
+    if (!remove_ws(x)) {
+        GiveAlert("VLANs must be separated by commas, not spaces", fld);
+        return false;
+    }
+
+    if (x.idx == x.len) {
+        GiveAlert("The VLAN list may not be empty", fld);
+        return false;
+    }
+
+    var range = false, comma = false;
+    var start;
+
+    while (x.idx < x.len) {
+        var n = strtoul(x);
+
+        if (n < 0) {
+            GiveAlert("Invalid character ('" + x.str.charAt(x.idx) + "') found in VLAN list", fld);
+            return false;
+        }
+
+        if (n < configVlanIdMin || n > configVlanIdMax) {
+            GiveAlert("VLAN IDs must be integers between " + configVlanIdMin + " and " + configVlanIdMax, fld);
+            return false;
+        }
+
+        if (range) {
+            // End of range has been reached
+            range = 0;
+            if (n < start) {
+                GiveAlert("Invalid range detected in VLAN list", fld);
+                return false;
+            }
+
+            for (var i = start; i <= n; i++) {
+                if (list.vids[i] != 1) {
+                    list.vids[i] = 1;
+                    list.cnt++;
+                }
+            }
+        } else if (x.str.charAt(x.idx) == '-') {
+            // Start of range
+            start = n;
+            range = true;
+            x.idx++;
+        } else {
+            if (list.vids[n] != 1) {
+                list.vids[n] = 1;
+                list.cnt++;
+            }
+        }
+
+        comma = false;
+        if (!range && x.str.charAt(x.idx) == ',') {
+            comma = true;
+            x.idx++;
+        }
+    }
+
+    // Check for trailing comma/dash
+    if (comma || range) {
+        GiveAlert("VLAN list cannot end with a comma or a dash", fld);
+        return false;
+    }
+
+    return true;
+}
+
+//------------------------------------------------------------------------------
+// check_form()
+//------------------------------------------------------------------------------
+function check_form(form)
+{
+    var fld, id, id2, fid, vid;
+    var union = Array(configVlanIdMax);
+
+    for (id = 0; id < vlan_svl_fid_cnt; id++) {
+        if ($('fid_' + id)) {
+            if (!isWithinRange('fid_' + id, 1, vlan_svl_fid_cnt, "FID")) {
+                return false;
+            }
+
+            var list = {vids:Array(configVlanIdMax)};
+            list.cnt = 0;
+
+            if (!is_vlan_list('vlans_' + id, list)) {
+                return false;
+            }
+
+            fid = parseInt($('fid_' + id).value, 10);
+
+            if (list.cnt == 1 && list.vids[fid] == 1) {
+                GiveAlert("Adding only one VLAN with the same ID as the FID has no effect", $('vlans_' + id));
+                return false;
+            }
+
+            // Store in union
+            for (vid = configVlanIdMin; vid <= configVlanIdMax; vid++) {
+                if (list.vids[vid] == 1) {
+                    if (union[vid]) {
+                        GiveAlert("A VLAN can only be included in one FID.\nVLAN " + vid + " is already included in FID " + union[vid], $('vlans_' + id));
+                        return false;
+                    }
+
+                    union[vid] = fid;
+                }
+            }
+        }
+    }
+
+    // Now that we know that the FIDs are all integers,
+    // check that the same FID is not used twice.
+    for (id = 0; id < vlan_svl_fid_cnt; id++) {
+        if (!$('fid_' + id)) {
+            continue;
+        }
+
+        fid = parseInt($('fid_' + id).value, 10);
+
+        for (id2 = id + 1; id2 < vlan_svl_fid_cnt; id2++) {
+            if (!$('fid_' + id2)) {
+                continue;
+            }
+
+            var fid2 = parseInt($('fid_' + id2).value, 10);
+            if (fid == fid2) {
+                GiveAlert("FIDs may only occur once in the list", $('fid_' + id2));
+                return false;
+            }
+        }
+    }
+
+    // Go over all FIDs once more and see whether union[*fid*] is mapped. If not,
+    // it will be added implicitly, because a VID by default is member of the FID
+    // with the same ID. If this happens, make a note to the user and allow him to
+    // abort the POST.
+    for (id = 0; id < vlan_svl_fid_cnt; id++) {
+        if ($('fid_' + id)) {
+            fid = parseInt($('fid_' + id).value, 10);
+            if (!union[fid]) {
+                if (!confirm("VLAN " + fid + " is not explicitly included in any other FID and will therefore implicitly be member of FID " + fid + ".\nContinue?")) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+//------------------------------------------------------------------------------
+// find_unused_id()
+//------------------------------------------------------------------------------
+function find_unused_id()
+{
+    for (var id = 0; id < vlan_svl_fid_cnt; id++) {
+        if (!$('fid_' + id)) {
+            return id;
+        }
+    }
+
+    alert("Unable to find an unused ID");
+    return 0;
+}
+
+//------------------------------------------------------------------------------
+// find_unused_fid()
+//------------------------------------------------------------------------------
+function find_unused_fid()
+{
+    for (var fid = 1; fid <= vlan_svl_fid_cnt; fid++) {
+        var in_use = false;
+        for (var id = 0; id < vlan_svl_fid_cnt; id++) {
+            var fid_fld = $('fid_' + id);
+            if (fid_fld && isInt(fid_fld.value) && parseInt(fid_fld.value, 10) == fid) {
+                in_use = true;
+                break;
+            }
+        }
+
+        if (!in_use) {
+            return fid;
+        }
+    }
+
+    alert("Unable to find an unused FID");
+    return 0;
+}
+
+//------------------------------------------------------------------------------
+// add_new_row()
+//------------------------------------------------------------------------------
+function add_new_row()
+{
+    var frag = document.createDocumentFragment();
+    var fid = find_unused_fid();
+    var new_fid_conf = [fid, ""];
+    var new_id  = find_unused_id();
+    add_row(row_cnt, frag, new_fid_conf, new_id);
+
+    var tbody = $('svl_table');
+    tbody.appendChild(frag);
+
+    $('vlans_' + new_id).focus();
+}
+
+//------------------------------------------------------------------------------
+// SpomSidSelectorUpdate()
+//------------------------------------------------------------------------------
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid); // Save current SID
+    request_update();       // Update page to reflect selector
+}
+
+ </script>
+</head>
+
+<body class="content" onload="request_update();">
+<form method="POST" action="/config/vlan_svl" onsubmit="return check_form(this);">
+
+<h1>Shared VLAN Learning Configuration</h1>
+<table summary="Shared VLAN Learning Configuration" cellspacing="0" class="config">
+  <thead>
+    <tr>
+      <th>Delete</th>
+      <th>FID</th>
+      <th>VLANs</th>
+    </tr>
+  </thead>
+  <tbody id="svl_table"></tbody>
+</table>
+
+<p>
+<input type="button" id="add_button" value="Add FID" onclick="add_new_row()">
+</p>
+
+<p>
+<input type="hidden" id="submit_sid" name="sid">
+<input type="submit" value="Save">
+<input type="reset"  value="Reset" onclick="update_table();">
+</p>
+</form>
+</body>
+</html>
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

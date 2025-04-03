@@ -1,0 +1,1813 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "icfg.h"
+#include "vtss_os_wrapper.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/statvfs.h>
+#include "icfg_api.h"
+#include "vtss_remote_file_transfer.hxx"
+
+#ifdef CYGPKG_FS_RAM
+#include "os_file_api.h"
+#endif
+#include "conf_api.h"
+#include "control_api.h"
+#include "msg_api.h"
+#include "vtss_usb.h"
+#include "misc_api.h" /* For misc_url_XXX() */
+#include "vlan_api.h"
+#ifdef VTSS_SW_OPTION_ETH_LINK_OAM
+#include "vtss_eth_link_oam_api.h"
+#endif
+#if defined(VTSS_SW_OPTION_SNMP)
+#include "vtss_snmp_api.h"
+#endif /* VTSS_SW_OPTION_SNMP */
+
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+#define VTSS_ALLOC_MODULE_ID VTSS_MODULE_ID_ICFG
+
+#define ENSURE_PRIMARY_SWITCH() \
+    if (!msg_switch_is_primary()) { \
+        ICLI_PRINTF("%% This is only possible on the stack's primary switch.\n"); \
+        return ICLI_RC_ERROR; \
+    }
+
+static const char *plural_str(u32 n)
+{
+    return n == 1 ? "" : "s";
+}
+
+static void print_query_result(u32                      session_id,
+                               vtss_icfg_query_result_t *res)
+{
+#define N (ICLI_PUT_MAX_LEN)
+    char *p;
+    u32  len;
+    char tmp[N];
+    u32  n;
+
+    if (!res  ||  !res->head) {
+        return;
+    }
+
+    vtss_icfg_query_result_buf_t *buf = res->head;
+
+    // We need to feed ICLI printf one line at a time.
+
+    n = 0;
+    while (buf != NULL  &&  buf->used > 0) {
+        len = buf->used;
+        p   = buf->text;
+        while (len > 0) {
+            tmp[n++] = *p;
+            if ((*p == '\n')  ||  (n == (N - 1))) {
+                tmp[n] = 0;
+                ICLI_PRINTF("%s", tmp);
+                n = 0;
+            }
+            p++;
+            len--;
+        }
+        buf = buf->next;
+    }
+
+    if (n > 0) {
+        tmp[n] = 0;
+        ICLI_PRINTF("%s\n", tmp);
+    }
+#undef N
+}
+
+
+
+static BOOL decompose_url(u32              session_id,
+                          const char       *src_or_dest_text,
+                          const char       *path,
+                          misc_url_parts_t *url)
+{
+    if (strcmp(path, "startup-config") == 0) {
+        path = "flash:startup-config";
+    }
+
+    misc_url_parts_init(url, MISC_URL_PROTOCOL_TFTP     |
+                             MISC_URL_PROTOCOL_FLASH    |
+                             MISC_URL_PROTOCOL_HTTP     |
+                             MISC_URL_PROTOCOL_FTP      |
+                             MISC_URL_PROTOCOL_SFTP     |
+                             MISC_URL_PROTOCOL_SCP      |
+                             MISC_URL_PROTOCOL_USB);
+
+    if (misc_url_decompose(path, url)) {
+        return TRUE;
+    }
+
+    ICLI_PRINTF("%% Invalid %ssyntax, expected <protocol>://[<username>[:<password>]@]<host>[:<port>][/<path>]\n", src_or_dest_text);
+    ICLI_PRINTF("%% Supported protocols are: [ flash | tftp | http | ftp | sftp | scp | usb ]\n");
+    return FALSE;
+}
+
+static BOOL decompose_flash_or_usb_url(u32              session_id,
+                                       const char       *path,
+                                       misc_url_parts_t *url)
+{
+    misc_url_parts_init(url, MISC_URL_PROTOCOL_FLASH | MISC_URL_PROTOCOL_USB);
+
+    if (misc_url_decompose(path, url)) {
+        return TRUE;
+    }
+
+    ICLI_PRINTF("%% Invalid syntax, expected flash:filename or usb:filename\n");
+    return FALSE;
+}
+
+static BOOL save_file(u32                      session_id,
+                      vtss_icfg_query_result_t *res,
+                      const char               *filename,
+                      bool                     is_flash_file)
+{
+    vtss_icfg_query_result_buf_t *buf  = res->head;
+    u32                          total = 0;
+    const char                   *msg;
+
+    while (buf != NULL  &&  buf->used > 0) {
+        total += buf->used;
+        buf = buf->next;
+    }
+    ICLI_PRINTF("%% Saving %u bytes to %s: %s\n", total, is_flash_file ? "flash" : "usb", filename);
+
+    msg = icfg_file_write(filename, res, is_flash_file);
+
+    if (msg) {
+        ICLI_PRINTF("%% %s: Save failed: %s\n", filename, msg);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static BOOL save_config(u32                      session_id,
+                        vtss_icfg_query_result_t *res,
+                        const char               *full_url,
+                        const misc_url_parts_t   *url_parts,
+                        vtss::remote_file_options_t &transfer_options)
+{
+    bool success;
+    vtss_icfg_query_result_buf_t *buffer = res->head;
+    u32 total = 0;
+    char *tmp_buf = NULL;
+    int err = 0;
+
+    if (url_parts->is_flash()) {
+        // Save the local file to flash/usb
+        save_file(session_id, res, url_parts->path, true);
+
+    } else if (url_parts->is_usb()) {
+        // Save the local file to flash/usb
+        save_file(session_id, res, url_parts->path, false);
+
+    } else {
+        if (transfer_options.ftp_active && url_parts->protocol_id != MISC_URL_PROTOCOL_FTP) {
+            ICLI_PRINTF("%% Cannot specify active mode for non-FTP transfers\n");
+            return false;
+        }
+
+        if (transfer_options.ssh_save_host_keys &&
+                (url_parts->protocol_id != MISC_URL_PROTOCOL_SFTP && url_parts->protocol_id != MISC_URL_PROTOCOL_SCP)) {
+            ICLI_PRINTF("%% Cannot save host keys for non-SSH transfers\n");
+            return false;
+        }
+
+        // Our put function expects a contiguous buffer, so we may have to
+        // create one and copy all the blocks into it. We do try to avoid it,
+        // though.
+
+        if (buffer->next && buffer->next->used > 0) {
+            char *p;
+
+            while (buffer != NULL  &&  buffer->used > 0) {
+                total += buffer->used;
+                buffer = buffer->next;
+            }
+
+            tmp_buf = (char*)VTSS_MALLOC(total);
+            if (!tmp_buf) {
+                ICLI_PRINTF("%% Not enough free RAM memory for remote save operation (needed %u bytes).\n", total);
+                return FALSE;
+            }
+
+            buffer = res->head;
+            p = tmp_buf;
+            while (buffer != NULL && buffer->used > 0) {
+                memcpy(p, buffer->text, buffer->used);
+                p += buffer->used;
+                buffer = buffer->next;
+            }
+        }
+        else {
+            total = buffer->used;
+        }
+
+        buffer = res->head;
+
+        ICLI_PRINTF("%% Saving %u bytes to server %s: %s\n",
+                    total, url_parts->host, url_parts->path);
+
+        success = vtss::remote_file_put(url_parts, tmp_buf ? tmp_buf : buffer->text,
+                                        total, transfer_options, &err);
+
+        VTSS_FREE(tmp_buf);
+
+        if (!success) {
+            ICLI_PRINTF("%% Error saving remote file: %s (%d)\n",
+                        vtss::remote_file_errstring_get(err), err);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+
+/* Load from flash. Allocates result buffer; caller must free it even upon
+ * error
+ */
+static BOOL load_from_flash(u32                      session_id,
+                            vtss_icfg_query_result_t *res,
+                            const char               *filename)
+{
+    const char *msg = icfg_file_read(filename, res);
+
+    if (msg) {
+        ICLI_PRINTF("%% %s: Load failed: %s\n", filename, msg);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/* Load from usb. Allocates result buffer; caller must free it even upon
+ * error
+ */
+static BOOL load_from_usb(u32                      session_id,
+                          vtss_icfg_query_result_t *res,
+                          const char               *filename)
+{
+    // validate if usb device is present
+    const char *msg = icfg_file_read(filename, res, false);
+
+    if (msg) {
+        ICLI_PRINTF("%% %s: Load from usb failed: %s\n", filename, msg);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static BOOL load_config(u32                      session_id,
+                        vtss_icfg_query_result_t *res,
+                        const char               *full_url,
+                        const misc_url_parts_t   *url_parts,
+                        vtss::remote_file_options_t &transfer_options)
+{
+    int err = 0;
+    char *buffer;
+    size_t buflen;
+
+    if (url_parts->is_flash()) {
+        // Read the local file from flash
+        return load_from_flash(session_id, res, url_parts->path);
+
+    } else if (url_parts->is_usb()) {
+        // Read the local file from flash
+        return load_from_usb(session_id, res, url_parts->path);
+
+    } else {
+        if (transfer_options.ftp_active && url_parts->protocol_id != MISC_URL_PROTOCOL_FTP) {
+            ICLI_PRINTF("%% Cannot specify active mode for non-FTP transfers\n");
+            return false;
+        }
+
+        if (transfer_options.ssh_save_host_keys &&
+                (url_parts->protocol_id != MISC_URL_PROTOCOL_SFTP && url_parts->protocol_id != MISC_URL_PROTOCOL_SCP)) {
+            ICLI_PRINTF("%% Cannot save host keys for non-SSH transfers\n");
+            return false;
+        }
+
+        // Get the remote file using the given URL
+        if (!vtss::remote_file_get(url_parts, &buffer, &buflen, transfer_options, &err)) {
+            ICLI_PRINTF("%% Error loading remote file: %s (%d)\n",
+                        vtss::remote_file_errstring_get(err), err);
+            return false;
+        }
+
+        // Encapsulate the file buffer inside a ICFG query result
+        if (vtss_icfg_overlay_query_result(buffer, buflen, res) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% Error: Unable to format file content");
+            VTSS_FREE(buffer);
+            return false;
+        }
+
+        // Ensure that the allocated buffer will be deallocated after use
+        res->head->free_text = TRUE;
+        return true;
+    }
+}
+
+static BOOL fill_feature_list(u32                session_id,
+                              icli_runtime_ask_t ask,
+                              icli_runtime_t     *runtime)
+{
+    if (ask == ICLI_ASK_CWORD) {
+        vtss_icfg_feature_list_get(ICLI_CWORD_MAX_CNT, (const char **)runtime->cword);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL has_warm_runtime(u32                session_id,
+                             icli_runtime_ask_t ask,
+                             icli_runtime_t     *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+#ifdef VTSS_SW_OPTION_WARM_START
+        runtime->present = TRUE;
+#else
+        runtime->present = FALSE;
+#endif
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static mesa_rc icfg_directory(u32 session_id, BOOL show_debug, BOOL is_flash_file)
+{
+    int  err;
+    DIR  *dirp;
+    u32  file_count            = 0;
+    u32  byte_count            = 0;
+    u32  compressed_byte_count = 0;
+    u32  flash_size            = 0;
+    u32  flash_free            = 0;
+    u32  total_flash_free      = 0;
+    ENSURE_PRIMARY_SWITCH();
+    if (!icfg_try_lock_io_mutex()) {
+        ICLI_PRINTF("%% A load/save operation is currently in progress, please try again later.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    dirp = opendir(is_flash_file == TRUE ? VTSS_FS_FILE_DIR : USB_DEVICE_DIR);
+
+    if (dirp == NULL) {
+        ICLI_PRINTF("%% Cannot list directory: %s\n", strerror(errno));
+        goto out;
+    }
+
+    if (is_flash_file) {
+        ICLI_PRINTF("Directory of flash:\n");
+    } else {
+        if (!usb_is_device_present()) {
+            ICLI_PRINTF("No USB storage device present\n");
+            goto out; // not an error
+        } else {
+            ICLI_PRINTF("Directory of USB storage device:\n");
+        }
+    }
+    for(;;) {
+        struct dirent *entry = readdir(dirp);
+        struct stat   sbuf;
+        struct tm     timeinfo;
+        char          timestr[40];
+        char          modestr[3];
+        off_t         compressed_size;
+
+        if (entry == NULL) {
+            break;
+        }
+
+        if (!strcmp(entry->d_name, ".")  ||  !strcmp(entry->d_name, "..")) {
+            continue;
+        }
+
+        err = icfg_file_stat(entry->d_name, &sbuf, &compressed_size, is_flash_file);
+
+        if (err < 0) {
+            if (errno == ENOSYS) {
+                T_E("%s: <no status available>\n", entry->d_name);
+            }
+            else {
+                ICLI_PRINTF("%% Cannot retrieve info for %s: %s\n", entry->d_name, strerror(errno));
+            }
+        } else {
+            modestr[0] = (sbuf.st_mode & S_IRUSR) ? 'r' : '-';
+            modestr[1] = (sbuf.st_mode & S_IWUSR) ? 'w' : '-';
+            modestr[2] = 0;
+            (void)localtime_r(&sbuf.st_mtime, &timeinfo);
+            (void)strftime(timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+            if (show_debug) {
+                ICLI_PRINTF("    %s %s %8ld [%8ld]%s\n", modestr, timestr, sbuf.st_size, compressed_size, entry->d_name);
+            } else {
+                ICLI_PRINTF("    %s %s %8ld %s\n", modestr, timestr, sbuf.st_size, entry->d_name);
+            }
+            file_count++;
+            byte_count            += sbuf.st_size;
+            compressed_byte_count += compressed_size;
+        }
+    }
+
+    err = closedir(dirp);
+    if (err < 0) {
+        T_D("closedir: %s\n", strerror(errno));
+    }
+
+    if (show_debug) {
+        ICLI_PRINTF("%u file%s, %u byte%s total [%d compressed].\n", file_count, plural_str(file_count), byte_count, plural_str(byte_count), compressed_byte_count);
+    } else {
+        ICLI_PRINTF("%u file%s, %u byte%s total.\n", file_count, plural_str(file_count), byte_count, plural_str(byte_count));
+    }
+
+    //
+    // Flash size
+    //
+    struct statvfs fs_buf;
+    statvfs(VTSS_FS_FILE_DIR, &fs_buf);
+
+    if (show_debug) {
+      ICLI_PRINTF("\nFile system block size    :%ld\n", fs_buf.f_bsize);
+      ICLI_PRINTF("Fragment size             :%ld\n", fs_buf.f_frsize);
+      ICLI_PRINTF("Size of fs                :%ld\n", fs_buf.f_blocks);
+      ICLI_PRINTF("Free blocks               :%ld\n", fs_buf.f_bfree);
+      ICLI_PRINTF("Free blocks unpriv. users :%ld\n", fs_buf.f_bavail);
+      ICLI_PRINTF("Inodes                    :%ld\n", fs_buf.f_files);
+      ICLI_PRINTF("Free inodes               :%ld\n", fs_buf.f_ffree);
+      ICLI_PRINTF("Free inodes unpriv. users :%ld\n", fs_buf.f_favail);
+      ICLI_PRINTF("Files system ID           :%ld\n", fs_buf.f_fsid);
+      ICLI_PRINTF("Mount flags               :%ld\n", fs_buf.f_flag);
+      ICLI_PRINTF("Max. filename length      :%ld\n", fs_buf.f_namemax);
+    }
+
+    flash_size = fs_buf.f_bsize * fs_buf.f_blocks;
+    icfg_flash_free_get(fs_buf, flash_free, total_flash_free);
+
+    ICLI_PRINTF("\n");
+    if (is_flash_file) {
+        ICLI_PRINTF("%-17s %10u bytes (%.1f MiB)\n", "Flash size:", flash_size, flash_size/1024.0/1024.0);
+        ICLI_PRINTF("%-17s %10u bytes (%.1f MiB)\n", "Flash free:", flash_free, flash_free/1024.0/1024.0);
+        if (flash_free != total_flash_free) {
+            ICLI_PRINTF("%-17s %10u bytes (%.1f MiB) (incl. reserved space)\n", "Flash total free:", total_flash_free, total_flash_free/1024.0/1024.0);
+        }
+    } else {
+        ICLI_PRINTF("%-17s %10u bytes (%.1f MiB)\n", "USB size:", flash_size, flash_size/1024.0/1024.0);
+        ICLI_PRINTF("%-17s %10u bytes (%.1f MiB)\n", "USB free:", flash_free, flash_free/1024.0/1024.0);
+        if (flash_free != total_flash_free) {
+            ICLI_PRINTF("%-17s %10u bytes (%.1f MiB) (incl. reserved space)\n", "USB total free:", total_flash_free, total_flash_free/1024.0/1024.0);
+        }
+    }
+
+
+out:
+    icfg_unlock_io_mutex();
+
+    return VTSS_RC_OK;
+}
+
+static BOOL icfg_runtime_url_file(u32                session_id,
+                                  icli_runtime_ask_t ask,
+                                  icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_URL: // Filter not support protocols
+        runtime->url_not_support[ICLI_URL_PROTOCOL_FILE] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_HTTPS] = TRUE;
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL icfg_runtime_save_host_key(u32                session_id,
+                                       icli_runtime_ask_t ask,
+                                       icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_SFTP) ||
+                icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_SCP);
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL icfg_runtime_ftp_active(u32                session_id,
+                                    icli_runtime_ask_t ask,
+                                    icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = icli_has_url_with_proto(session_id, ICLI_URL_PROTOCOL_FTP);
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL icfg_runtime_url_file_del(u32                session_id,
+                                      icli_runtime_ask_t ask,
+                                      icli_runtime_t     *runtime)
+{
+    switch (ask) {
+    case ICLI_ASK_URL: // Filter not support protocols, only support flash when delete configuration file.
+        runtime->url_not_support[ICLI_URL_PROTOCOL_TFTP] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_FILE] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_FTP] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_HTTP] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_HTTPS] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_SFTP] = TRUE;
+        runtime->url_not_support[ICLI_URL_PROTOCOL_SCP] = TRUE;
+        return TRUE;
+
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+/*
+ * Return true if this session is a remote session (Telnet/SSH) or false
+ * if it is the local console.
+ */
+static bool icfg_is_remote_session(u32 session_id)
+{
+    i32 icli_rc;
+    icli_session_data_t data;
+    vtss_clear(data);
+
+    data.session_id = session_id;
+    icli_rc = icli_session_data_get(&data);
+    if (icli_rc != ICLI_RC_OK) {
+        return false;
+    }
+    switch (data.way) {
+    case ICLI_SESSION_WAY_TELNET:
+    case ICLI_SESSION_WAY_SSH:
+    case ICLI_SESSION_WAY_THREAD_TELNET:
+    case ICLI_SESSION_WAY_THREAD_SSH:
+        return true;
+    case ICLI_SESSION_WAY_CONSOLE:
+        return false;
+    default:
+        T_D("Unexpected session type %d", data.way);
+        return false;
+    }
+
+    return false;
+}
+
+FUNCTION_END
+
+!==============================================================================
+
+EXPORT_BEGIN
+EXPORT_END
+
+!==============================================================================
+
+HELP_RUN        = Show running system information
+HELP_IFC        = Show specific interface or interfaces
+HELP_VLAN       = VLAN
+HELP_VLAN_LIST  = List of VLAN numbers
+HELP_COPY       = Copy from source to destination
+HELP_SYNTAX     = Perform syntax check on source configuration
+HELP_HOSTKEY    = Always save SSH host keys in local cache
+HELP_FTP_ACTIVE = Use active mode for FTP transfers (default is passive mode)
+HELP_RUN_CFG    = Currently running configuration
+HELP_STARTUP    = Startup configuration
+HELP_FLASH_REMOTEFILE = File in USB, FLASH or on remote server. Syntax: <usb:filename> | <flash:filename> | <protocol>://[<username>[:<password>]@]<host>[:<port>][/<path>]>. A valid file name is a text string drawn from alphabet (A-Za-z), digits (0-9), dot (.), hyphen (-), under score (_). The maximum length is 63 and hyphen must not be first character. The file name content that only contains '.' is not allowed.
+HELP_FLASH      = File in FLASH. Syntax: <flash:filename>. A valid file name is a text string drawn from alphabet (A-Za-z), digits (0-9), dot (.), hyphen (-), under score (_). The maximum length is 63 and hyphen must not be first character. The file name content that only contains '.' is not allowed.
+HELP_ALL_DEF    = Include most/all default values
+HELP_ICFG       = Industrial Configuration subsystem
+
+!==============================================================================
+!==============================================================================
+!==============================================================================
+!
+! "reload" commands
+!
+!==============================================================================
+!==============================================================================
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = reload { cold | warm | defaults [ keep-ip ] [ force ] }
+
+DOC_CMD_DESC    = Reload system, either cold (reboot) or restore defaults without reboot.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+! reload
+CMD_VAR =
+RUNTIME =
+HELP    = Reload system.
+BYWORD  =
+
+! cold
+CMD_VAR = has_cold
+RUNTIME =
+HELP    = Reload cold.
+BYWORD  = cold : Option
+
+! warm
+CMD_VAR =
+RUNTIME = has_warm_runtime
+HELP    = Reload warm (CPU restart only).
+BYWORD  = warm : Option
+
+! defaults
+CMD_VAR = has_defaults
+RUNTIME =
+HELP    = Reload defaults without rebooting.
+BYWORD  = defaults : Option
+
+! keep-ip
+CMD_VAR = has_keep_ip
+RUNTIME =
+HELP    = Attempt to keep VLAN1 IP setup.
+BYWORD = keep-ip : Option
+
+! force
+CMD_VAR = has_force
+RUNTIME =
+HELP    = Force reload of defaults on remote session.
+BYWORD = force : Option
+
+VARIABLE_BEGIN
+    ulong          flags;
+    mesa_rc        rc;
+    mesa_restart_t restart_type;
+    const char     *restart_text;
+    bool           is_remote = false;
+    i32            icli_rc;
+VARIABLE_END
+
+CODE_BEGIN
+    /* Note: Although we use the keyword 'cold' we actually perform a 'cool'
+     *       restart. The net result to the end user is the same; it is similar
+     *       to a power cycle.
+     */
+
+    if (has_defaults) {
+        // If we are in a sub-configuration mode (e.g. "interface vlan X") and
+        // that sub-configuration mode doesn't exist after we have made a "do
+        // reload defaults", bad things may happen if we try to exit or change
+        // it, so we better go back to EXEC mode (level 0).
+        // The following function returns the level after invocation and a
+        // negative value for error.
+        while ((icli_rc = icli_session_mode_exit(session_id)) > 0) {
+            // Do nothing
+        }
+
+        if (icli_rc < 0) {
+            ICLI_PRINTF("%% Warning: Failed to go to EXEC mode\n");
+            return icli_rc;
+        }
+
+        is_remote = icfg_is_remote_session(session_id);
+
+        // Check if this session is on a remote host
+        if (is_remote && !has_force) {
+            ICLI_PRINTF("%% Warning: Reloading defaults on remote session will terminate session!\n");
+            ICLI_PRINTF("%% Use the 'force' option to do it anyway.\n");
+            return ICLI_RC_ERROR;
+        }
+
+        flags = has_keep_ip ? INIT_CMD_PARM2_FLAGS_IP : 0;
+
+        if (is_remote) {
+            ICLI_PRINTF("%% Reloading defaults%s. Closing session.\n", has_keep_ip ? ", attempting to keep VLAN 1 IP address" : "");
+            // AA-11171: Hand over the job to the main thread as the reset would
+            // otherwise try to inactivate the remote session while the session is
+            // executing, aka. "Cutting Off the Branch You're Sitting On".
+            control_config_reset_async(VTSS_USID_ALL, flags);
+        } else {
+            // This is the local console which can handle the reset on its own.
+            ICLI_PRINTF("%% Reloading defaults%s. Please stand by.\n", has_keep_ip ? ", attempting to keep VLAN 1 IP address" : "");
+            control_config_reset(VTSS_USID_ALL, flags);
+            icfg_commit_complete_wait();
+        }
+
+    } else {
+        restart_type = has_cold ? MESA_RESTART_COOL : MESA_RESTART_WARM;
+        restart_text = has_cold ? "Cold" : "Warm";
+
+        ICLI_PRINTF("%% %s reload in progress, please stand by.\n", restart_text);
+        rc = control_system_reset(TRUE, VTSS_USID_ALL, restart_type);
+
+        if (rc) {
+            ICLI_PRINTF("%% %s reload failed! System is being updated by another process.\n", restart_text);
+        }
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+!==============================================================================
+!==============================================================================
+!
+! "show" commands
+!
+!==============================================================================
+!==============================================================================
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show running-config [ all-defaults ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_all_defaults
+
+HELP =
+HELP = ##HELP_RUN
+HELP = ##HELP_ALL_DEF
+
+VARIABLE_BEGIN
+    vtss_icfg_query_result_t res;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    ICLI_PRINTF("Building configuration...\n");
+    if (vtss_icfg_query_all(has_all_defaults, &res) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error in config synthesis.\n");
+    }
+    else {
+        print_query_result(session_id, &res);
+    }
+    vtss_icfg_free_query_result(&res);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show running-config feature <cword> [ all-defaults ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = feature_name
+CMD_VAR = has_all_defaults
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = fill_feature_list
+RUNTIME =
+
+HELP =
+HELP = ##HELP_RUN
+HELP = Show configuration for specific feature
+HELP = Name of feature
+HELP = ##HELP_ALL_DEF
+
+VARIABLE_BEGIN
+    vtss_icfg_query_result_t res;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    ICLI_PRINTF("Building configuration...\n");
+    if (vtss_icfg_query_feature(has_all_defaults, feature_name, &res) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error in config synthesis.\n");
+    }
+    else {
+        print_query_result(session_id, &res);
+    }
+    vtss_icfg_free_query_result(&res);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show running-config interface <port_type_list> [ all-defaults ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = list
+CMD_VAR = has_all_defaults
+
+HELP =
+HELP = ##HELP_RUN
+HELP = ##HELP_IFC
+HELP = List of ports
+HELP = ##HELP_ALL_DEF
+
+VARIABLE_BEGIN
+    vtss_icfg_query_request_t req;
+    vtss_icfg_query_result_t  res;
+    u32                       i, k;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    ICLI_PRINTF("Building configuration...\n");
+
+    if (vtss_icfg_init_query_result(0, &res) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error in config synthesis.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    req.all_defaults = has_all_defaults;
+    req.cmd_mode = ICLI_CMD_MODE_INTERFACE_PORT_LIST;
+
+    for (i = 0; i < list->cnt; ++i) {
+        req.instance_id.port           = list->switch_range[i];
+        req.instance_id.port.port_cnt  = 1;
+
+        for (k = 0; k < list->switch_range[i].port_cnt; ++k) {
+            req.instance_id.port.begin_port  = list->switch_range[i].begin_port  + k;
+            req.instance_id.port.begin_uport = list->switch_range[i].begin_uport + k;
+            req.instance_id.port.begin_iport = list->switch_range[i].begin_iport + k;
+            if (vtss_icfg_query_specific(&req, &res) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Error in config synthesis.\n");
+                vtss_icfg_free_query_result(&res);
+                return ICLI_RC_ERROR;
+            }
+        }
+    }
+
+    (void)vtss_icfg_printf(&res, "end\n");
+
+    print_query_result(session_id, &res);
+
+    vtss_icfg_free_query_result(&res);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show running-config interface vlan <vlan_list> [ all-defaults ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = list
+CMD_VAR = has_all_defaults
+
+HELP =
+HELP = ##HELP_RUN
+HELP = ##HELP_IFC
+HELP = ##HELP_VLAN
+HELP = ##HELP_VLAN_LIST
+HELP = ##HELP_ALL_DEF
+
+VARIABLE_BEGIN
+    vtss_icfg_query_request_t req;
+    vtss_icfg_query_result_t  res;
+    u32                       i;
+    u32                       k;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    ICLI_PRINTF("Building configuration...\n");
+
+    if (vtss_icfg_init_query_result(0, &res) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error in config synthesis.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    req.all_defaults = has_all_defaults;
+    req.cmd_mode = ICLI_CMD_MODE_INTERFACE_VLAN;
+
+    for (i = 0; i < list->cnt; ++i) {
+        for (k = list->range[i].min; k <= list->range[i].max; ++k) {
+            req.instance_id.vlan = k;
+            if (vtss_icfg_query_specific(&req, &res) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Error in config synthesis.\n");
+                vtss_icfg_free_query_result(&res);
+                return ICLI_RC_ERROR;
+            }
+        }
+    }
+
+    (void)vtss_icfg_printf(&res, "end\n");
+
+    print_query_result(session_id, &res);
+
+    vtss_icfg_free_query_result(&res);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show running-config vlan {[<vlan_list>]} [all-defaults]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = vlan_list
+CMD_VAR = has_all_defaults
+
+HELP =
+HELP = ##HELP_RUN
+HELP = ##HELP_VLAN
+HELP = ##HELP_VLAN_LIST
+HELP = ##HELP_ALL_DEF
+
+VARIABLE_BEGIN
+    vtss_icfg_query_request_t req;
+    vtss_icfg_query_result_t  res;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    ICLI_PRINTF("Building configuration...\n");
+
+    if (vtss_icfg_init_query_result(0, &res) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error in config synthesis.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    req.all_defaults = has_all_defaults;
+    req.cmd_mode     = ICLI_CMD_MODE_CONFIG_VLAN;
+
+    if (vlan_list) {
+        memcpy(&req.instance_id.vlan_list, vlan_list, sizeof(req.instance_id.vlan_list));
+    } else {
+        // All VLANs
+        req.instance_id.vlan_list.cnt = 1;
+        req.instance_id.vlan_list.range[0].min = VTSS_APPL_VLAN_ID_MIN;
+        req.instance_id.vlan_list.range[0].max = VTSS_APPL_VLAN_ID_MAX;
+    }
+
+    if (vtss_icfg_query_specific(&req, &res) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error in config synthesis.\n");
+        vtss_icfg_free_query_result(&res);
+        return ICLI_RC_ERROR;
+    }
+
+    (void)vtss_icfg_printf(&res, "end\n");
+
+    print_query_result(session_id, &res);
+
+    vtss_icfg_free_query_result(&res);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = show running-config line { console | vty } <range_list> [ all-defaults ]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = has_con
+CMD_VAR =
+CMD_VAR = list
+CMD_VAR = has_all_defaults
+
+HELP =
+HELP = ##HELP_RUN
+HELP = Show line settings
+HELP = Console
+HELP = VTY
+HELP = List of console/VTYs
+HELP = ##HELP_ALL_DEF
+
+VARIABLE_BEGIN
+    vtss_icfg_query_request_t req;
+    vtss_icfg_query_result_t  res;
+    u32                       i;
+    u32                       k;
+    u32                       max_sessions;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    if (has_con) {
+        if (list->type != ICLI_RANGE_TYPE_UNSIGNED  ||  list->u.ur.cnt != 1  ||  list->u.ur.range[0].min != 0  ||  list->u.ur.range[0].max != 0) {
+            ICLI_PRINTF("%% No such con, this system only has con 0\n");
+            return ICLI_RC_ERROR;
+        }
+    }
+    else {
+        max_sessions = icli_session_max_get();
+        for (i = 0; i < list->u.ur.cnt; ++i) {
+            if (list->type != ICLI_RANGE_TYPE_UNSIGNED                ||
+                list->u.ur.range[i].min >= max_sessions               ||
+                list->u.ur.range[i].max < list->u.ur.range[i].min  ||
+                list->u.ur.range[i].max >= max_sessions)
+            {
+                ICLI_PRINTF("%% Invalid vty index; valid range is 0-%u.\n", max_sessions - 1);
+                return ICLI_RC_ERROR;
+            }
+            else {
+                list->u.ur.range[i].min++;
+                list->u.ur.range[i].max++;
+            }
+        }
+    }
+
+    ICLI_PRINTF("Building configuration...\n");
+
+    if (vtss_icfg_init_query_result(0, &res) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Error in config synthesis.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    req.all_defaults = has_all_defaults;
+    req.cmd_mode = ICLI_CMD_MODE_CONFIG_LINE;
+
+    for (i = 0; i < list->u.ur.cnt; ++i) {
+        for (k = list->u.ur.range[i].min; k <= list->u.ur.range[i].max; ++k) {
+            req.instance_id.line = k;
+            if (vtss_icfg_query_specific(&req, &res) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% Error in config synthesis.\n");
+                vtss_icfg_free_query_result(&res);
+                return ICLI_RC_ERROR;
+            }
+        }
+    }
+
+    (void)vtss_icfg_printf(&res, "end\n");
+
+    print_query_result(session_id, &res);
+
+    vtss_icfg_free_query_result(&res);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+!==============================================================================
+!==============================================================================
+!
+! File system commands
+!
+!==============================================================================
+!==============================================================================
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = copy { startup-config | running-config | <url_file> } { startup-config | running-config | <url_file> } [ syntax-check ] [save-host-key] [ftp-active]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+RUNTIME =
+RUNTIME =
+RUNTIME =
+RUNTIME = icfg_runtime_url_file
+RUNTIME =
+RUNTIME =
+RUNTIME = icfg_runtime_url_file
+RUNTIME =
+RUNTIME = icfg_runtime_save_host_key
+RUNTIME = icfg_runtime_ftp_active
+
+CMD_VAR =
+CMD_VAR = has_src_startup_config
+CMD_VAR = has_src_running_config
+CMD_VAR = source_path
+CMD_VAR = has_dest_startup_config
+CMD_VAR = has_dest_running_config
+CMD_VAR = destination_path
+CMD_VAR = has_syntax_check
+CMD_VAR = has_save_host_key
+CMD_VAR = has_ftp_active
+
+BYWORD =
+BYWORD =
+BYWORD =
+BYWORD = usb:filename | flash:filename | <protocol>://[<username>[:<password>]@]<host>[:<port>][/<path>]/<file_name>
+BYWORD =
+BYWORD =
+BYWORD = usb:filename | flash:filename | <protocol>://[<username>[:<password>]@]<host>[:<port>][/<path>]/<file_name>
+BYWORD =
+BYWORD =
+BYWORD =
+
+HELP = ##HELP_COPY
+HELP = ##HELP_STARTUP
+HELP = ##HELP_RUN_CFG
+HELP = ##HELP_FLASH_REMOTEFILE
+HELP = ##HELP_STARTUP
+HELP = ##HELP_RUN_CFG
+HELP = ##HELP_FLASH_REMOTEFILE
+HELP = ##HELP_SYNTAX
+HELP = ##HELP_HOSTKEY
+HELP = ##HELP_FTP_ACTIVE
+
+VARIABLE_BEGIN
+    misc_url_parts_t         src_url, dest_url;
+    vtss_icfg_query_result_t buf       = { NULL, NULL };
+    BOOL                     load_ok   = FALSE;
+    BOOL                     save_ok   = FALSE;
+    BOOL                     syntax_ok = FALSE;
+    int                      rc        = ICLI_RC_ERROR;
+    vtss::remote_file_options_t transfer_options;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    if (!icfg_try_lock_io_mutex()) {
+        ICLI_PRINTF("%% Another load/save operation is already in progress, please try again later.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    transfer_options.ssh_save_host_keys = has_save_host_key;
+    transfer_options.ftp_active = has_ftp_active;
+
+    if (has_src_startup_config) {
+        static char s[] = "startup-config";
+        source_path = s;
+    }
+
+    if (has_dest_startup_config) {
+        static char s[] = "startup-config";
+        destination_path = s;
+    }
+
+    memset(&src_url, 0, sizeof(src_url));
+    memset(&dest_url, 0, sizeof(dest_url));
+
+    if (!has_src_running_config  &&  !decompose_url(session_id, "source ", source_path, &src_url)) {
+        goto out;
+    }
+
+    if (!has_dest_running_config  &&  !decompose_url(session_id, "destination ", destination_path, &dest_url)) {
+        goto out;
+    }
+
+    // Check for identical source and destination, i.e. one of
+    //   * running-config to running-config
+    //   * same protocol + path (covers flash:x to flash:x)
+    //   * same protocol + path + host
+    if (
+        (has_src_running_config  &&  has_dest_running_config)  ||
+        (
+         !strcmp(src_url.protocol, dest_url.protocol)  &&
+         !strcmp(src_url.path,     dest_url.path)      &&
+         !strcmp(src_url.host,     dest_url.host)
+        )
+       ) {
+        ICLI_PRINTF("%% Source and destination are identical; no copy done.\n");
+        goto out;
+    }
+
+    if (has_src_running_config) {
+        ICLI_PRINTF("Building configuration...\n");
+        load_ok = vtss_icfg_query_all(FALSE, &buf) == VTSS_RC_OK;
+        if (!load_ok) {
+            ICLI_PRINTF("%% Error in config synthesis.\n");
+        }
+    }
+    else {
+        load_ok = load_config(session_id, &buf, source_path, &src_url, transfer_options);
+    }
+
+    if (load_ok) {
+        syntax_ok = !has_syntax_check  ||  vtss_icfg_commit(session_id, source_path, TRUE, FALSE, &buf);
+        if (has_dest_running_config) {
+            if (!syntax_ok) {
+                ICLI_PRINTF("%% Configuration aborted.\n");
+            }
+            else {
+                save_ok = vtss_icfg_commit(session_id, source_path, FALSE, FALSE, &buf);
+            }
+        }
+        else {
+            if (!syntax_ok) {
+                ICLI_PRINTF("%% Save aborted.\n");
+            }
+            else {
+                save_ok = save_config(session_id, &buf, destination_path, &dest_url, transfer_options);
+            }
+        }
+        rc = save_ok ? ICLI_RC_OK : ICLI_RC_ERROR;
+    }
+
+out:
+    vtss_icfg_free_query_result(&buf);
+    icfg_unlock_io_mutex();
+
+    return rc;
+/*lint -e{527} */
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = dir [usb]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+CMD_VAR = 
+CMD_VAR = is_usb
+
+RUNTIME =
+RUNTIME =
+
+! 1: dir
+! 2: usb
+
+HELP = Directory of all files in flash: file system
+HELP = 
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icfg_directory(session_id, FALSE, !is_usb);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = more <url_file> [save-host-key] [ftp-active]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME = icfg_runtime_url_file
+RUNTIME =
+RUNTIME =
+
+! 1: more
+! 2: <url_file>
+! 3: save-host-key
+! 4: ftp-active
+
+CMD_VAR =
+CMD_VAR = path
+CMD_VAR = has_save_host_key
+CMD_VAR = has_ftp_active
+
+HELP = Display file
+HELP = ##HELP_FLASH_REMOTEFILE
+HELP = ##HELP_HOSTKEY
+HELP = ##HELP_FTP_ACTIVE
+
+BYWORD =
+BYWORD = <url_file>
+
+VARIABLE_BEGIN
+    misc_url_parts_t         url;
+    vtss_icfg_query_result_t buf     = { NULL, NULL };
+    BOOL                     load_ok = FALSE;
+    vtss::remote_file_options_t transfer_options;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    if (!icfg_try_lock_io_mutex()) {
+        ICLI_PRINTF("%% A load/save operation is currently in progress, please try again later.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    transfer_options.ssh_save_host_keys = has_save_host_key;
+    transfer_options.ftp_active = has_ftp_active;
+
+    load_ok = decompose_url(session_id, "source ", path, &url)  &&
+              load_config(session_id, &buf, path, &url, transfer_options);
+
+    icfg_unlock_io_mutex();
+
+    if (load_ok) {
+        print_query_result(session_id, &buf);
+    }
+
+    vtss_icfg_free_query_result(&buf);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = delete <url_file>
+# COMMAND = delete [ /force ] <url_file>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME = icfg_runtime_url_file_del
+
+! 1: delete
+# ! 2: /force
+! 3: <path:word>
+
+CMD_VAR =
+# CMD_VAR = has_option_force
+CMD_VAR = path
+
+HELP = Delete one file in flash: file system
+# HELP = Don't prompt for verification
+HELP = ##HELP_FLASH
+
+BYWORD =
+# BYWORD =
+BYWORD = <Path : word>
+
+VARIABLE_BEGIN
+    misc_url_parts_t url;
+    int              rc = ICLI_RC_ERROR;
+    const char       *msg;
+VARIABLE_END
+
+CODE_BEGIN
+    ENSURE_PRIMARY_SWITCH();
+    if (!icfg_try_lock_io_mutex()) {
+        ICLI_PRINTF("%% A load/save operation is currently in progress, please try again later.\n");
+        return ICLI_RC_ERROR;
+    }
+
+    if (decompose_flash_or_usb_url(session_id, path, &url)) {
+        if ((msg = icfg_file_delete(url.path, url.is_flash())) == NULL) {
+            rc = VTSS_RC_OK;
+        } else {
+            ICLI_PRINTF("%% %s: Delete failed: %s\n", url.path, msg);
+        }
+    }
+
+    icfg_unlock_io_mutex();
+
+    return rc;
+/*lint -e{527} */
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = clear known-host-keys
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+RUNTIME =
+
+! 1: clear
+! 2: known-host-keys
+
+CMD_VAR =
+CMD_VAR = has_known_host_keys
+
+HELP =
+HELP = Clear the cache of known hosts SSH keys
+
+BYWORD =
+BYWORD =
+
+VARIABLE_BEGIN
+    int rc = ICLI_RC_ERROR;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_known_host_keys) {
+        if (vtss::remote_file_known_host_keys_delete()) {
+            rc = VTSS_RC_OK;
+        } else {
+            ICLI_PRINTF("%% Clearing host key cache failed!");
+        }
+    }
+    return rc;
+CODE_END
+
+CMD_END
+
+!==============================================================================
+!==============================================================================
+!==============================================================================
+! Debug commands
+!==============================================================================
+!==============================================================================
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug icfg wipe-flash-fs-conf-block
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##HELP_ICFG
+HELP      = Wipe FLASH file system block - destroys all read/write files!
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Destroying file system conf block. Reboot afterwards.\n");
+    (void) conf_sec_create(CONF_SEC_GLOBAL, CONF_BLK_OS_FILE_CONF, 0);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug icfg wipe-specific-block {local|global} <uint>
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      = ##HELP_ICFG
+HELP      = Wipe FLASH configuration block
+HELP      = Local section
+HELP      = Global section
+HELP      = Block number in section
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_local
+CMD_VAR   =
+CMD_VAR   = block
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Destroying %s conf block %d. Reboot afterwards.\n", (has_local ? "local" : "global"), block);
+    (void) conf_sec_create(has_local ? CONF_SEC_LOCAL : CONF_SEC_GLOBAL, (conf_blk_id_t)block, 0);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug icfg dir [usb]
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = is_usb
+
+RUNTIME =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_ICFG
+HELP = Directory of all files in flash: or usb: file system
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    (void) icfg_directory(session_id, TRUE, !is_usb);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug icfg error-trace <line>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_ICFG
+HELP = Generate error trace
+HELP = Line to add to trace
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = line
+
+VARIABLE_BEGIN
+VARIABLE_END
+
+CODE_BEGIN
+    T_E("Test error trace: %s", line);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 0
+
+COMMAND = debug icfg debug-trace <uint> <line>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_ENABLE | ICLI_CMD_PROP_VISIBLE | ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+RUNTIME =
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##HELP_ICFG
+HELP = Generate Debug trace
+HELP = Number of lines to add
+HELP = Line to add to trace
+
+CMD_VAR =
+CMD_VAR =
+CMD_VAR =
+CMD_VAR = cnt
+CMD_VAR = line
+
+VARIABLE_BEGIN
+    u32 i;
+VARIABLE_END
+
+CODE_BEGIN
+    for (i = 1; i <= cnt; i++) {
+        T_D("Test debug trace, %d: %s", i, line);
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+COMMAND   = debug icfg file table
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+IF_FLAG   =
+
+HELP      = ##ICLI_HELP_DEBUG
+
+VARIABLE_BEGIN
+    u32                             fileNo;
+    u32                             nextNo;
+    vtss_appl_icfg_file_entry_t     fileEntry;
+VARIABLE_END
+
+CODE_BEGIN
+
+    if ( vtss_appl_icfg_file_entry_itr(NULL, &fileNo) != VTSS_RC_OK ) {
+        return ICLI_RC_OK;
+    }
+
+    if ( vtss_appl_icfg_file_entry_get(fileNo, &fileEntry) != VTSS_RC_OK ) {
+        ICLI_PRINTF("Fail: vtss_appl_icfg_file_entry_get()\n");
+        return ICLI_RC_OK;
+    }
+
+    ICLI_PRINTF("FileNo: %u -> %s\nByte: %u\nTime: %s\nMode: %s\n",
+        fileNo, fileEntry.fileName, fileEntry.bytes,
+        fileEntry.modifiedTime, fileEntry.attribute);
+
+    while( vtss_appl_icfg_file_entry_itr(&fileNo, &nextNo) == VTSS_RC_OK ) {
+        fileNo = nextNo;
+        if ( vtss_appl_icfg_file_entry_get(fileNo, &fileEntry) != VTSS_RC_OK ) {
+            ICLI_PRINTF("Fail: vtss_appl_icfg_file_entry_get()\n");
+        } else {
+            ICLI_PRINTF("\nFileNo: %u -> %s\nByte: %u\nTime: %s\nMode: %s\n",
+                fileNo, fileEntry.fileName, fileEntry.bytes,
+                fileEntry.modifiedTime, fileEntry.attribute);
+        }
+    }
+
+CODE_END
+
+CMD_END
+
+!==============================================================================

@@ -1,0 +1,4129 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include <vtss/appl/cfm.hxx>        /* For vtss_appl_cfm_XXX()                   */
+#include "icli_cmd_func.h"          /* For icli_config_XXX()                     */
+#include "icli_porting_util.h"      /* For icli_port_info_txt()                  */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+#include "cfm_api.h"                /* For cfm_util_ma_format_to_str()           */
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include CFM's trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "cfm_trace.h"
+
+// Convert from mesa_rc to icli_rc. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define CFM_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// CFM_ICFG_global_conf()
+/******************************************************************************/
+static mesa_rc CFM_ICFG_global_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_icfg_conf_print_t                    conf_print;
+    vtss_appl_cfm_global_conf_t               global_conf, global_default_conf;
+    vtss_appl_cfm_organization_specific_tlv_t *tlv;
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+
+    VTSS_RC(vtss_appl_cfm_global_conf_default_get(&global_default_conf));
+    VTSS_RC(vtss_appl_cfm_global_conf_get(&global_conf));
+
+    conf_print.is_default = global_conf.sender_id_tlv_option == global_default_conf.sender_id_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "cfm sender-id-tlv", "%s", cfm_util_sender_id_tlv_option_to_str(global_conf.sender_id_tlv_option, false)));
+
+    conf_print.is_default = global_conf.port_status_tlv_option == global_default_conf.port_status_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "cfm port-status-tlv", "%s", cfm_util_tlv_option_to_str(global_conf.port_status_tlv_option, false)));
+
+    conf_print.is_default = global_conf.interface_status_tlv_option == global_default_conf.interface_status_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "cfm interface-status-tlv", "%s", cfm_util_tlv_option_to_str(global_conf.interface_status_tlv_option, false)));
+
+    conf_print.is_default = global_conf.organization_specific_tlv_option == global_default_conf.organization_specific_tlv_option;
+    if (req->all_defaults || !conf_print.is_default) {
+        if (global_conf.organization_specific_tlv_option == VTSS_APPL_CFM_TLV_OPTION_ENABLE) {
+            tlv = &global_conf.organization_specific_tlv;
+
+            // In this software, we only allow the value to be a printable ASCII
+            // string, so it's fine to use %s. Also, we have made sure that the
+            // string is NULL-terminated within the sizeof(tlv->value).
+            VTSS_RC(vtss_icfg_printf(result, "cfm organization-specific-tlv enable oui %02x-%02x-%02x subtype %hu value \"%s\"\n",
+                    tlv->oui[0],
+                    tlv->oui[1],
+                    tlv->oui[2],
+                    tlv->subtype,
+                    tlv->value));
+        } else {
+            VTSS_RC(vtss_icfg_printf(result, "cfm organization-specific-tlv disable\n"));
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// CFM_ICFG_mep_conf_print()
+// This function expects to have key.md, key.ma, and key.mepid filled in upon
+// invocation. It guarantees not to change these three members.
+/******************************************************************************/
+static mesa_rc CFM_ICFG_mep_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result, vtss_icfg_conf_print_t &conf_print, vtss_appl_cfm_rmep_key_t &key, vtss_appl_cfm_mep_conf_t &mep_conf, vtss_appl_cfm_mep_conf_t &mep_default_conf)
+{
+    vtss_appl_cfm_rmep_key_t next_rmep_key;
+    vtss_ifindex_elm_t       ife;
+    char                     buf[100];
+    mesa_rc                  rc;
+
+    // Format:
+    // mep <1-8192>
+    //  direction {up | down}
+    //  interface <if>
+    //  vlan {inherit | <1-4095>}
+    //  pcp <0-7>
+    //  [no] smac <mac-address>
+    //  remote mep <1-8192>
+    //  [no] continuity-check
+    //  alarm-level <1-6>
+    //  alarm-time-present <2500-10000>
+    //  alarm-time-absent  <2500-10000>
+    //  admin-state <enable|disable>
+    //  exit
+    VTSS_RC(vtss_icfg_printf(result, "  mep %u\n", key.mepid));
+
+    conf_print.is_default = mep_conf.direction == mep_default_conf.direction;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  direction", "%s", cfm_util_direction_to_str(mep_conf.direction, false)));
+
+    if ((rc = vtss_appl_ifindex_port_configurable(mep_conf.ifindex, &ife)) != VTSS_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to decompose ifindex %u", VTSS_IFINDEX_PRINTF_ARG(mep_conf.ifindex));
+        return rc;
+    }
+
+    conf_print.is_default = false;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  interface", "%s", icli_port_info_txt(ife.usid, iport2uport(ife.ordinal), buf)));
+
+    if (mep_conf.vlan != 0) {
+        sprintf(buf, "%u", mep_conf.vlan);
+    } else {
+        sprintf(buf, "inherit");
+    }
+
+    conf_print.is_default = mep_conf.vlan == mep_default_conf.vlan;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  vlan", "%s", buf));
+
+    conf_print.is_default = mep_conf.pcp == mep_default_conf.pcp;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  pcp", "%u", mep_conf.pcp));
+
+    // Cannot use vtss_icfg_conf_print() when we are in a sub-sub mode, since
+    // a possible "no" will be put in column 2, and not column 4.
+    conf_print.is_default = memcmp(&mep_conf.smac, &mep_default_conf.smac, sizeof(mep_conf.smac)) == 0;
+    if (req->all_defaults || !conf_print.is_default) {
+        if (conf_print.is_default) {
+            VTSS_RC(vtss_icfg_printf(result, "   no smac\n"));
+        } else {
+            VTSS_RC(vtss_icfg_printf(result, "   smac %s\n", misc_mac_txt(mep_conf.smac.addr, buf)));
+        }
+    }
+
+    // Remote MEPIDs. The last argument to the iterator tells the function not
+    // to return RMEPIDs for other MEPs than the one we are currently
+    // processing.
+    key.rmepid = 0;
+    while (vtss_appl_cfm_rmep_itr(&key, &next_rmep_key, true) == VTSS_RC_OK) {
+        key.rmepid = next_rmep_key.rmepid;
+        VTSS_RC(vtss_icfg_printf(result, "   remote mep %u\n", key.rmepid));
+    }
+
+    conf_print.is_default = mep_conf.ccm_enable == mep_default_conf.ccm_enable;
+    if (req->all_defaults || !conf_print.is_default) {
+        VTSS_RC(vtss_icfg_printf(result, "   %scontinuity-check\n", conf_print.is_default ? "no " : ""));
+    }
+
+    conf_print.is_default = mep_conf.alarm_level == mep_default_conf.alarm_level;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  alarm-level", "%u", mep_conf.alarm_level));
+
+    conf_print.is_default = mep_conf.alarm_time_present_ms == mep_default_conf.alarm_time_present_ms;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  alarm-time-present", "%u", mep_conf.alarm_time_present_ms));
+
+    conf_print.is_default = mep_conf.alarm_time_absent_ms == mep_default_conf.alarm_time_absent_ms;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  alarm-time-absent", "%u", mep_conf.alarm_time_absent_ms));
+
+    conf_print.is_default = mep_conf.admin_active == mep_default_conf.admin_active;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "  admin-state", "%s", mep_conf.admin_active ? "enable" : "disable"));
+
+    // Prevent subsequent real "interface" commands from being interpreted as
+    // MEP interface commands.
+    VTSS_RC(vtss_icfg_printf(result, "   exit\n"));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// CFM_ICFG_ma_conf_print()
+// This function expects to have key.md and key.ma filled in upon invocation.
+// It guarantees not to change these three members.
+/******************************************************************************/
+static mesa_rc CFM_ICFG_ma_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result, vtss_icfg_conf_print_t &conf_print, vtss_appl_cfm_rmep_key_t &key, vtss_appl_cfm_ma_conf_t &ma_conf, vtss_appl_cfm_ma_conf_t &ma_default_conf, vtss_appl_cfm_mep_conf_t &mep_default_conf)
+{
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  next_mep_key;
+    uint16_t                 shortint;
+    char                     buf[10 + sizeof(ma_conf.name)];
+
+    // Format:
+    // service <name>
+    //  format {string <string1-45> | integer <0-65535> | primary-vid | icc <string13-13> | icc-cc <string15-15>}
+    //  type {port | vlan <1-4095>}
+    //  continuity-check interval {3.3ms | 10ms | 100ms | 1s | 10s | 1min | 10min}
+    //  sender-id-tlv {disable | chassis | management | chassis-management | defer}
+    //  port-status-tlv {disable | enable | defer}
+    //  interface-status-tlv {disable | enable | defer}
+    //  organization-specific-tlv {disable | defer} # Cannot be enabled, because the conf is held in the global configuration, which may be disabled.
+    VTSS_RC(vtss_icfg_printf(result, " service %s\n", key.ma.c_str()));
+
+    switch (ma_conf.format) {
+    case VTSS_APPL_CFM_MA_FORMAT_TWO_OCTET_INTEGER:
+        shortint = (uint8_t)ma_conf.name[0] << 8 | (uint8_t)ma_conf.name[1];
+        sprintf(buf, " %hu", shortint);
+        break;
+
+    case VTSS_APPL_CFM_MA_FORMAT_PRIMARY_VID:
+        buf[0] = '\0';
+        break;
+
+    case VTSS_APPL_CFM_MA_FORMAT_STRING:
+    case VTSS_APPL_CFM_MA_FORMAT_Y1731_ICC:
+    case VTSS_APPL_CFM_MA_FORMAT_Y1731_ICC_CC:
+        sprintf(buf, " \"%s\"", ma_conf.name);
+        break;
+
+    default:
+        T_EG(CFM_TRACE_GRP_ICLI, "Unsupported maintenance association format (%d)", ma_conf.format);
+        return VTSS_APPL_CFM_RC_INTERNAL_ERROR;
+    }
+
+    // Have to use memcmp(), because ma_conf.name can be binary.
+    conf_print.is_default = ma_conf.format == ma_default_conf.format && memcmp(ma_conf.name, ma_default_conf.name, sizeof(ma_conf.name)) == 0;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, " format", "%s%s", cfm_util_ma_format_to_str(ma_conf.format, true), buf));
+
+    conf_print.is_default = ma_conf.vlan == ma_default_conf.vlan;
+    if (ma_conf.vlan == 0) {
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, " type", "port"));
+    } else {
+        VTSS_RC(vtss_icfg_conf_print(&conf_print, " type", "vlan %u", ma_conf.vlan));
+    }
+
+    conf_print.is_default = ma_conf.ccm_interval == ma_default_conf.ccm_interval;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, " continuity-check interval", "%s", cfm_util_ccm_interval_to_str(ma_conf.ccm_interval)));
+
+    conf_print.is_default = ma_conf.sender_id_tlv_option == ma_default_conf.sender_id_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, " sender-id-tlv", "%s", cfm_util_sender_id_tlv_option_to_str(ma_conf.sender_id_tlv_option, false)));
+
+    conf_print.is_default = ma_conf.port_status_tlv_option == ma_default_conf.port_status_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, " port-status-tlv", "%s", cfm_util_tlv_option_to_str(ma_conf.port_status_tlv_option, false)));
+
+    conf_print.is_default = ma_conf.interface_status_tlv_option == ma_default_conf.interface_status_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, " interface-status-tlv", "%s", cfm_util_tlv_option_to_str(ma_conf.interface_status_tlv_option, false)));
+
+    conf_print.is_default = ma_conf.organization_specific_tlv_option == ma_default_conf.organization_specific_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, " organization-specific-tlv", "%s", cfm_util_tlv_option_to_str(ma_conf.organization_specific_tlv_option, false)));
+
+    // Loop through all MEPs within this MA
+    // The last argument to the iterator tells the function not to return
+    // MEPIDs for other MEPs than the one we are currently processing.
+    key.mepid = 0;
+    while (vtss_appl_cfm_mep_itr(&key, &next_mep_key, true) == VTSS_RC_OK) {
+        key.mepid = next_mep_key.mepid;
+        VTSS_RC(vtss_appl_cfm_mep_conf_get(key, &mep_conf));
+        VTSS_RC(CFM_ICFG_mep_conf_print(req, result, conf_print, key, mep_conf, mep_default_conf));
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// CFM_ICFG_md_conf_print()
+/******************************************************************************/
+static mesa_rc CFM_ICFG_md_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_icfg_conf_print_t   conf_print;
+    vtss_appl_cfm_md_conf_t  md_conf, md_default_conf;
+    vtss_appl_cfm_ma_conf_t  ma_conf, ma_default_conf;
+    vtss_appl_cfm_mep_conf_t mep_default_conf;
+    vtss_appl_cfm_rmep_key_t key;
+    vtss_appl_cfm_ma_key_t   next_ma_key;
+    char                     buf[10 + sizeof(md_conf.name)];
+
+    if (req->cmd_mode != ICLI_CMD_MODE_CFM_MD) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Invalid cmd_mode (%d). Expected %d", req->cmd_mode, ICLI_CMD_MODE_CFM_MD);
+        return VTSS_RC_OK;
+    }
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+
+    key.md = req->instance_id.string;
+
+    VTSS_RC(vtss_appl_cfm_md_conf_default_get(&md_default_conf));
+    VTSS_RC(vtss_appl_cfm_ma_conf_default_get(&ma_default_conf));
+    VTSS_RC(vtss_appl_cfm_mep_conf_default_get(&mep_default_conf));
+    VTSS_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+
+    switch (md_conf.format) {
+    case VTSS_APPL_CFM_MD_FORMAT_NONE:
+        buf[0] = '\0';
+        break;
+
+    case VTSS_APPL_CFM_MD_FORMAT_STRING:
+        sprintf(buf, " \"%s\"", md_conf.name);
+        break;
+
+    default:
+        T_E("Unsupported MD format (%d)", md_conf.format);
+        return VTSS_RC_ERROR;
+    }
+
+    conf_print.is_default = md_conf.format == md_default_conf.format && strcmp(md_conf.name, md_default_conf.name) == 0;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "format", "%s%s", cfm_util_md_format_to_str(md_conf.format, false), buf));
+
+    conf_print.is_default = md_conf.level == md_default_conf.level;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "level", "%u", md_conf.level));
+
+    conf_print.is_default = md_conf.sender_id_tlv_option == md_default_conf.sender_id_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "sender-id-tlv", "%s", cfm_util_sender_id_tlv_option_to_str(md_conf.sender_id_tlv_option, false)));
+
+    conf_print.is_default = md_conf.port_status_tlv_option == md_default_conf.port_status_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "port-status-tlv", "%s", cfm_util_tlv_option_to_str(md_conf.port_status_tlv_option, false)));
+
+    conf_print.is_default = md_conf.interface_status_tlv_option == md_default_conf.interface_status_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "interface-status-tlv", "%s", cfm_util_tlv_option_to_str(md_conf.interface_status_tlv_option, false)));
+
+    conf_print.is_default = md_conf.organization_specific_tlv_option == md_default_conf.organization_specific_tlv_option;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "organization-specific-tlv", "%s", cfm_util_tlv_option_to_str(md_conf.organization_specific_tlv_option, false)));
+
+    // Loop through all MAs within this MD.
+    // The last argument to the iterator tells the function not to return
+    // MAs for other MDs than the one we are currently processing.
+    key.ma = "";
+    while (vtss_appl_cfm_ma_itr(&key, &next_ma_key, true) == VTSS_RC_OK) {
+        key.ma = next_ma_key.ma;
+        VTSS_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+        VTSS_RC(CFM_ICFG_ma_conf_print(req, result, conf_print, key, ma_conf, ma_default_conf, mep_default_conf));
+    }
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// cfm_icfg_init()
+/******************************************************************************/
+mesa_rc cfm_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_CFM_GLOBAL, "cfm", CFM_ICFG_global_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_CFM_MD,     "cfm", CFM_ICFG_md_conf_print));
+
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+/******************************************************************************/
+// CFM_ICLI_md_name_get()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_md_name_get(i32 session_id, vtss_appl_cfm_md_key_t &key)
+{
+    icli_variable_value_t v;
+    icli_rc_t             icli_rc;
+
+    // Since this function may be called from different modes (both
+    // ICLI_CMD_MODE_CFM_MD and ICLI_CMD_MODE_CFM_MA), we use a specially
+    // designed ICLI function that takes the mode from which we need the
+    // mode_var, which in our case is the md_name. The '2' in the call is the
+    // 0-based position of the md_name in the ICLI command
+    // 'cfm domain <md_name>'.
+    if ((icli_rc = (icli_rc_t)icli_session_cmd_value_from_mode_get(session_id, 2, ICLI_CMD_MODE_CFM_MD, &v)) != ICLI_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get md_name");
+        return icli_rc;
+    }
+
+    key.md = v.u.u_range_kword;
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_name_get()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_ma_name_get(i32 session_id, vtss_appl_cfm_ma_key_t &key)
+{
+    icli_variable_value_t v; /* 2568 bytes */
+    icli_rc_t             icli_rc;
+
+    // Fill in key.md
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+
+    // The '1' in the call is the 0-based position of the ma_name in the ICLI
+    // command 'service <ma_name>'.
+    if ((icli_rc = (icli_rc_t)icli_session_cmd_value_from_mode_get(session_id, 1, ICLI_CMD_MODE_CFM_MA, &v)) != ICLI_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get ma_name");
+        return icli_rc;
+    }
+
+    key.ma = v.u.u_range_kword;
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_mep_instances_get()
+/******************************************************************************/
+static BOOL CFM_ICLI_mep_instances_get(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_cfm_mep_key_t prev_mep_key, mep_key;
+    uint32_t                cnt;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if (CFM_ICLI_ma_name_get(session_id, prev_mep_key) != ICLI_RC_OK) {
+        return FALSE;
+    }
+
+    // Add the default range first.
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[cnt].min = 1;
+    runtime->range.u.ur.range[cnt].max = 8191;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    prev_mep_key.mepid = 0;
+
+    // Loop through all MEPs within this MA (last argument is true)
+    while (vtss_appl_cfm_mep_itr(&prev_mep_key, &mep_key, true) == VTSS_RC_OK) {
+        prev_mep_key = mep_key;
+        runtime->range.u.ur.range[cnt].min = mep_key.mepid;
+        runtime->range.u.ur.range[cnt].max = mep_key.mepid;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_enter()
+// Returns an icli_rc.
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_ma_enter(i32 session_id, char *ma_name)
+{
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  ma_key;
+    icli_cmd_mode_t         cmd_mode;
+    mesa_rc                 rc;
+    icli_rc_t               icli_rc;
+
+    // This function may be called in both ICLI_CMD_MODE_CFM_MD,
+    // ICLI_CMD_MODE_CFM_MA, and ICLI_CMD_MODE_CFM_MEP.
+    // In either mode, we need to pop command modes until we reach
+    // ICLI_CMD_MODE_CFM_MD.
+    while (1) {
+        if ((icli_rc = (icli_rc_t)vtss_icli_session_mode_para_get(session_id, &cmd_mode, NULL)) != ICLI_RC_OK) {
+            T_EG(CFM_TRACE_GRP_ICLI, "Unable to get current command mode");
+            return icli_rc;
+        }
+
+        T_IG(CFM_TRACE_GRP_ICLI, "Current mode = %d. Looking for %d", cmd_mode, ICLI_CMD_MODE_CFM_MD);
+
+        if (cmd_mode == ICLI_CMD_MODE_CFM_MD) {
+            break;
+        }
+
+        // Pop mode, that is, go down one level. Return value is new level.
+        if (icli_session_mode_exit(session_id) <= 0) {
+            T_EG(CFM_TRACE_GRP_ICLI, "Failed to exit current mode.");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, ma_key));
+
+    ma_key.ma = ma_name;
+    T_IG(CFM_TRACE_GRP_ICLI, "MD::MA = %s", ma_key);
+
+    if ((rc = vtss_appl_cfm_ma_conf_get(ma_key, &ma_conf)) == VTSS_APPL_CFM_RC_NO_SUCH_INSTANCE) {
+        // Get default MA conf
+        if ((rc = vtss_appl_cfm_ma_conf_default_get(&ma_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        if ((rc = vtss_appl_cfm_ma_conf_set(ma_key, &ma_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else {
+        switch (rc) {
+        case VTSS_APPL_CFM_RC_INVALID_NAME_KEY_CONTENTS:
+        case VTSS_APPL_CFM_RC_INVALID_NAME_KEY_CONTENTS_COLON:
+        case VTSS_APPL_CFM_RC_INVALID_NAME_KEY_CONTENTS_ALL:
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+
+        default:
+            // Assert that this MA has already been created.
+            if (rc != VTSS_RC_OK) {
+                T_E("Internal error: MA name %s NOT already created: %s", ma_key, error_txt(rc));
+                return ICLI_RC_ERROR;
+            }
+        }
+    }
+
+    // Go to CFM MA submode
+    BOOL _sub_submode_enter(u32 session_id, icli_cmd_mode_t mode);
+    if (_sub_submode_enter(session_id, ICLI_CMD_MODE_CFM_MA) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter cfm-dmn-svc sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_y1731_formats_present()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_y1731_formats_present(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_ma_key_t  ma_key;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if (CFM_ICLI_ma_name_get(session_id, ma_key) != ICLI_RC_OK) {
+        return FALSE;
+    }
+
+    T_IG(CFM_TRACE_GRP_ICLI, "%s", ma_key);
+
+    // The keyword the caller is asking for is only present when the
+    // encompassing MD's configuration's format variable is
+    // VTSS_APPL_CFM_MD_FORMAT_NONE.
+    if (vtss_appl_cfm_md_conf_get(ma_key, &md_conf) != VTSS_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get the MD configuration for %s", ma_key);
+        runtime->present = TRUE;
+        return TRUE;
+    }
+
+    runtime->present = md_conf.format == VTSS_APPL_CFM_MD_FORMAT_NONE;
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, vtss_appl_cfm_ccm_interval_t interval)
+{
+    vtss_appl_cfm_capabilities_t cap;
+    mesa_rc                      rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_cfm_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get CFM capabilities (%s)", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->present = interval >= cap.ccm_interval_min && interval <= cap.ccm_interval_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval_300hz()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval_300hz(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return CFM_ICLI_ma_has_ccm_interval(session_id, ask, runtime, VTSS_APPL_CFM_CCM_INTERVAL_300HZ);
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval_10ms()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval_10ms(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return CFM_ICLI_ma_has_ccm_interval(session_id, ask, runtime, VTSS_APPL_CFM_CCM_INTERVAL_10MS);
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval_100ms()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval_100ms(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return CFM_ICLI_ma_has_ccm_interval(session_id, ask, runtime, VTSS_APPL_CFM_CCM_INTERVAL_100MS);
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval_1s()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval_1s(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return CFM_ICLI_ma_has_ccm_interval(session_id, ask, runtime, VTSS_APPL_CFM_CCM_INTERVAL_1S);
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval_10s()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval_10s(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return CFM_ICLI_ma_has_ccm_interval(session_id, ask, runtime, VTSS_APPL_CFM_CCM_INTERVAL_10S);
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval_1min()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval_1min(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return CFM_ICLI_ma_has_ccm_interval(session_id, ask, runtime, VTSS_APPL_CFM_CCM_INTERVAL_1MIN);
+}
+
+/******************************************************************************/
+// CFM_ICLI_ma_has_ccm_interval_10min()
+/******************************************************************************/
+static BOOL CFM_ICLI_ma_has_ccm_interval_10min(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return CFM_ICLI_ma_has_ccm_interval(session_id, ask, runtime, VTSS_APPL_CFM_CCM_INTERVAL_10MIN);
+}
+
+/******************************************************************************/
+// CFM_ICLI_has_vlan_meps()
+/******************************************************************************/
+static BOOL CFM_ICLI_has_vlan_meps(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_cfm_capabilities_t cap;
+    mesa_rc                      rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_cfm_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get CFM capabilities (%s)", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->present = cap.has_vlan_meps;
+    return TRUE;
+}
+
+/******************************************************************************/
+// CFM_ICLI_mep_enter()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_mep_enter(i32 session_id, vtss_appl_cfm_mepid_t mepid)
+{
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+    icli_cmd_mode_t          cmd_mode;
+    icli_variable_value_t    v;
+    mesa_rc                  rc;
+    icli_rc_t                icli_rc;
+
+    // This function may be called in both ICLI_CMD_MODE_CFM_MA and
+    // ICLI_CMD_MODE_CFM_MEP. Pop command modes until we reach
+    // ICLI_CMD_MODE_CFM_MA.
+    while (1) {
+        if ((icli_rc = (icli_rc_t)vtss_icli_session_mode_para_get(session_id, &cmd_mode, NULL)) != ICLI_RC_OK) {
+            T_EG(CFM_TRACE_GRP_ICLI, "Unable to get current command mode");
+            return icli_rc;
+        }
+
+        if (cmd_mode == ICLI_CMD_MODE_CFM_MA) {
+            break;
+        }
+
+        // Pop mode, that is, go down one level. Return value is new level.
+        if (icli_session_mode_exit(session_id) <= 0) {
+            T_EG(CFM_TRACE_GRP_ICLI, "Failed to exit current mode.");
+            return ICLI_RC_ERROR;
+        }
+    }
+
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, mep_key));
+
+    // Get the ma_name, which is the first 0-based parameter in the ICLI
+    // command 'service <ma_name>.
+    if ((icli_rc = (icli_rc_t)icli_session_cmd_value_from_mode_get(session_id, 1, ICLI_CMD_MODE_CFM_MA, &v)) != ICLI_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get ma_name");
+        return icli_rc;
+    }
+
+    mep_key.ma    = v.u.u_range_kword;
+    mep_key.mepid = mepid;
+    T_IG(CFM_TRACE_GRP_ICLI, "MD::MA::mepid = %s", mep_key);
+
+    if ((rc = vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf)) == VTSS_APPL_CFM_RC_NO_SUCH_INSTANCE) {
+        // MEP not already created. Get default MEP conf
+        if ((rc = vtss_appl_cfm_mep_conf_default_get(&mep_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+
+        if ((rc = vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf)) != VTSS_RC_OK) {
+            ICLI_PRINTF("%% %s\n", error_txt(rc));
+            return ICLI_RC_ERROR;
+        }
+    } else if (rc != VTSS_RC_OK) {
+        // Something went wrong.
+        T_EG(CFM_TRACE_GRP_ICLI, "Internal error: Unable to get MEP conf for %s: %s", mep_key, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    // Go to CFM MEP submode
+    BOOL _sub_submode_enter(u32 session_id, icli_cmd_mode_t mode);
+    if (_sub_submode_enter(session_id, ICLI_CMD_MODE_CFM_MEP) == FALSE) {
+        ICLI_PRINTF("%% Unable to enter cfm-dmn-svc-mep sub mode\n");
+        return ICLI_RC_ERROR;
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_mep_supports_up()
+/******************************************************************************/
+static BOOL CFM_ICLI_mep_supports_up(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_cfm_capabilities_t cap;
+    mesa_rc                      rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_cfm_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get CFM capabilities (%s)", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->present = cap.has_up_meps;
+    return TRUE;
+}
+
+/******************************************************************************/
+// CFM_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_show_capabilities(u32 session_id)
+{
+    vtss_appl_cfm_capabilities_t cap;
+    const int                    cap_width = 33;
+
+    CFM_PRINT_RC(vtss_appl_cfm_capabilities_get(&cap));
+
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Domain count:",                cap.md_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Service within Domain count:", cap.ma_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. port MEP count:",              cap.mep_cnt_port_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. VLAN/Service MEP count:",      cap.mep_cnt_service_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Remote MEPs per MEP count:",   cap.rmep_cnt_max);
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Min. CCM interval:",                cfm_util_ccm_interval_to_str(cap.ccm_interval_min));
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Max. CCM interval:",                cfm_util_ccm_interval_to_str(cap.ccm_interval_max));
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports MIPs:",                    cap.has_mips             ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Supports Up-MEPs:",                 cap.has_up_meps          ? "Yes" : "No");
+    ICLI_PRINTF("%-*s %s\n", cap_width, "Arch. has shared MEG level:",       cap.has_shared_meg_level ? "Yes" : "No");
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_show_domains()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_show_domains(u32 session_id, vtss_appl_cfm_md_key_t &requested_key, bool details)
+{
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_ma_key_t  prev_key, key;
+    char                    name_buf[10 + sizeof(md_conf.name)];
+    uint32_t                service_cnt;
+    bool                    first_md = true, first_ma, first_print = true;
+    const int               md_width = 26;
+
+    while (vtss_appl_cfm_md_itr(first_md ? NULL : &prev_key, &key) == VTSS_RC_OK) {
+        first_md = false;
+        prev_key = key;
+
+        if (requested_key.md != "" && key.md != requested_key.md) {
+            continue;
+        }
+
+        CFM_PRINT_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+
+        if (first_print) {
+            first_print = false;
+
+            if (!details) {
+                ICLI_PRINTF("Domain          Services Level Format Name\n");
+                ICLI_PRINTF("--------------- -------- ----- ------ ------------------------------------------\n");
+            }
+        } else if (details) {
+            // Not first print, but separate from previous detailed domain
+            ICLI_PRINTF("\n--------------------------------------------------------------------------------\n\n");
+        }
+
+        switch (md_conf.format) {
+        case VTSS_APPL_CFM_MD_FORMAT_NONE:
+            sprintf(name_buf, "<N/A>");
+            break;
+
+        case VTSS_APPL_CFM_MD_FORMAT_STRING:
+            sprintf(name_buf, "\"%s\"", md_conf.name);
+            break;
+
+        default:
+            T_EG(CFM_TRACE_GRP_ICLI, "Unsupported domain format (%d)", md_conf.format);
+            return ICLI_RC_ERROR;
+        }
+
+        if (details) {
+            ICLI_PRINTF("%-*s %s\n", md_width, "Domain:",                    key.md.c_str());
+            ICLI_PRINTF("%-*s %s\n", md_width, "Format:",                    cfm_util_md_format_to_str(md_conf.format, true));
+            ICLI_PRINTF("%-*s %u\n", md_width, "Level:",                     md_conf.level);
+            ICLI_PRINTF("%-*s %s\n", md_width, "Name:",                      name_buf);
+            ICLI_PRINTF("%-*s %s\n", md_width, "Sender-ID TLV:",             cfm_util_sender_id_tlv_option_to_str(md_conf.sender_id_tlv_option, true));
+            ICLI_PRINTF("%-*s %s\n", md_width, "Port Status TLV:",           cfm_util_tlv_option_to_str(md_conf.port_status_tlv_option, true));
+            ICLI_PRINTF("%-*s %s\n", md_width, "Interface Status TLV:",      cfm_util_tlv_option_to_str(md_conf.interface_status_tlv_option, true));
+            ICLI_PRINTF("%-*s %s\n", md_width, "Organization-Specific TLV:", cfm_util_tlv_option_to_str(md_conf.organization_specific_tlv_option, true));
+            ICLI_PRINTF("%-*s ",     md_width, "Services:");
+
+            service_cnt = 0;
+            prev_key.ma = "";
+            first_ma    = true;
+            while (vtss_appl_cfm_ma_itr(&prev_key, &key, true) == VTSS_RC_OK) {
+                prev_key = key;
+
+                ICLI_PRINTF("%s%s", first_ma ? "" : ", ", key.ma.c_str());
+                first_ma = false;
+                service_cnt++;
+            }
+
+            ICLI_PRINTF("%s\n", service_cnt ? "" : "<None>");
+        } else {
+            // Count number of services in this MD
+            service_cnt  = 0;
+            prev_key.ma  = "";
+
+            // The 'true' tells the iterator to stop before iterating into
+            // another MD.
+            while (vtss_appl_cfm_ma_itr(&prev_key, &key, true) == VTSS_RC_OK) {
+                prev_key = key;
+                service_cnt++;
+            }
+
+            ICLI_PRINTF("%-15s %8u %5u %-6s %s\n",
+                        key.md.c_str(),
+                        service_cnt,
+                        md_conf.level,
+                        cfm_util_md_format_to_str(md_conf.format, true),
+                        name_buf);
+        }
+    }
+
+    ICLI_PRINTF("\n");
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_show_services()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_show_services(u32 session_id, vtss_appl_cfm_ma_key_t &requested_key, bool details)
+{
+    vtss_appl_cfm_ma_conf_t  ma_conf;
+    vtss_appl_cfm_mep_key_t  prev_key, key;
+    uint32_t                 mep_cnt;
+    uint16_t                 shortint;
+    char                     name_buf[10 + sizeof(ma_conf.name)], vlan_buf[12];
+    bool                     first_ma = true, first_mep, first_print = true;
+    const int                ma_width = 26;
+
+    while (vtss_appl_cfm_ma_itr(first_ma ? NULL : &prev_key, &key) == VTSS_RC_OK) {
+        first_ma = false;
+        prev_key = key;
+
+        if (requested_key.md != "" && key.md != requested_key.md) {
+            continue;
+        }
+
+        if (requested_key.ma != "" && key.ma != requested_key.ma) {
+            continue;
+        }
+
+        CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+
+        if (first_print) {
+            first_print = false;
+
+            if (!details) {
+                ICLI_PRINTF("Domain          Service         MEP Types VLAN MEPs Interval Format      Name\n");
+                ICLI_PRINTF("--------------- --------------- --------- ---- ---- -------- ----------- --------------------------\n");
+            }
+        } else if (details) {
+            // Not first print, but separate from previous detailed service
+            ICLI_PRINTF("\n--------------------------------------------------------------------------------\n\n");
+        }
+
+        switch (ma_conf.format) {
+        case VTSS_APPL_CFM_MA_FORMAT_TWO_OCTET_INTEGER:
+            shortint = (uint8_t)ma_conf.name[0] << 8 | (uint8_t)ma_conf.name[1];
+            sprintf(name_buf, "%hu", shortint);
+            break;
+
+        case VTSS_APPL_CFM_MA_FORMAT_PRIMARY_VID:
+            name_buf[0] = '\0';
+            break;
+
+        case VTSS_APPL_CFM_MA_FORMAT_STRING:
+        case VTSS_APPL_CFM_MA_FORMAT_Y1731_ICC:
+        case VTSS_APPL_CFM_MA_FORMAT_Y1731_ICC_CC:
+            sprintf(name_buf, "\"%s\"", ma_conf.name);
+            break;
+
+        default:
+            T_EG(CFM_TRACE_GRP_ICLI, "Unsupported maintenance association format (%d)", ma_conf.format);
+            return ICLI_RC_ERROR;
+        }
+
+        if (ma_conf.vlan == 0) {
+            // Port MEP. No primary VID.
+            strcpy(vlan_buf, "N/A");
+        } else {
+            sprintf(vlan_buf, "%u", ma_conf.vlan);
+        }
+
+        if (details) {
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Domain:",                    key.md.c_str());
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Service:",                   key.ma.c_str());
+            ICLI_PRINTF("%-*s %s\n", ma_width, "MEP Types:",                 ma_conf.vlan == 0 ? "Port MEPs" : "VLAN MEPs");
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Primary VID:",               vlan_buf);
+            ICLI_PRINTF("%-*s %s\n", ma_width, "CCM Interval",               cfm_util_ccm_interval_to_str(ma_conf.ccm_interval));
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Format:",                    cfm_util_ma_format_to_str(ma_conf.format, false));
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Name:",                      name_buf);
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Sender-ID TLV:",             cfm_util_sender_id_tlv_option_to_str(ma_conf.sender_id_tlv_option, true));
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Port Status TLV:",           cfm_util_tlv_option_to_str(ma_conf.port_status_tlv_option, true));
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Interface Status TLV:",      cfm_util_tlv_option_to_str(ma_conf.interface_status_tlv_option, true));
+            ICLI_PRINTF("%-*s %s\n", ma_width, "Organization-Specific TLV:", cfm_util_tlv_option_to_str(ma_conf.organization_specific_tlv_option, true));
+            ICLI_PRINTF("%-*s ",     ma_width, "MEP-IDs:");
+
+            mep_cnt        = 0;
+            prev_key.mepid = 0;
+            first_mep      = true;
+            while (vtss_appl_cfm_mep_itr(&prev_key, &key, true) == VTSS_RC_OK) {
+                prev_key = key;
+
+                ICLI_PRINTF("%s%u", first_mep ? "" : ", ", key.mepid);
+                first_mep = false;
+                mep_cnt++;
+            }
+
+            ICLI_PRINTF("%s\n", mep_cnt ? "" : "<None>");
+        } else {
+            // Count number of MEPs in this MA
+            mep_cnt        = 0;
+            prev_key.mepid = 0;
+
+            // The 'true' tells the iterator to stop before iterating into
+            // another MA.
+            while (vtss_appl_cfm_mep_itr(&prev_key, &key, true) == VTSS_RC_OK) {
+                prev_key = key;
+                mep_cnt++;
+            }
+
+            ICLI_PRINTF("%-15s %-15s %9s %4s %4u %-8s %-11s %s\n",
+                        key.md.c_str(),
+                        key.ma.c_str(),
+                        ma_conf.vlan == 0 ? "Port MEPs" : "VLAN MEPs",
+                        vlan_buf,
+                        mep_cnt,
+                        cfm_util_ccm_interval_to_str(ma_conf.ccm_interval),
+                        cfm_util_ma_format_to_str(ma_conf.format, false),
+                        name_buf);
+        }
+    }
+
+    ICLI_PRINTF("\n");
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_secs_to_str()
+/******************************************************************************/
+static char *CFM_ICLI_secs_to_str(uint64_t secs, char *str)
+{
+    uint64_t days, hours, mins;
+
+    days  = secs / 86400;
+    secs -= (days * 86400);
+    hours = secs / 3600;
+    secs -= (hours * 3600);
+    mins  = secs / 60;
+    secs -= (mins * 60);
+
+    if (days) {
+        sprintf(str, VPRI64u " day%s, " VPRI64u " hour%s, " VPRI64u " minute%s and " VPRI64u " second%s", days, days == 1 ? "" : "s", hours, hours == 1 ? "" : "s", mins, mins == 1 ? "" : "s", secs, secs == 1 ? "" : "s");
+    } else if (hours) {
+        sprintf(str, VPRI64u " hour%s, " VPRI64u " minute%s and " VPRI64u " second%s", hours, hours == 1 ? "" : "s", mins, mins == 1 ? "" : "s", secs, secs == 1 ? "" : "s");
+    } else if (mins) {
+        sprintf(str, VPRI64u " minute%s and " VPRI64u " second%s", mins, mins == 1 ? "" : "s", secs, secs == 1 ? "" : "s");
+    } else {
+        sprintf(str, VPRI64u " second%s", secs, secs == 1 ? "" : "s");
+    }
+
+    return str;
+}
+
+/******************************************************************************/
+// CFM_ICLI_oper_state_str_get()
+/******************************************************************************/
+static void CFM_ICLI_oper_state_str_get(vtss_appl_cfm_ma_conf_t &ma_conf, vtss_appl_cfm_mep_conf_t &mep_conf, vtss_appl_cfm_mep_status_t &mep_status, const char **oper_state_str1, const char **oper_state_str2, bool show_highest_defect)
+{
+    *oper_state_str2 = "";
+
+    if (!mep_conf.admin_active) {
+        *oper_state_str1 = "Administratively disabled";
+    } else if (!mep_status.errors.mep_creatable) {
+        // Highest order error: MEP uncreatable
+        *oper_state_str1 = "MEP Uncreatable: ";
+        *oper_state_str2 = cfm_util_mep_creatable_error_to_str(&mep_status.errors);
+    } else if (!mep_status.errors.enableRmepDefect) {
+        // Second highest order error: Remote MEP SM(s) not running
+        *oper_state_str1 = "RMEP SM error: ";
+        *oper_state_str2 = cfm_util_mep_enableRmepDefect_error_to_str(&ma_conf, &mep_conf, &mep_status.errors);
+    } else if (show_highest_defect && mep_status.highest_defect != VTSS_APPL_CFM_MEP_DEFECT_NONE) {
+        *oper_state_str1 = "Highest MEP defect: ";
+        *oper_state_str2 = cfm_util_mep_defect_to_str(mep_status.highest_defect);
+    } else {
+        *oper_state_str1 = "Active";
+    }
+}
+
+/******************************************************************************/
+// CFM_ICLI_show_meps()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_show_meps(u32 session_id, vtss_appl_cfm_mep_key_t &requested_mep_key, bool details)
+{
+    vtss_appl_cfm_ma_conf_t     ma_conf;
+    vtss_appl_cfm_mep_conf_t    mep_conf;
+    vtss_appl_cfm_mep_status_t  mep_status;
+    vtss_appl_cfm_rmep_status_t rmep_status;
+    vtss_appl_cfm_mep_key_t     prev_mep_key, mep_key;
+    vtss_appl_cfm_rmep_key_t    prev_rmep_key, rmep_key;
+    vtss_ifindex_elm_t          ife;
+    time_t                      now;
+    bool                        first_print = true, first_mep = true, print_as_hex;
+    char                        defects_buf[8], vlan_buf[30], mac_buf[18];
+    char                        interface_str[ICLI_PORTING_STR_BUF_SIZE];
+    char                        abs_time_str[100], rel_time_str[100];
+    char                        format_str[20];
+    size_t                      cnt;
+    const char                  *error_create_pre_str, *error_create_str, *error_create_post_str;
+    const char                  *error_rmep_pre_str,   *error_rmep_str,   *error_rmep_post_str;
+    const char                  *defect_pre_str,       *defect_str,       *defect_post_str;
+    const char                  *oper_state_str1, *oper_state_str2;
+    const int                   mep_width = 25;
+    int                         i;
+
+    while (vtss_appl_cfm_mep_itr(first_mep ? NULL : &prev_mep_key, &mep_key) == VTSS_RC_OK) {
+        first_mep    = false;
+        prev_mep_key = mep_key;
+
+        if (requested_mep_key.md != "" && mep_key.md != requested_mep_key.md) {
+            continue;
+        }
+
+        if (requested_mep_key.ma != "" && mep_key.ma != requested_mep_key.ma) {
+            continue;
+        }
+
+        if (requested_mep_key.mepid && mep_key.mepid != requested_mep_key.mepid) {
+            continue;
+        }
+
+        CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get   (mep_key, &ma_conf));
+        CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get  (mep_key, &mep_conf));
+        CFM_PRINT_RC(vtss_appl_cfm_mep_status_get(mep_key, &mep_status));
+
+        // Convert ifindex to something that ICLI can understand.
+        if (vtss_appl_ifindex_port_configurable(mep_conf.ifindex, &ife) != VTSS_RC_OK) {
+            T_EG(CFM_TRACE_GRP_ICLI, "MEP %s: Unable to decompose ifindex %u", mep_key, VTSS_IFINDEX_PRINTF_ARG(mep_conf.ifindex));
+            return ICLI_RC_ERROR;
+        }
+
+        if (first_print) {
+            first_print = false;
+
+            ICLI_PRINTF("Defect abbreviations (alarm level in parentheses):\n");
+            ICLI_PRINTF("R (1): someRDIdefect (RDI received from at least one remote MEP)\n");
+            ICLI_PRINTF("M (2): someMACstatusDefect (received Port Status TLV != psUp or Interface Status TLV != isUp)\n");
+            ICLI_PRINTF("C (3): someRMEPCCMdefect (valid CCM is not received within 3.5 times CCM interval from at least one remote MEP)\n");
+            ICLI_PRINTF("E (4): errorCCMdefect (received CCM from an unknown remote MEP-ID or CCM interval mismatch)\n");
+            ICLI_PRINTF("X (5): xconCCMdefect (received CCM with an MD/MEG level smaller than configured or wrong MAID/MEGID (cross-connect))\n\n");
+
+            if (!details) {
+                ICLI_PRINTF("Domain          Service         MEP-ID Dfcts Operational State\n");
+                ICLI_PRINTF("--------------- --------------- ------ ----- -----------------------------------------------\n");
+            }
+        } else if (details) {
+            // Not first print, but separate from previous detailed MEP
+            ICLI_PRINTF("\n--------------------------------------------------------------------------------\n\n");
+        }
+
+        if (mep_status.mep_active) {
+            (void)cfm_util_mep_defects_to_str(mep_status.defects, defects_buf);
+        } else {
+            defects_buf[0] = '\0';
+        }
+
+        if (details) {
+            (void)icli_port_info_txt_short(ife.usid, iport2uport(ife.ordinal), interface_str);
+
+            if (ma_conf.vlan == 0 && mep_conf.vlan == 0) {
+                strcpy(vlan_buf, "Untagged Port MEP");
+            } else {
+                sprintf(vlan_buf, "%s MEP on VLAN %u", ma_conf.vlan == 0 ? "Port" : "VLAN", mep_conf.vlan ? mep_conf.vlan : ma_conf.vlan);
+            }
+
+            if (!mep_conf.admin_active) {
+                error_create_str = "Administratively disabled";
+            } else {
+                error_create_str = cfm_util_mep_creatable_error_to_str(&mep_status.errors);
+            }
+
+            if (error_create_str[0] == '\0' && !mep_status.mep_active) {
+                T_EG(CFM_TRACE_GRP_ICLI, "MEP %s: Internal error: MEP is not active, but we don't know why", mep_key);
+                error_create_str = "Internal error. Check console";
+            }
+
+            if (error_create_str[0] == '\0') {
+                // MEP is created and active.
+                error_create_pre_str = "";
+                error_create_post_str = "";
+                error_rmep_str = cfm_util_mep_enableRmepDefect_error_to_str(&ma_conf, &mep_conf, &mep_status.errors);
+
+                if (error_rmep_str[0] == '\0' && !mep_status.errors.enableRmepDefect) {
+                    T_EG(CFM_TRACE_GRP_ICLI, "MEP %s: Internal error: RMEP SMs not active, but we don't know why", mep_key);
+                    error_rmep_str = "Internal error. Check console";
+                }
+            } else {
+                // MEP is not active or not created.
+                error_create_pre_str = " (";
+                error_create_post_str = ")";
+                error_rmep_str = "MEP not active";
+            }
+
+            if (mep_status.fng_state == VTSS_APPL_CFM_FNG_STATE_DEFECT_REPORTED || mep_status.fng_state == VTSS_APPL_CFM_FNG_STATE_DEFECT_CLEARING) {
+                defect_pre_str  = " (highest defect: ";
+                defect_post_str = ")";
+                defect_str = cfm_util_mep_defect_to_str(mep_status.highest_defect);
+            } else {
+                defect_pre_str  = "";
+                defect_post_str = "";
+                defect_str      = "";
+            }
+
+            if (error_rmep_str[0] == '\0') {
+                // Remote MEPs up and running (there might still be defects).
+                error_rmep_pre_str = "";
+                error_rmep_post_str = "";
+            } else {
+                // RMEP SMs not running.
+                error_rmep_pre_str = " (";
+                error_rmep_post_str = ")";
+            }
+
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "Domain:",                   mep_key.md.c_str());
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "Service:",                  mep_key.ma.c_str());
+            ICLI_PRINTF("%-*s %u\n",          mep_width, "MEP-ID:",                   mep_key.mepid);
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "MAC Address:",              misc_mac_txt(mep_status.smac.addr, mac_buf));
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "Direction:",                cfm_util_direction_to_str(mep_conf.direction, true));
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "Interface:",                interface_str);
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "Continuity-check:",         mep_conf.ccm_enable ? "Enabled" : "Disabled");
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "presentRDI:",               mep_status.present_rdi ? "Yes" : "No");
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "Type:",                     vlan_buf);
+            ICLI_PRINTF("%-*s %s%s%s%s\n",    mep_width, "MEP Active:",               mep_status.mep_active ? "Yes" : "No", error_create_pre_str, error_create_str, error_create_post_str);
+            ICLI_PRINTF("%-*s %s%s%s%s\n",    mep_width, "enableRMEPdefect:",         (mep_status.mep_active && mep_status.errors.enableRmepDefect) ? "True" : "False", error_rmep_pre_str, error_rmep_str, error_rmep_post_str);
+            ICLI_PRINTF("%-*s %s%s%s%s\n",    mep_width, "FNG State:",                cfm_util_fng_state_to_str(mep_status.fng_state), defect_pre_str, defect_str, defect_post_str);
+            ICLI_PRINTF("%-*s %s\n",          mep_width, "Defects:",                  defects_buf);
+            ICLI_PRINTF("%-*s " VPRI64u "\n", mep_width, "Rx CCM PDU Count:",         mep_status.ccm_rx_valid_cnt);
+            ICLI_PRINTF("%-*s " VPRI64u "\n", mep_width, "Tx CCM PDU Count:",         mep_status.ccm_tx_cnt);
+            ICLI_PRINTF("%-*s " VPRI64u "\n", mep_width, "Rx Invalid CCM PDU Count:", mep_status.ccm_rx_invalid_cnt);
+            ICLI_PRINTF("%-*s " VPRI64u "\n", mep_width, "Rx CCM PDU Seq. Errors:",   mep_status.ccm_rx_sequence_error_cnt);
+
+            now = vtss::uptime_seconds();
+
+            // Remote MEPs
+            prev_rmep_key.md     = mep_key.md;
+            prev_rmep_key.ma     = mep_key.ma;
+            prev_rmep_key.mepid  = mep_key.mepid;
+            prev_rmep_key.rmepid = 0;
+            while (vtss_appl_cfm_rmep_itr(&prev_rmep_key, &rmep_key, true) == VTSS_RC_OK) {
+                prev_rmep_key = rmep_key;
+                CFM_PRINT_RC(vtss_appl_cfm_rmep_status_get(rmep_key, &rmep_status));
+
+                ICLI_PRINTF("%-*s %u\n", mep_width, "Remote MEP-ID:", rmep_key.rmepid);
+                ICLI_PRINTF("  %-*s %s\n", mep_width - 2, "State:",         cfm_util_rmep_state_to_str(rmep_status.state));
+                ICLI_PRINTF("  %-*s %s\n", mep_width - 2, "MAC Address:",   misc_mac_txt(rmep_status.smac.addr, mac_buf));
+
+                if (rmep_status.failed_ok_time) {
+                    ICLI_PRINTF("  %-*s %s after boot (%s ago)\n",
+                                mep_width - 2,
+                                "Failed/OK Time:",
+                                CFM_ICLI_secs_to_str(      rmep_status.failed_ok_time, abs_time_str),
+                                CFM_ICLI_secs_to_str(now - rmep_status.failed_ok_time, rel_time_str));
+                } else {
+                    ICLI_PRINTF("  %-*s %s\n",     mep_width - 2, "Failed/OK Time:", "Remote MEP hasn't entered RMEP_FAILED or RMEP_OK yet");
+                }
+
+                ICLI_PRINTF("  %-*s %d\n",      mep_width - 2, "RDI:", rmep_status.rdi);
+                ICLI_PRINTF("  %-*s %s (%d)\n", mep_width - 2, "Port Status:", cfm_util_port_status_to_str(rmep_status.port_status), rmep_status.port_status);
+                ICLI_PRINTF("  %-*s %s (%d)\n", mep_width - 2, "Interface Status:", cfm_util_interface_status_to_str(rmep_status.interface_status), rmep_status.interface_status);
+
+                // Sender ID TLV
+                if (rmep_status.sender_id.chassis_id_subtype   != VTSS_APPL_CFM_CHASSIS_ID_SUBTYPE_NOT_RECEIVED ||
+                    rmep_status.sender_id.chassis_id_len       != 0                                             ||
+                    rmep_status.sender_id.mgmt_addr_domain_len != 0                                             ||
+                    rmep_status.sender_id.mgmt_addr_len        != 0) {
+                    // Sender ID TLV received
+                    ICLI_PRINTF("  %-*s\n", mep_width - 2, "Sender ID:");
+
+                    // Chassis ID Subtype
+                    if (rmep_status.sender_id.chassis_id_subtype != VTSS_APPL_CFM_CHASSIS_ID_SUBTYPE_NOT_RECEIVED) {
+                        ICLI_PRINTF("    %-*s %s (%d)\n", mep_width - 4, "Chassis ID subtype:", cfm_util_sender_id_chassis_id_subtype_to_str(rmep_status.sender_id.chassis_id_subtype), rmep_status.sender_id.chassis_id_subtype);
+                    }
+
+                    // Chassis ID
+                    print_as_hex = false;
+                    if (rmep_status.sender_id.chassis_id_len) {
+                        // Check if all chars are printable
+                        for (i = 0; i < rmep_status.sender_id.chassis_id_len; i++) {
+                            if (!isprint(rmep_status.sender_id.chassis_id[i])) {
+                                print_as_hex = true;
+                                break;
+                            }
+                        }
+
+                        ICLI_PRINTF("    %-*s", mep_width - 4, print_as_hex ? "Chassis ID (hex):" : "Chassis ID:");
+
+                        if (print_as_hex) {
+                            for (i = 0; i < rmep_status.sender_id.chassis_id_len; i++) {
+                                ICLI_PRINTF(" %02X", rmep_status.sender_id.chassis_id[i]);
+                            }
+
+                            ICLI_PRINTF("\n");
+                        } else {
+                            ICLI_PRINTF(" %s\n", rmep_status.sender_id.chassis_id);
+                        }
+                    }
+
+                    // Management Address Domain
+                    if (rmep_status.sender_id.mgmt_addr_domain_len) {
+                        ICLI_PRINTF("    %-*s", mep_width - 4, "Mgmt Addr Dom (hex):");
+
+                        for (i = 0; i < MIN(rmep_status.sender_id.mgmt_addr_domain_len, sizeof(rmep_status.sender_id.mgmt_addr_domain)); i++) {
+                            ICLI_PRINTF(" %02X", rmep_status.sender_id.mgmt_addr_domain[i]);
+                        }
+
+                        ICLI_PRINTF("\n");
+                    }
+
+                    // Management Address
+                    if (rmep_status.sender_id.mgmt_addr_len) {
+                         ICLI_PRINTF("    %-*s", mep_width - 4, "Mgmt Addr (hex):");
+
+                        for (i = 0; i < rmep_status.sender_id.mgmt_addr_len; i++) {
+                            ICLI_PRINTF(" %02X", rmep_status.sender_id.mgmt_addr[i]);
+                        }
+
+                        ICLI_PRINTF("\n");
+                    }
+                } else {
+                    // Sender ID TLV not received
+                    ICLI_PRINTF("  %-*s Not received\n", mep_width - 2, "Sender ID:");
+                }
+
+                // Organization-Specific TLV
+                if (rmep_status.organization_specific_tlv_present) {
+                    // Organization-Specific TLV received
+                    ICLI_PRINTF("  %-*s\n", mep_width - 2, "Org-Specific TLV:");
+
+                    // OUI
+                    ICLI_PRINTF("    %-*s %02X-%02X-%02X\n", mep_width - 4, "OUI:", rmep_status.organization_specific_tlv.oui[0], rmep_status.organization_specific_tlv.oui[1], rmep_status.organization_specific_tlv.oui[2]);
+
+                    // Subtype
+                    ICLI_PRINTF("    %-*s %u\n", mep_width - 4, "Subtype:", rmep_status.organization_specific_tlv.subtype);
+
+                    // Value
+                    if (rmep_status.organization_specific_tlv.value_len) {
+                        print_as_hex = false;
+                        // Check if all chars are printable
+                        cnt = MIN(rmep_status.organization_specific_tlv.value_len, sizeof(rmep_status.organization_specific_tlv.value));
+                        for (i = 0; i < cnt; i++) {
+                            if (!isprint(rmep_status.organization_specific_tlv.value[i])) {
+                                print_as_hex = true;
+                                break;
+                            }
+                        }
+
+                        ICLI_PRINTF("    %-*s%s", mep_width - 4, print_as_hex ? "Value (hex):" : "Value:", print_as_hex ? "" : " ");
+                        strcpy(format_str, print_as_hex ? " %02X" : "%c");
+
+                        // Whether it's a printable string or a series of Hex
+                        // values, we loop-print it, because it might be that
+                        // the string is not NULL-terminated.
+                        for (i = 0; i < cnt; i++) {
+                            ICLI_PRINTF(format_str, rmep_status.organization_specific_tlv.value[i]);
+                        }
+
+                        ICLI_PRINTF("\n");
+                    } else {
+                        ICLI_PRINTF("    %-*s Not received", mep_width - 4, "Value:");
+                    }
+                } else {
+                    ICLI_PRINTF("  %-*s Not received\n", mep_width - 2, "Org-Specific TLV:");
+                }
+            }
+        } else {
+            CFM_ICLI_oper_state_str_get(ma_conf, mep_conf, mep_status, &oper_state_str1, &oper_state_str2, false);
+
+            ICLI_PRINTF("%-15s %-15s %6u %-5s %s%s\n",
+                        mep_key.md.c_str(), mep_key.ma.c_str(), mep_key.mepid,
+                        defects_buf,
+                        oper_state_str1,
+                        oper_state_str2);
+        }
+    }
+
+    ICLI_PRINTF("\n");
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_show_errors()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_show_errors(u32 session_id)
+{
+    vtss_appl_cfm_ma_conf_t    ma_conf;
+    vtss_appl_cfm_mep_conf_t   mep_conf;
+    vtss_appl_cfm_mep_status_t mep_status;
+    vtss_appl_cfm_mep_key_t    prev_mep_key, mep_key;
+    bool                       first_mep = true, first_print = true;
+    const char                 *error_str1, *error_str2;
+
+    while (vtss_appl_cfm_mep_itr(first_mep ? NULL : &prev_mep_key, &mep_key) == VTSS_RC_OK) {
+        first_mep    = false;
+        prev_mep_key = mep_key;
+
+        CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+
+        if (!mep_conf.admin_active) {
+            // Only show errors, and not whether the Admin has remembered to
+            // enable the MEP.
+            continue;
+        }
+
+        CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(mep_key,    &ma_conf));
+        CFM_PRINT_RC(vtss_appl_cfm_mep_status_get(mep_key, &mep_status));
+
+        if (mep_status.errors.mep_creatable && mep_status.errors.enableRmepDefect && !mep_status.defects) {
+            // The MEP is created and all RMEP SMs are running and there is no
+            // defects reported. Nothing to print
+            continue;
+        }
+
+        if (first_print) {
+            first_print = false;
+
+            ICLI_PRINTF("Domain          Service         MEP-ID Error\n");
+            ICLI_PRINTF("--------------- --------------- ------ -----------------------------------------------\n");
+        }
+
+        CFM_ICLI_oper_state_str_get(ma_conf, mep_conf, mep_status, &error_str1, &error_str2, true);
+
+        ICLI_PRINTF("%-15s %-15s %6u %s%s\n",
+                    mep_key.md.c_str(), mep_key.ma.c_str(), mep_key.mepid,
+                    error_str1,
+                    error_str2);
+    }
+
+    ICLI_PRINTF("\n");
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// CFM_ICLI_mep_statistics_clear()
+/******************************************************************************/
+static icli_rc_t CFM_ICLI_mep_statistics_clear(u32 session_id, vtss_appl_cfm_mep_key_t &requested_mep_key)
+{
+    vtss_appl_cfm_mep_key_t prev_mep_key, mep_key;
+    bool                    first_mep = true;
+
+    while (vtss_appl_cfm_mep_itr(first_mep ? NULL : &prev_mep_key, &mep_key) == VTSS_RC_OK) {
+        first_mep    = false;
+        prev_mep_key = mep_key;
+
+        if (requested_mep_key.md != "" && mep_key.md != requested_mep_key.md) {
+            continue;
+        }
+
+        if (requested_mep_key.ma != "" && mep_key.ma != requested_mep_key.ma) {
+            continue;
+        }
+
+        if (requested_mep_key.mepid && mep_key.mepid != requested_mep_key.mepid) {
+            continue;
+        }
+
+        CFM_PRINT_RC(vtss_appl_cfm_mep_statistics_clear(mep_key));
+    }
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+HELP_CFM                       = Connectivity Fault Management (CFM)
+HELP_CFM_SENDER_ID_TLV         = Sender ID TLV format to be used in PDUs
+HELP_CFM_PORT_STATUS_TLV       = Port Status TLV format to be used in PDUs
+HELP_CFM_INTERFACE_STATUS_TLV  = Interface Status TLV format to be used in PDUs
+HELP_CFM_ORG_SPECIFIC_TLV      = Organization-Specific TLV format to be used in PDUs
+HELP_CFM_MD                    = Maintenance Domain (MD)
+HELP_CFM_MA                    = Create or modify a Service (Maintenance Association/MA)
+HELP_CFM_MA_INST_NAME          = Service name
+HELP_CFM_MEP                   = Create or modify a Maintenance association EndPoint (MEP)
+HELP_CFM_NO_MEP                = Delete one or all MEPs in this service
+HELP_CFM_MEP_DIRECTLY          = Enter a particular MEP directly from global configuration mode
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = cfm sender-id-tlv {disable | chassis | management | chassis-management}
+
+DOC_CMD_DESC    = ##HELP_CFM_SENDER_ID_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SENDER_ID_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! sender-id-tlv
+HELP    = Default Sender ID TLV format to be used in PDUs (may be overridden in domain and service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Sender ID TLV from PDUs (default)
+CMD_VAR = has_none
+RUNTIME =
+
+! chassis
+HELP    = Enable Sender ID TLV and send Chassis ID (MAC Address)
+CMD_VAR = has_chassis
+RUNTIME =
+
+! management
+HELP    = Enable Sender ID TLV and send Management address (IPv4 Address)
+CMD_VAR = has_management
+RUNTIME =
+
+! chassis-management
+HELP    = Enable Sender ID TLV and send both Chassis ID (MAC Address) and Management Address (IPv4 Address)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_global_conf_t global_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_get(&global_conf));
+
+    if (has_none) {
+        global_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_DISABLE;
+    } else if (has_chassis) {
+        global_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_CHASSIS;
+    } else if (has_management) {
+        global_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_MANAGE;
+    } else {
+        global_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_CHASSIS_MANAGE;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_set(&global_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = cfm port-status-tlv {disable | enable}
+
+DOC_CMD_DESC    = ##HELP_CFM_PORT_STATUS_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_PORT_STATUS_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! port-status-tlv
+HELP    = Include or exclude Port Status TLV in CCM PDUs (may be overridden in domain and service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Do not include Port Status TLV in PDUs (default)
+CMD_VAR = has_disable
+RUNTIME =
+
+! enable
+HELP    = Include Port Status TLV in PDUs
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_global_conf_t global_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_get(&global_conf));
+
+    if (has_disable) {
+        global_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else {
+        global_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_ENABLE;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_set(&global_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = cfm interface-status-tlv {disable | enable}
+
+DOC_CMD_DESC    = ##HELP_CFM_INTERFACE_STATUS_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_INTERFACE_STATUS_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! interface-status-tlv
+HELP    = Include or exclude Interface Status TLV in CCM PDUs (may be overridden in domain and service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Interface Status TLV from PDUs (default)
+CMD_VAR = has_disable
+RUNTIME =
+
+! enable
+HELP    = Include Interface Status TLV in PDUs
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_global_conf_t global_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_get(&global_conf));
+
+    if (has_disable) {
+        global_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else {
+        global_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_ENABLE;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_set(&global_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = cfm organization-specific-tlv {disable | enable oui <oui> subtype <0-255> value <string63>}
+
+DOC_CMD_DESC    = ##HELP_CFM_ORG_SPECIFIC_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_ORG_SPECIFIC_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! organization-specific-tlv
+HELP    = Include or exclude Organization-Specific TLV in PDUs (may be overridden in domain and service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Organization-Specific TLV from PDUs (default)
+CMD_VAR = has_disable
+RUNTIME =
+
+! enable
+HELP    = Include Organization-Specific TLV in PDUs
+CMD_VAR =
+RUNTIME =
+
+! oui
+HELP    = Specify the OUI to use
+CMD_VAR =
+RUNTIME =
+
+! <oui>
+HELP    = The OUI on form XX-XX-XX
+CMD_VAR = oui
+RUNTIME =
+
+! subtype
+HELP    = Choose the subtype to put in CFM PDUs
+CMD_VAR =
+RUNTIME =
+
+! <0-255>
+HELP    = Subtype value
+CMD_VAR = subtype
+RUNTIME =
+
+! value
+HELP    = Choose the value to put in the organization-specific TLV's value field.
+CMD_VAR =
+RUNTIME =
+
+! string63
+HELP    = Value is a string of up to 63 characters enclosed in double-quotes
+CMD_VAR = value
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_global_conf_t              global_conf;
+    vtss_appl_cfm_organization_specific_tlv_t *tlv;
+VARIABLE_END
+
+CODE_BEGIN
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_get(&global_conf));
+
+    tlv = &global_conf.organization_specific_tlv;
+
+    if (has_disable) {
+        global_conf.organization_specific_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else {
+        global_conf.organization_specific_tlv_option = VTSS_APPL_CFM_TLV_OPTION_ENABLE;
+        memcpy(tlv->oui, oui.mac, sizeof(tlv->oui));
+        tlv->subtype = subtype;
+
+        // In this software, we have chosen to only allow printable ASCII
+        // characters as value, but in fact, it could be any (binary) data,
+        // which is why we also need to specify a length. We have carefully
+        // chosen the length to be one less than sizeof(tlv->value), so that we
+        // can NULL-terminate it.
+        tlv->value_len = strlen(value);
+        tlv->value[sizeof(tlv->value) - 1] = '\0';
+        memcpy(tlv->value, value, MIN(tlv->value_len, sizeof(tlv->value) - 1));
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_global_conf_set(&global_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+! See .../vtss_appl/icli/platform/script/icli_config.icli for the implementation
+! of the following command
+!COMMAND   = cfm domain <kword1-15>
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no cfm domain {<kword1-15> | all}
+
+HELP_CFM_NO_MD  = Delete a maintenance domain and all its services and all the services' MEPs.
+DOC_CMD_DESC    = ##HELP_CFM_NO_MD
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_NO_MD
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! domain
+HELP    = ##HELP_CFM_NO_MD
+CMD_VAR =
+RUNTIME =
+
+! <kword1-15>
+HELP    = Domain to delete. All its services and all the services' MEPs will also be deleted
+CMD_VAR = md_name
+RUNTIME =
+
+! all
+HELP    = Delete all domains. All services and all MEPs will also be deleted
+CMD_VAR = has_all
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_key_t key, next_key;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        key.md = "";
+        while (vtss_appl_cfm_md_itr(&key, &next_key) == VTSS_RC_OK) {
+            key = next_key;
+            CFM_PRINT_RC(vtss_appl_cfm_md_conf_del(key));
+        }
+    } else {
+        key.md = md_name;
+        CFM_PRINT_RC(vtss_appl_cfm_md_conf_del(key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = format {none | string <string1-43>}
+
+HELP_CFM_MD_FORMAT = Change format of this domain
+DOC_CMD_DESC    = ##HELP_CFM_MD_FORMAT
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MD_FORMAT
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MD
+MODE_VAR = md_name
+
+! format
+HELP    = ##HELP_CFM_MD_FORMAT
+CMD_VAR =
+RUNTIME =
+
+! none
+HELP    = Not present (type 1)
+CMD_VAR = has_none
+RUNTIME =
+
+! string
+HELP    = ASCII string (type 4)
+CMD_VAR =
+RUNTIME =
+
+! <string1-43>
+HELP    = Actual domain name (1-43 characters enclosed in double-quotes)
+CMD_VAR = name
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+
+    if (has_none) {
+        md_conf.format = VTSS_APPL_CFM_MD_FORMAT_NONE;
+    } else {
+        md_conf.format = VTSS_APPL_CFM_MD_FORMAT_STRING;
+        md_conf.name[sizeof(md_conf.name) - 1] = '\0';
+        strncpy(md_conf.name, name, sizeof(md_conf.name) - 1);
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_set(key, &md_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = level <0-7>
+
+HELP_CFM_MD_LEVEL = Change level (MEG-level) of this domain
+DOC_CMD_DESC    = ##HELP_CFM_MD_LEVEL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MD_LEVEL
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MD
+MODE_VAR = md_name
+
+! level
+HELP    = ##HELP_CFM_MD_LEVEL
+CMD_VAR =
+RUNTIME =
+
+! <0-7>
+HELP    = The level (MEG-level) for this domain
+CMD_VAR = level
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+    md_conf.level = level;
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_set(key, &md_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = sender-id-tlv {disable | chassis | management | chassis-management | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_SENDER_ID_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SENDER_ID_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MD
+MODE_VAR = md_name
+
+! sender-id-tlv
+HELP    = Default Sender ID TLV format to be used in PDUs in this domain (may be overridden in service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Sender ID TLV from PDUs in this domain
+CMD_VAR = has_none
+RUNTIME =
+
+! chassis
+HELP    = Enable Sender ID TLV and send Chassis ID (MAC Address)
+CMD_VAR = has_chassis
+RUNTIME =
+
+! management
+HELP    = Enable Sender ID TLV and send Management address (IPv4 Address)
+CMD_VAR = has_management
+RUNTIME =
+
+! chassis-management
+HELP    = Enable Sender ID TLV and send both Chassis ID (MAC Address) and Management Address (IPv4 Address)
+CMD_VAR = has_chassis_management
+RUNTIME =
+
+! defer
+HELP    = Let the global CFM configuration determine whether to send Sender ID TLVs on PDUs in this domain (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+
+    if (has_none) {
+        md_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_DISABLE;
+    } else if (has_chassis) {
+        md_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_CHASSIS;
+    } else if (has_management) {
+        md_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_MANAGE;
+    } else if (has_chassis_management) {
+        md_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_CHASSIS_MANAGE;
+    } else {
+        md_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_set(key, &md_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = port-status-tlv {disable | enable | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_PORT_STATUS_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_PORT_STATUS_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MD
+MODE_VAR = md_name
+
+! port-status-tlv
+HELP    = Include or exclude Port Status TLV in PDUs included in this domain or let higher level determine (may be overridden in service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Port Status TLV from PDUs in this domain
+CMD_VAR = has_disable
+RUNTIME =
+
+! enable
+HELP    = Include Port Status TLV in PDUs in this domain
+CMD_VAR = has_enable
+RUNTIME =
+
+! defer
+HELP    = Let the global CFM configuration determine whether to include Port Status TLV in PDUs in this domain (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+
+    if (has_disable) {
+        md_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else if (has_enable) {
+        md_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_ENABLE;
+    } else {
+        md_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_set(key, &md_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = interface-status-tlv {disable | enable | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_INTERFACE_STATUS_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_INTERFACE_STATUS_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MD
+MODE_VAR = md_name
+
+! interface-status-tlv
+HELP    = Include or exclude Interface Status TLV in PDUs included in this domain or let higher level determine (may be overridden in service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Interface Status TLV from PDUs in this domain
+CMD_VAR = has_disable
+RUNTIME =
+
+! enable
+HELP    = Include Interface Status TLV in PDUs domain
+CMD_VAR = has_enable
+RUNTIME =
+
+! defer
+HELP    = Let the global CFM configuration determine whether to include Interface Status TLV in PDUs in this domain (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+
+    if (has_disable) {
+        md_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else if (has_enable) {
+        md_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_ENABLE;
+    } else {
+        md_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_set(key, &md_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = organization-specific-tlv {disable | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_ORG_SPECIFIC_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_ORG_SPECIFIC_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MD
+MODE_VAR = md_name
+
+! organization-specific-tlv
+HELP    = Include or exclude Organization-Specific TLV in PDUs included in this MD or let higher level determine (may be overridden in service)
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Organization-Specific TLV from PDUs in this domain
+CMD_VAR = has_disable
+RUNTIME =
+
+! defer
+HELP    = Let the global CFM configuration determine whether to include an Organization-Specific TLV in PDUs in this domain (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_conf_t md_conf;
+    vtss_appl_cfm_md_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_get(key, &md_conf));
+
+    if (has_disable) {
+        md_conf.organization_specific_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else {
+        md_conf.organization_specific_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_md_conf_set(key, &md_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = service <kword1-15>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME = icli_cfm_ma_create_from_md
+
+DOC_CMD_DESC    = ##HELP_CFM_MA
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MA
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   =
+
+HELP      = ##HELP_CFM_MA
+HELP      = ##HELP_CFM_MA_INST_NAME
+
+! Even though this enters a sub-mode, we don't specify SUB_MODE and GOTO_MODE,
+! because specifying SUB_MODE = 1 causes the ICLI generator to allow for
+! entering the ICLI_CMD_MODE_CFM_MA mode directly from
+! ICLI_CMD_MODE_GLOBAL_CONFIG and any other sub-mode and it won't compile, by
+! the way, because of MODE_VAR.
+CMD_MODE  = ICLI_CMD_MODE_CFM_MD
+MODE_VAR  =
+
+CMD_VAR   =
+CMD_VAR   = ma_name
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_enter(session_id, ma_name));
+CODE_END
+CMD_END
+
+!==============================================================================
+! Have to repeat the service command for the ma sub-mode, so that one can add
+! another service
+CMD_BEGIN
+COMMAND   = service <kword1-15>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME = icli_cfm_ma_create_from_ma
+
+DOC_CMD_DESC    = ##HELP_CFM_MA
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MA
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   =
+
+HELP      = ##HELP_CFM_MA
+HELP      = ##HELP_CFM_MA_INST_NAME
+
+! Even though this enters a sub-mode, we don't specify SUB_MODE and GOTO_MODE,
+! because specifying SUB_MODE = 1 causes the ICLI generator to allow for
+! entering the ICLI_CMD_MODE_CFM_MA mode directly from
+! ICLI_CMD_MODE_GLOBAL_CONFIG and any other sub-mode and it won't compile, by
+! the way, because of MODE_VAR.
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+
+CMD_VAR   =
+CMD_VAR   = ma_name
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_enter(session_id, ma_name));
+CODE_END
+CMD_END
+
+!==============================================================================
+! Have to repeat the service command for the mep sub-mode, so that one can add
+! another service
+CMD_BEGIN
+COMMAND   = service <kword1-15>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME = icli_cfm_ma_create_from_mep
+
+DOC_CMD_DESC    = ##HELP_CFM_MA
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MA
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   =
+
+HELP      = ##HELP_CFM_MA
+HELP      = ##HELP_CFM_MA_INST_NAME
+
+! Even though this enters a sub-mode, we don't specify SUB_MODE and GOTO_MODE,
+! because specifying SUB_MODE = 1 causes the ICLI generator to allow for
+! entering the ICLI_CMD_MODE_CFM_MA mode directly from
+! ICLI_CMD_MODE_GLOBAL_CONFIG and any other sub-mode and it won't compile, by
+! the way, because of MODE_VAR.
+CMD_MODE  = ICLI_CMD_MODE_CFM_MEP
+
+CMD_VAR   =
+CMD_VAR   = ma_name
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_enter(session_id, ma_name));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+HELP_CFM_MA_FORMAT = Configure the format used in MAID/MEGID for this service (maintenance association).
+IF_FLAG =
+COMMAND = format {string <string1-45> | integer <0-65535> | primary-vid | icc <string13-13> | icc-cc <string15-15>}
+
+# RBNTBD: Make support for "primary-vid"
+
+DOC_CMD_DESC    = ##HELP_CFM_MA_FORMAT
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MA_FORMAT
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MA
+MODE_VAR = ma_name
+
+! format
+HELP    = ##HELP_CFM_MA_FORMAT
+CMD_VAR =
+RUNTIME =
+
+! string
+HELP    = Character string (type 2)
+CMD_VAR = has_format_string
+RUNTIME =
+
+! <string1-45>
+HELP    = Short MA name as string (1-45 printable characters enclosed in double-quotes, type 2)
+CMD_VAR = format_string
+RUNTIME =
+
+! integer
+HELP    = 2-octet integer (type 3)
+CMD_VAR = has_format_integer
+RUNTIME =
+
+! <0-65535>
+HELP    = Integer in range 0-65535 (type 3)
+CMD_VAR = format_integer
+RUNTIME =
+
+! primary-vid
+HELP    = 2-octet integer (type 3) containing this service's primary VID.
+CMD_VAR = has_format_primary_vid
+RUNTIME =
+
+! icc
+HELP    = ITU-T ICC-based format (type 32)
+CMD_VAR = has_format_icc
+RUNTIME = CFM_ICLI_ma_y1731_formats_present
+
+! <string13-13>
+HELP    = ITU-T ICC-based format (13 alphanumeric characters enclosed in double-quotes, type 32)
+CMD_VAR = format_icc_string
+RUNTIME = CFM_ICLI_ma_y1731_formats_present
+
+! icc-cc
+HELP    = ITU-T ICC-CC-based format (type 33)
+CMD_VAR =
+RUNTIME = CFM_ICLI_ma_y1731_formats_present
+
+! <string15-15>
+HELP    = ITU-T ICC-CC-based format (2 uppercase letters, 13 alphanumeric characters with an optional '/' in position 4-8, type 33)
+CMD_VAR = format_icc_cc_string
+RUNTIME = CFM_ICLI_ma_y1731_formats_present
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+
+    ma_conf.name[sizeof(ma_conf.name) - 1] = '\0';
+
+    if (has_format_string) {
+        ma_conf.format = VTSS_APPL_CFM_MA_FORMAT_STRING;
+        strncpy(ma_conf.name, format_string, sizeof(ma_conf.name) - 1);
+    } else if (has_format_integer) {
+        ma_conf.format = VTSS_APPL_CFM_MA_FORMAT_TWO_OCTET_INTEGER;
+        ma_conf.name[0] = format_integer >> 8;
+        ma_conf.name[1] = format_integer >> 0;
+    } else if (has_format_primary_vid) {
+        ma_conf.format = VTSS_APPL_CFM_MA_FORMAT_PRIMARY_VID;
+    } else if (has_format_icc) {
+        ma_conf.format = VTSS_APPL_CFM_MA_FORMAT_Y1731_ICC;
+        strncpy(ma_conf.name, format_icc_string, sizeof(ma_conf.name) - 1);
+    } else {
+        ma_conf.format = VTSS_APPL_CFM_MA_FORMAT_Y1731_ICC_CC;
+        strncpy(ma_conf.name, format_icc_cc_string, sizeof(ma_conf.name) - 1);
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_set(key, &ma_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+HELP_MA_VLAN = Specify whether MEPs created in this service are port or VLAN MEPs.
+IF_FLAG =
+COMMAND = type {port | vlan <'VTSS_APPL_VLAN_ID_MIN'-'VTSS_APPL_VLAN_ID_MAX'>}
+
+DOC_CMD_DESC    = ##HELP_MA_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MA_VLAN
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MA
+MODE_VAR = ma_name
+
+! type
+HELP    = ##HELP_MA_VLAN
+CMD_VAR =
+RUNTIME =
+
+! port
+HELP    = Set all MEPs created in this service as port/interface MEPs
+CMD_VAR = has_port
+RUNTIME =
+
+! vlan
+HELP    = Set all MEPs created in this service as VLAN MEPs.
+CMD_VAR =
+RUNTIME = CFM_ICLI_has_vlan_meps
+
+! <'VTSS_APPL_VLAN_ID_MIN'-'VTSS_APPL_VLAN_ID_MAX'>
+HELP    = Choose the service's primary VID. MEPs created with VLAN set to 'inherit' uses this VLAN.
+CMD_VAR = vid
+RUNTIME = CFM_ICLI_has_vlan_meps
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+    ma_conf.vlan = has_port ? 0 : vid;
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_set(key, &ma_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+HELP_CCM_INTERVAL = Specify the CCM interval for all MEPs in this service (maintenance association). Default is 1s.
+IF_FLAG =
+COMMAND = continuity-check interval {3.3ms | 10ms | 100ms | 1s | 10s | 1min | 10min}
+
+DOC_CMD_DESC    = ##HELP_CCM_INTERVAL
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CCM_INTERVAL
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MA
+MODE_VAR = ma_name
+
+! continuity-check
+HELP    = ##HELP_CCM_INTERVAL
+CMD_VAR =
+RUNTIME =
+
+! interval
+HELP    = ##HELP_CCM_INTERVAL
+CMD_VAR =
+RUNTIME =
+
+! 3.3ms
+HELP    = 3.3 ms between CCM frames (300 fps)
+CMD_VAR = has_3_3ms
+RUNTIME = CFM_ICLI_ma_has_ccm_interval_300hz
+
+! 10ms
+HELP    = 10 ms between CCM frames (100 fps)
+CMD_VAR = has_10ms
+RUNTIME = CFM_ICLI_ma_has_ccm_interval_10ms
+
+! 100ms
+HELP    = 100 ms between CCM frames (10 fps)
+CMD_VAR = has_100ms
+RUNTIME = CFM_ICLI_ma_has_ccm_interval_100ms
+
+! 1s
+HELP    = 1 second between CCM frames (1 fps)
+CMD_VAR = has_1s
+RUNTIME = CFM_ICLI_ma_has_ccm_interval_1s
+
+! 10s
+HELP    = 10 seconds between CCM frames
+CMD_VAR = has_10s
+RUNTIME = CFM_ICLI_ma_has_ccm_interval_10s
+
+! 1min
+HELP    = 1 minute between CCM frames
+CMD_VAR = has_1m
+RUNTIME = CFM_ICLI_ma_has_ccm_interval_1min
+
+! 10min
+HELP    = 10 minutes between CCM frames
+CMD_VAR = has_10m
+RUNTIME = CFM_ICLI_ma_has_ccm_interval_10min
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+
+    if (has_3_3ms) {
+        ma_conf.ccm_interval = VTSS_APPL_CFM_CCM_INTERVAL_300HZ;
+    } else if (has_10ms) {
+        ma_conf.ccm_interval = VTSS_APPL_CFM_CCM_INTERVAL_10MS;
+    } else if (has_100ms) {
+        ma_conf.ccm_interval = VTSS_APPL_CFM_CCM_INTERVAL_100MS;
+    } else if (has_1s) {
+        ma_conf.ccm_interval = VTSS_APPL_CFM_CCM_INTERVAL_1S;
+    } else if (has_10s) {
+        ma_conf.ccm_interval = VTSS_APPL_CFM_CCM_INTERVAL_10S;
+    } else if (has_1m) {
+        ma_conf.ccm_interval = VTSS_APPL_CFM_CCM_INTERVAL_1MIN;
+    } else if (has_10m) {
+        ma_conf.ccm_interval = VTSS_APPL_CFM_CCM_INTERVAL_10MIN;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_set(key, &ma_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = sender-id-tlv {disable | chassis | management | chassis-management | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_SENDER_ID_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SENDER_ID_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MA
+MODE_VAR = ma_name
+
+! sender-id-tlv
+HELP    = Default Sender ID TLV format to be used in PDUs in MEPs running in this service
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Sender ID TLV from PDUs in MEPs running in this service
+CMD_VAR = has_none
+RUNTIME =
+
+! chassis
+HELP    = Enable Sender ID TLV and send Chassis ID (MAC Address)
+CMD_VAR = has_chassis
+RUNTIME =
+
+! management
+HELP    = Enable Sender ID TLV and send Management address (IPv4 Address)
+CMD_VAR = has_management
+RUNTIME =
+
+! chassis-management
+HELP    = Enable Sender ID TLV and send both Chassis ID (MAC Address) and Management Address (IPv4 Address)
+CMD_VAR = has_chassis_management
+RUNTIME =
+
+! defer
+HELP    = Let the MD Sender ID TLV configuration determine whether to send Sender ID TLVs on PDUs in this domain (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+
+    if (has_none) {
+        ma_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_DISABLE;
+    } else if (has_chassis) {
+        ma_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_CHASSIS;
+    } else if (has_management) {
+        ma_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_MANAGE;
+    } else if (has_chassis_management) {
+        ma_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_CHASSIS_MANAGE;
+    } else {
+        ma_conf.sender_id_tlv_option = VTSS_APPL_CFM_SENDER_ID_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_set(key, &ma_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = port-status-tlv {disable | enable | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_PORT_STATUS_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_PORT_STATUS_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MA
+MODE_VAR = ma_name
+
+! port-status-tlv
+HELP    = Include or exclude Port Status TLV in PDUs for MEPs included in this service or let domain determine
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Port Status TLV from PDUs for MEPs included in this service
+CMD_VAR = has_disable
+RUNTIME =
+
+! enable
+HELP    = Include Port Status TLV in PDUs for MEPs included in this service
+CMD_VAR = has_enable
+RUNTIME =
+
+! defer
+HELP    = Let the MD Port Status TLV configuration determine whether to include Port Status TLV in PDUs for MEPs included in this service (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+
+    if (has_disable) {
+        ma_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else if (has_enable) {
+        ma_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_ENABLE;
+    } else {
+        ma_conf.port_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_set(key, &ma_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = interface-status-tlv {disable | enable | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_INTERFACE_STATUS_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_INTERFACE_STATUS_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MA
+MODE_VAR = ma_name
+
+! interface-status-tlv
+HELP    = Include or exclude Interface Status TLV in PDUs included in MEPs running in this service or let domain determine
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Interface Status TLV from PDUs in MEPs running in this service
+CMD_VAR = has_disable
+RUNTIME =
+
+! enable
+HELP    = Include Interface Status TLV in PDUs in MEPs running in this service
+CMD_VAR = has_enable
+RUNTIME =
+
+! defer
+HELP    = Let the domain's Interface Status TLV configuration determine whether to include Interface Status TLV in PDUs in MEPs running in this service (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+
+    if (has_disable) {
+        ma_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else if (has_enable) {
+        ma_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_ENABLE;
+    } else {
+        ma_conf.interface_status_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_set(key, &ma_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = organization-specific-tlv {disable | defer}
+
+DOC_CMD_DESC    = ##HELP_CFM_ORG_SPECIFIC_TLV
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_ORG_SPECIFIC_TLV
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MA
+MODE_VAR = ma_name
+
+! organization-specific-tlv
+HELP    = Include or exclude Organization-Specific TLV in PDUs on MEPs running in this service or let the domain determine
+CMD_VAR =
+RUNTIME =
+
+! disable
+HELP    = Exclude Organization-Specific TLV from PDUs on MEPs running in this service
+CMD_VAR = has_disable
+RUNTIME =
+
+! defer
+HELP    = Let the domain Organization-Specific TLV configuration determine whether to include Organization-Specific TLV in PDUs on MEPs running in this service (default)
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_get(key, &ma_conf));
+
+    if (has_disable) {
+        ma_conf.organization_specific_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DISABLE;
+    } else {
+        ma_conf.organization_specific_tlv_option = VTSS_APPL_CFM_TLV_OPTION_DEFER;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_ma_conf_set(key, &ma_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no service {<kword1-15> | all}
+
+HELP_CFM_NO_MA = Delete a service/maintenance association and all its MEPs
+DOC_CMD_DESC    = ##HELP_CFM_NO_MA
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_NO_MA
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_CFM_MD
+MODE_VAR = md_name
+
+! no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! ma
+HELP    = ##HELP_CFM_NO_MA
+CMD_VAR =
+RUNTIME =
+
+! <kword1-15>
+HELP    = Service to delete. All MEPs in this service will also be deleted
+CMD_VAR = ma_name
+RUNTIME =
+
+! all
+HELP    = Delete all services in this domain and all their MEPs
+CMD_VAR = has_all
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_key_t key, next_key;
+VARIABLE_END
+
+CODE_BEGIN
+    key.md = md_name;
+
+    if (has_all) {
+        // Loop through all MAs that map to this MD and delete them. The
+        // 'true' in the iterator call indicates that we only want to iterate
+        // in this MD.
+        key.ma = "";
+        while (vtss_appl_cfm_ma_itr(&key, &next_key, true) == VTSS_RC_OK) {
+            // Delete this MA and all its MEPs
+            key = next_key;
+            CFM_PRINT_RC(vtss_appl_cfm_ma_conf_del(key));
+        }
+    } else {
+       // Delete this MA and all its MEPs
+       key.ma = ma_name;
+       CFM_PRINT_RC(vtss_appl_cfm_ma_conf_del(key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+RUNTIME   =
+RUNTIME   =
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+MODE_VAR  = ma_name
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_conf_t ma_conf;
+    vtss_appl_cfm_ma_key_t  key;
+    mesa_rc                 rc;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+
+    if ((rc = vtss_appl_cfm_ma_conf_get(key, &ma_conf)) != VTSS_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get CFM service configuration for %s (%s)", key, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current CFM service is %s in domain %s (format %s, name = \"%s\", vid = %u)\n", key.ma.c_str(), key.md.c_str(), cfm_util_ma_format_to_str(ma_conf.format, true), ma_conf.name, ma_conf.vlan);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = exit
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = Exit from current mode
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+FUNC_NAME = exit_ma
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MA cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MA.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there. If it succeeds there, ICLI is happy, but I'm
+    // not, because it means that an exit from ICLI_CMD_MODE_CFM_MA means
+    // that you exit to level 0 (ICLI_CMD_MODE_EXEC) instead of one level
+    // higher.
+    if (ICLI_MODE_EXIT() < 0) {
+        ICLI_PRINTF("%% Failed to exit current mode.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = help
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = Description of the interactive help system
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+FUNC_NAME = help_ma
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MA cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MA.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there. If it succeeds there, ICLI is happy BUT STAYS
+    // IN THAT MODE, so I'm not.
+    icli_config_help_print(session_id);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = end
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = ##ICLI_HELP_END
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+FUNC_NAME = end_ma
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MA cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MA.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there.
+    // In the case of 'end', it's actually fine to go to GLOBAL_CONFIG mode and
+    // execute it there, but there is no help on the 'end' command when you
+    // press TAB in MA mode.
+    // One should also create commands for ALL other commands you can execute in
+    // ICLI_CMD_MODE_GLOBAL_CONFIG in order to get TAB help for them, but that's
+    // another story.
+    if (!icli_config_go_to_exec_mode(session_id)) {
+        ICLI_PRINTF("%% Failed to exit to EXEC mode.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = do <line>
+PRIVILEGE = ICLI_PRIVILEGE_0
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+FUNC_NAME = do_ma
+CMD_VAR   =
+CMD_VAR   = command
+BYWORD    =
+BYWORD    = LINE
+HELP      = ##ICLI_HELP_DO
+HELP      = ##ICLI_HELP_DO_LINE
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MA cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MA.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there AND STAYS THERE unless the command fails,
+    // in which case it restores the original mode.
+    ICLI_RC((icli_rc_t)icli_config_exec_do(session_id, command));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = mep <1-8191>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME = icli_cfm_mep_create_from_ma
+
+DOC_CMD_DESC    = ##HELP_CFM_MEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MEP
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   = CFM_ICLI_mep_instances_get
+
+HELP      = ##HELP_CFM_MEP
+HELP      = MEP-ID
+
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+
+CMD_VAR   =
+CMD_VAR   = mepid
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_mep_enter(session_id, mepid));
+CODE_END
+CMD_END
+
+!==============================================================================
+! Have to repeat the mep command for the mep sub-mode, so that one can add
+! another mep
+CMD_BEGIN
+COMMAND   = mep <1-8191>
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME = icli_cfm_mep_create_from_mep
+
+DOC_CMD_DESC    = ##HELP_CFM_MEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_MEP
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   = CFM_ICLI_mep_instances_get
+
+HELP      = ##HELP_CFM_MEP
+HELP      = MEP-ID
+
+CMD_MODE  = ICLI_CMD_MODE_CFM_MEP
+
+CMD_VAR   =
+CMD_VAR   = mepid
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_mep_enter(session_id, mepid));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = no mep {<1-8191> | all}
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+FUNC_NAME =
+
+DOC_CMD_DESC    = ##HELP_CFM_NO_MEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_NO_MEP
+DOC_CMD_EXAMPLE =
+
+IF_FLAG   =
+
+RUNTIME   =
+RUNTIME   =
+RUNTIME   = CFM_ICLI_mep_instances_get
+RUNTIME   =
+
+HELP      = ##ICLI_HELP_NO
+HELP      = ##HELP_CFM_NO_MEP
+HELP      = Delete a particular MEP
+HELP      = Delete all MEPs in this service
+
+CMD_MODE  = ICLI_CMD_MODE_CFM_MA
+MODE_VAR  = ma_name
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = mepid
+CMD_VAR   = has_all
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_key_t key, next_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_md_name_get(session_id, key));
+    key.ma = ma_name;
+
+    if (has_all) {
+        // Loop through all MEPs that map to this MD::MA and delete them. The
+        // 'true' in the iterator call indicates that we only want to iterate
+        // inside this MD::MA.
+        key.mepid = 0;
+        while (vtss_appl_cfm_mep_itr(&key, &next_key, true) == VTSS_RC_OK) {
+            // Delete this MEP
+            key = next_key;
+            CFM_PRINT_RC(vtss_appl_cfm_mep_conf_del(key));
+        }
+    } else {
+       // Delete this MEP
+       key.mepid = mepid;
+       CFM_PRINT_RC(vtss_appl_cfm_mep_conf_del(key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = direction {up | down}
+HELP_MEP_DIRECTION = Set whether this MEP is an Up- or a Down-MEP.
+
+DOC_CMD_DESC    = ##HELP_MEP_DIRECTION
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_DIRECTION
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! direction
+HELP    = ##HELP_MEP_DIRECTION
+CMD_VAR =
+RUNTIME =
+
+! up
+HELP    = MEP is an Up-MEP
+CMD_VAR = has_up
+RUNTIME = CFM_ICLI_mep_supports_up
+
+! down
+HELP    = MEP is a Down-MEP
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.direction = has_up ? VTSS_APPL_CFM_DIRECTION_UP : VTSS_APPL_CFM_DIRECTION_DOWN;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = interface <port_type_id>
+HELP_MEP_INTERFACE = Choose which port this MEP is installed on
+
+DOC_CMD_DESC    = ##HELP_MEP_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_INTERFACE
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! interface
+HELP    = ##HELP_MEP_INTERFACE
+CMD_VAR =
+RUNTIME =
+
+! <port_type_id>
+HELP    = ##HELP_MEP_INTERFACE
+CMD_VAR = port
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+
+    if (vtss_ifindex_from_port(VTSS_ISID_START, port.begin_iport, &mep_conf.ifindex) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% Unable to convert %u to an ifindex\n", port.begin_iport);
+        return ICLI_RC_ERROR;
+    }
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = vlan {inherit | <'VTSS_APPL_VLAN_ID_MIN'-'VTSS_APPL_VLAN_ID_MAX'>}
+HELP_MEP_VLAN = Specify the VLAN for this MEP (default is that it inherits it from its service/maintenance association)
+
+DOC_CMD_DESC    = ##HELP_MEP_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_VLAN
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! vlan
+HELP    = ##HELP_MEP_VLAN
+CMD_VAR =
+RUNTIME =
+
+! inherit
+HELP    = Inherit from the service's type. If the service has type port, frames will be untagged. If the service has type VLAN, the MEP will become a VLAN MEP and use the service's VLAN ID.
+CMD_VAR = has_inherit
+RUNTIME =
+
+! <'VTSS_APPL_VLAN_ID_MIN'-'VTSS_APPL_VLAN_ID_MAX'>
+HELP    = Use this VLAN ID. If the service has type port, a port MEP with this VLAN will be created. If the service has type VLAN, the MEP will become a VLAN MEP using this VLAN ID.
+CMD_VAR = vid
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.vlan = has_inherit ? 0 : vid;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = pcp <0-7>
+HELP_MEP_PCP = Choose PCP value in PDUs' VLAN tag. Not used if untagged.
+
+DOC_CMD_DESC    = ##HELP_MEP_PCP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_PCP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! pcp
+HELP    = ##HELP_MEP_PCP
+CMD_VAR =
+RUNTIME =
+
+! <pcp>
+HELP    = PCP value
+CMD_VAR = pcp
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.pcp = pcp;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = smac <mac_ucast>
+HELP_MEP_SMAC = Set a Source MAC address to be used in PDUs for this MEP. Default to use interface's.
+
+DOC_CMD_DESC    = ##HELP_MEP_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_SMAC
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! smac
+HELP    = ##HELP_MEP_SMAC
+CMD_VAR =
+RUNTIME =
+
+! <mac_ucast>
+HELP    = Select a unicast MAC address to be used as source MAC address in PDUs for this MEP
+CMD_VAR = mac
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.smac = mac;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no smac
+
+DOC_CMD_DESC    = ##HELP_MEP_SMAC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_SMAC
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! no
+HELP    = ##ICLI_HELP_NO
+
+! smac
+HELP    = ##HELP_MEP_SMAC
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf, mep_default_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_default_get(&mep_default_conf));
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.smac = mep_default_conf.smac;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = continuity-check
+HELP_MEP_CC = Enable or disable (no-form) generation of continuity-check messages (CCMs)
+
+DOC_CMD_DESC    = ##HELP_MEP_CC
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_CC
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! continuity-check
+HELP    = ##HELP_MEP_CC
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+NO_FORM_VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.ccm_enable = true;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.ccm_enable = false;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = remote mep <1-8191>
+HELP_MEP_RMEP   = Specify the Remote MEPs that this MEP is expected to receive CCM PDUs from.
+
+DOC_CMD_DESC    = ##HELP_MEP_RMEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_RMEP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! remote
+HELP    = ##HELP_MEP_RMEP
+CMD_VAR =
+RUNTIME =
+
+! mep
+HELP    = Specify the MEP-ID of the remote MEP.
+CMD_VAR =
+RUNTIME =
+
+! <1-8191>
+HELP    = The Remote MEP's MEP-ID. It must differ from the MEP-ID of this MEP.
+CMD_VAR = rmepid
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_rmep_conf_t rmep_default_conf;
+    vtss_appl_cfm_rmep_key_t  rmep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, rmep_key));
+    rmep_key.mepid  = mepid;
+    rmep_key.rmepid = rmepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_rmep_conf_default_get(&rmep_default_conf));
+    CFM_PRINT_RC(vtss_appl_cfm_rmep_conf_set(rmep_key, &rmep_default_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no remote mep {<1-8191> | all}
+HELP_MEP_NO_RMEP   = Specify the Remote MEPs to no longer monitor on this MEP
+
+DOC_CMD_DESC    = ##HELP_MEP_NO_RMEP
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_NO_RMEP
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+!no
+HELP    = ##ICLI_HELP_NO
+CMD_VAR =
+RUNTIME =
+
+! remote
+HELP    = ##HELP_MEP_NO_RMEP
+CMD_VAR =
+RUNTIME =
+
+! mep
+HELP    = Delete one or all remote MEPs on this MEP
+CMD_VAR =
+RUNTIME =
+
+! <1-8191>
+HELP    = The Remote MEP's MEP-ID
+CMD_VAR = rmepid
+RUNTIME =
+
+! all
+HELP    = Delete all Remote MEPs
+CMD_VAR = has_all
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_rmep_key_t rmep_key, next_rmep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, rmep_key));
+    rmep_key.mepid  = mepid;
+
+    if (has_all) {
+        rmep_key.rmepid = 0;
+
+        // The last argument (true) to this iterator tells it to stop whenever
+        // we are no longer within this MEP.
+        while (vtss_appl_cfm_rmep_itr(&rmep_key, &next_rmep_key, true) == VTSS_RC_OK) {
+            rmep_key = next_rmep_key;
+            CFM_PRINT_RC(vtss_appl_cfm_rmep_conf_del(rmep_key));
+        }
+    } else {
+        rmep_key.rmepid = rmepid;
+        CFM_PRINT_RC(vtss_appl_cfm_rmep_conf_del(rmep_key));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = alarm-level <1-6>
+HELP_MEP_ALARM_PRIO = If a defect is detected with a priority higher than this level, a fault alarm notification will be generated.
+
+DOC_CMD_DESC    = ##HELP_MEP_ALARM_PRIO
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_ALARM_PRIO
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! alarm-level
+HELP    = ##HELP_MEP_ALARM_PRIO
+CMD_VAR =
+RUNTIME =
+
+! <1-6>
+HELP    = A value of 1 will cause any defect to be reported as an alarm notification. A value of 6 will disable alarm notifications. See 802.1Q-2018, clause 20.9.5.
+CMD_VAR = alarm_level
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.alarm_level = alarm_level;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = alarm-time-present <2500-10000>
+HELP_MEP_ALARM_TIME_PRESENT = The time in milliseconds that defects must be present before a fault alarm notification is issued. Default is 2500 ms.
+
+DOC_CMD_DESC    = ##HELP_MEP_ALARM_TIME_PRESENT
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_ALARM_TIME_PRESENT
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! alarm-time-present
+HELP    = ##HELP_MEP_ALARM_TIME_PRESENT
+CMD_VAR =
+RUNTIME =
+
+! <2500-10000>
+HELP    = ##HELP_MEP_ALARM_TIME_PRESENT
+CMD_VAR = alarm_time_present_ms
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.alarm_time_present_ms = alarm_time_present_ms;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = alarm-time-absent <2500-10000>
+HELP_MEP_ALARM_TIME_ABSENT = The time in milliseconds that defects must be absent before a fault alarm notification is reset. Default is 10000 ms.
+
+DOC_CMD_DESC    = ##HELP_MEP_ALARM_TIME_ABSENT
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_ALARM_TIME_ABSENT
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! alarm-time-absent
+HELP    = ##HELP_MEP_ALARM_TIME_ABSENT
+CMD_VAR =
+RUNTIME =
+
+! <2500-10000>
+HELP    = ##HELP_MEP_ALARM_TIME_ABSENT
+CMD_VAR = alarm_time_absent_ms
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.alarm_time_absent_ms = alarm_time_absent_ms;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = admin-state {enable | disable}
+HELP_MEP_ADMIN_STATE = Enable or disable this MEP
+
+DOC_CMD_DESC    = ##HELP_MEP_ADMIN_STATE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_MEP_ADMIN_STATE
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE = ICLI_CMD_MODE_CFM_MEP
+MODE_VAR = mepid
+
+! admin-state
+HELP    = ##HELP_MEP_ADMIN_STATE
+CMD_VAR =
+RUNTIME =
+
+! enable
+HELP    = Enable this MEP
+CMD_VAR = has_enable
+RUNTIME =
+
+! disable
+HELP    = Disable this MEP
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf));
+    mep_conf.admin_active = has_enable;
+    CFM_PRINT_RC(vtss_appl_cfm_mep_conf_set(mep_key, &mep_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = debug mode
+PROPERTY  =
+PRIVILEGE = ICLI_PRIVILEGE_15
+IF_FLAG   =
+
+HELP      = ##ICLI_HELP_DEBUG
+HELP      =
+
+RUNTIME   =
+RUNTIME   =
+
+CMD_MODE  = ICLI_CMD_MODE_CFM_MEP
+
+MODE_VAR  = mepid
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_conf_t mep_conf;
+    vtss_appl_cfm_mep_key_t  mep_key;
+    char                     buf[18];
+    mesa_rc                  rc;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_ma_name_get(session_id, mep_key));
+    mep_key.mepid = mepid;
+
+    if ((rc = vtss_appl_cfm_mep_conf_get(mep_key, &mep_conf)) != VTSS_RC_OK) {
+        T_EG(CFM_TRACE_GRP_ICLI, "Unable to get CFM mep configuration for %s (%s)", mep_key, error_txt(rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("Current CFM MEP-ID is %u in Service %s in Domain %s (direction = %s, ifindex = %u, vid = %u, smac = %s, ccm_enable = %d, admin_active = %d)\n",
+                mep_key.mepid,
+                mep_key.ma.c_str(),
+                mep_key.md.c_str(),
+                cfm_util_direction_to_str(mep_conf.direction, false),
+                VTSS_IFINDEX_PRINTF_ARG(mep_conf.ifindex),
+                mep_conf.vlan,
+                misc_mac_txt(mep_conf.smac.addr, buf),
+                mep_conf.ccm_enable,
+                mep_conf.admin_active);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = exit
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = Exit from current mode
+CMD_MODE  = ICLI_CMD_MODE_CFM_MEP
+FUNC_NAME = exit_mep
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MEP cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MEP.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there. If it succeeds there, ICLI is happy, but I'm
+    // not, because it means that an exit from ICLI_CMD_MODE_CFM_MEP means
+    // that you exit to level 0 (ICLI_CMD_MODE_EXEC) instead of one level
+    // higher.
+    if (ICLI_MODE_EXIT() < 0) {
+        ICLI_PRINTF("%% Failed to exit current mode.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = help
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = Description of the interactive help system
+CMD_MODE  = ICLI_CMD_MODE_CFM_MEP
+FUNC_NAME = help_mep
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MEP cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MEP.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there. If it succeeds there, ICLI is happy BUT STAYS
+    // IN THAT MODE, so I'm not.
+    icli_config_help_print(session_id);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = end
+PRIVILEGE = ICLI_PRIVILEGE_0
+HELP      = ##ICLI_HELP_END
+CMD_MODE  = ICLI_CMD_MODE_CFM_MEP
+FUNC_NAME = end_mep
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MEP cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MEP.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there.
+    // In the case of 'end', it's actually fine to go to GLOBAL_CONFIG mode and
+    // execute it there, but there is no help on the 'end' command when you
+    // press TAB in MEP mode.
+    // One should also create commands for ALL other commands you can execute in
+    // ICLI_CMD_MODE_GLOBAL_CONFIG in order to get TAB help for them, but that's
+    // another story.
+    if (!icli_config_go_to_exec_mode(session_id)) {
+        ICLI_PRINTF("%% Failed to exit to EXEC mode.\n");
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND   = do <line>
+PRIVILEGE = ICLI_PRIVILEGE_0
+CMD_MODE  = ICLI_CMD_MODE_CFM_MEP
+FUNC_NAME = do_mep
+CMD_VAR   =
+CMD_VAR   = command
+BYWORD    =
+BYWORD    = LINE
+HELP      = ##ICLI_HELP_DO
+HELP      = ##ICLI_HELP_DO_LINE
+CODE_BEGIN
+    // Due to the stupid way ICLI is written, MEP cannot be marked with
+    // SUB_MODE = 1, which means that standard commands are not available when
+    // pressing TAB in ICLI_CMD_MODE_CFM_MEP.
+    // What ICLI instead does is to go back to ICLI_CMD_MODE_GLOBAL_CONFIG and
+    // executes the command there AND STAYS THERE unless the command fails,
+    // in which case it restores the original mode.
+    ICLI_RC((icli_rc_t)icli_config_exec_do(session_id, command));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_SHOW_DOMAINS = Show CFM Domains
+COMMAND         = show cfm domains [domain <kword1-15>] [details]
+DOC_CMD_DESC    = ##HELP_CFM_SHOW_DOMAINS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SHOW_DOMAINS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! domains
+HELP    = ##HELP_CFM_SHOW_DOMAINS
+CMD_VAR =
+RUNTIME =
+
+! domain
+HELP    = Show particular domain, only
+CMD_VAR = has_md
+RUNTIME =
+
+! <kword1-15>
+HELP    = Show particular domain, only
+CMD_VAR = md_name
+RUNTIME =
+
+! details
+HELP    = Show details of the domain(s)
+CMD_VAR = has_details
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_md_key_t md_key;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_md) {
+       md_key.md = md_name;
+    } else {
+       md_key.md = "";
+    }
+
+    ICLI_RC(CFM_ICLI_show_domains(session_id, md_key, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_SHOW_SERVICES = Show CFM Services
+COMMAND         = show cfm services [domain <kword1-15>] [service <kword1-15>] [details]
+DOC_CMD_DESC    = ##HELP_CFM_SHOW_SERVICES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SHOW_SERVICES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! services
+HELP    = ##HELP_CFM_SHOW_SERVICES
+CMD_VAR =
+RUNTIME =
+
+! domain
+HELP    = Show services within a particular domain, only
+CMD_VAR = has_md
+RUNTIME =
+
+! <kword1-15>
+HELP    = Show services within a particular domain, only
+CMD_VAR = md_name
+RUNTIME =
+
+! service
+HELP    = Show a particular service, only
+CMD_VAR = has_ma
+RUNTIME =
+
+! <kword1-15>
+HELP    = Show a particular service, only
+CMD_VAR = ma_name
+RUNTIME =
+
+! details
+HELP    = Show details of the services(s)
+CMD_VAR = has_details
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_ma_key_t ma_key;
+VARIABLE_END
+
+CODE_BEGIN
+
+    ma_key.md = "";
+    ma_key.ma = "";
+
+    if (has_md) {
+       ma_key.md = md_name;
+    }
+
+    if (has_ma) {
+        ma_key.ma = ma_name;
+    }
+
+    ICLI_RC(CFM_ICLI_show_services(session_id, ma_key, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_SHOW_MEPS = Show MEPs
+COMMAND         = show cfm meps [domain <kword1-15>] [service <kword1-15>] [mep-id <1-8191>] [details]
+DOC_CMD_DESC    = ##HELP_CFM_SHOW_MEPS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SHOW_MEPS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! meps
+HELP    = ##HELP_CFM_SHOW_MEPS
+CMD_VAR =
+RUNTIME =
+
+! domain
+HELP    = Select domain to show info for
+CMD_VAR = has_md
+RUNTIME =
+
+! <kword1-15>
+HELP    = Domain name to show info for
+CMD_VAR = md_name
+RUNTIME =
+
+! service
+HELP    = Select a service to show info for
+CMD_VAR = has_ma
+RUNTIME =
+
+! <kword1-15>
+HELP    = Service name to show info for
+CMD_VAR = ma_name
+RUNTIME =
+
+! mep-id
+HELP    = Select a MEP to show info for
+CMD_VAR = has_mepid
+RUNTIME =
+
+! <1-8191>
+HELP    = Particular MEP-ID to show info for
+CMD_VAR = mepid
+RUNTIME =
+
+! details
+HELP    = Show detailed information
+CMD_VAR = has_details
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_key_t mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    mep_key.md = "";
+    mep_key.ma = "";
+    mep_key.mepid = 0;
+
+    if (has_md) {
+        mep_key.md = md_name;
+    }
+
+    if (has_ma) {
+        mep_key.ma = ma_name;
+    }
+
+    if (has_mepid) {
+        mep_key.mepid = mepid;
+    }
+
+    ICLI_RC(CFM_ICLI_show_meps(session_id, mep_key, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_SHOW_ERRORS = Show errors
+COMMAND         = show cfm errors
+DOC_CMD_DESC    = ##HELP_CFM_SHOW_ERRORS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SHOW_ERRORS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! errors
+HELP    = ##HELP_CFM_SHOW_ERRORS
+CMD_VAR =
+RUNTIME =
+
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_show_errors(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_CLEAR_MEPS = Clear MEP statistics
+COMMAND         = clear cfm meps [domain <kword1-15>] [service <kword1-15>] [mep-id <1-8191>] statistics
+DOC_CMD_DESC    = ##HELP_CFM_CLEAR_MEPS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_CLEAR_MEPS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! clear
+HELP    = ##ICLI_HELP_CLEAR
+CMD_VAR =
+RUNTIME =
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! meps
+HELP    = ##HELP_CFM_CLEAR_MEPS
+CMD_VAR =
+RUNTIME =
+
+! domain
+HELP    = Select domain to clear counters for
+CMD_VAR = has_md
+RUNTIME =
+
+! <kword1-15>
+HELP    = Domain name to clear counters for
+CMD_VAR = md_name
+RUNTIME =
+
+! service
+HELP    = Select a service to clear counters for
+CMD_VAR = has_ma
+RUNTIME =
+
+! <kword1-15>
+HELP    = Service name to clear counters for
+CMD_VAR = ma_name
+RUNTIME =
+
+! mep-id
+HELP    = Select a MEP to clear counters for
+CMD_VAR = has_mepid
+RUNTIME =
+
+! <1-8191>
+HELP    = Particular MEP-ID to clear counters for
+CMD_VAR = mepid
+RUNTIME =
+
+! statistics
+HELP    = Clear statistics
+CMD_VAR =
+RUNTIME =
+
+VARIABLE_BEGIN
+    vtss_appl_cfm_mep_key_t mep_key;
+VARIABLE_END
+
+CODE_BEGIN
+    mep_key.md = "";
+    mep_key.ma = "";
+    mep_key.mepid = 0;
+
+    if (has_md) {
+        mep_key.md = md_name;
+    }
+
+    if (has_ma) {
+        mep_key.ma = ma_name;
+    }
+
+    if (has_mepid) {
+        mep_key.mepid = mepid;
+    }
+
+    ICLI_RC(CFM_ICLI_mep_statistics_clear(session_id, mep_key));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_SHOW_CAPABILITIES = Show CFM capabilities
+COMMAND         = debug show cfm capabilities
+DOC_CMD_DESC    = ##HELP_CFM_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! cfm
+HELP    = ##HELP_CFM
+CMD_VAR =
+RUNTIME =
+
+! capabilities
+HELP    = ##HELP_CFM_SHOW_CAPABILITIES
+CMD_VAR =
+RUNTIME =
+CODE_BEGIN
+    ICLI_RC(CFM_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_DEBUG_TIMERS = Show current CFM timers
+COMMAND         = debug show cfm timers
+DOC_CMD_DESC    = ##HELP_CFM_DEBUG_TIMERS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_DEBUG_TIMERS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_CFM
+HELP            = ##HELP_CFM_DEBUG_TIMERS
+
+CODE_BEGIN
+    void cfm_timer_debug_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    cfm_timer_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_CFM_DEBUG_RULES = Show current CFM-installed rules
+COMMAND         = debug show cfm rules
+DOC_CMD_DESC    = ##HELP_CFM_DEBUG_RULES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CFM_DEBUG_RULES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_CFM
+HELP            = ##HELP_CFM_DEBUG_RULES
+
+CODE_BEGIN
+    void cfm_rules_debug_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    cfm_rules_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+

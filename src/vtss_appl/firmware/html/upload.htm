@@ -1,0 +1,185 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Software Upload</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/resumable.js"></script>
+ <script type="text/javascript">
+
+// Help page macic
+var help_page = "/help/help_maintenance_upload.htm";
+
+var resum_obj = null;
+var sessionId = 0;
+
+function getRandomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function getSessionId(file) {
+    return sessionId;
+}
+
+function get_status_field() {
+
+    return document.getElementById("status_text_id");
+}
+
+function set_status_field(status) {
+    get_status_field().innerHTML = status;
+}
+
+function initResumable() {
+    // Allocate random session ID for this upload
+    sessionId = getRandomInt(1, 0x7FFFFFFE);
+
+    resum_obj = new Resumable({
+      target: '/config/firmware/chunkupload',
+      fileParameterName: 'firmware',
+      chunkSize: 1*1024*1024,
+      forceChunkSize: true,
+      simultaneousUploads: 1,
+      maxFiles: 1,
+      generateUniqueIdentifier: getSessionId
+    });
+
+    if (resum_obj === null || !resum_obj.support) {
+        console.debug('resumable not supported - fallback to legacy');
+        // not supported - fall back to old transfer
+        return false;
+    }
+
+    resum_obj.assignBrowse(document.getElementById('browse_button_id'));
+
+    resum_obj.on('fileAdded', function(file, event) {
+        document.getElementById('selected_file_id').innerHTML = file.fileName;
+        document.getElementById('upload_button_id').disabled = false;
+      });
+    resum_obj.on('uploadStart', function() {
+        console.debug('uploadStart');
+        document.getElementById('outer_browse_button_id').disabled = true;
+        document.getElementById('upload_button_id').disabled = true;
+      });
+    resum_obj.on('fileProgress', function(file) {
+        var progress_val = Math.round(100.0 * resum_obj.progress());
+        console.debug('fileProgress', progress_val + " %", file);
+        set_status_field("File upload progress: " + progress_val + " %");
+      });
+    resum_obj.on('fileError', function(file, message) {
+        console.debug('fileError', file, message);
+        set_status_field("File upload error: " + message);
+      });
+    resum_obj.on('fileSuccess', function(file) {
+        console.debug('fileSuccess',file);
+        set_status_field("File uploaded; check in progress, please wait ...");
+        window.location.replace("/upload_flashing.htm");
+      });
+
+    return true;
+}
+
+function onFileSelected() {
+    var fileVal = document.getElementById("browse_button_id").files[0];
+    document.getElementById('selected_file_id').innerHTML = fileVal.name;
+    document.getElementById('upload_button_id').disabled = false;
+}
+
+function requestUpdate() {
+    loadXMLDoc("/config/firmware", null, null);
+
+    document.getElementById('outer_browse_button_id').disabled = false;
+    document.getElementById('upload_button_id').disabled = true;
+
+    if (!initResumable()) {
+        // enable for legacy upgrade
+        document.getElementById('browse_button_id').onchange = onFileSelected;
+    }
+}
+
+function uploadFile() {
+    console.log("uploadFile clicked");
+
+    if (resum_obj !== null && resum_obj.support) {
+        console.log("Using resumable upload");
+        resum_obj.upload();
+
+    } else {
+        console.log("Using legacy upload");
+        firmware_upload_form.submit();
+        set_status_field("File upload in progress");
+    }
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<h1>Software Upload</h1>
+
+<form name="firmware_upload_form" action="/config/firmware" method="post" enctype="multipart/form-data">
+ <div class="hasWarmStart">
+  <input type="checkbox" name="coolstart" id="coolstart">
+  <label for="coolstart">Force Cool Restart</label>
+  <br>
+  <br>
+ </div>
+    <!-- Use outer button control to be able to control display of selected file from resumable.js -->
+    <input type="button" id="outer_browse_button_id" value="Select File ..."
+           onclick="document.getElementById('browse_button_id').click();" />
+    <!-- Simulate the built-in label for an input control of type 'file' -->
+    <label for="outer_browse_button_id" id="selected_file_id" 
+           style="width:200px; display:inline-block; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;">
+        No file selected
+    </label>
+    <!-- The inner and real (and hidden) file button control -->
+    <input type="file" style="display:none;" id="browse_button_id" name="firmware">
+
+    <input type="button" id="upload_button_id" value="Start Upgrade" onclick="uploadFile()">
+    <br>
+    <p>
+        <span class="displaytext">Upload status: </span>
+        <span class="displaytext" id="status_text_id">Idle</span>
+    </p>
+</form>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

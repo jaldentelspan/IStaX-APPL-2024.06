@@ -1,0 +1,703 @@
+#
+# Copyright (c) 2006-2020 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+#
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_DHCP6_CLIENT)
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "vtss/appl/dhcp6_client.h"
+#if defined(VTSS_SW_OPTION_IP)
+#include "ip_api.h"
+#include "ip_utils.hxx"
+#endif /* defined(VTSS_SW_OPTION_IP) */
+INCLUDE_END
+
+FUNCTION_BEGIN
+static BOOL ICLI_dhcp6c_chk_slaac_present(IN u32 session_id, IN icli_runtime_ask_t ask, OUT icli_runtime_t *runtime)
+{
+    switch ( ask ) {
+    case ICLI_ASK_PRESENT:
+        runtime->present = FALSE;
+        return TRUE;
+    case ICLI_ASK_BYWORD:
+    case ICLI_ASK_HELP:
+    case ICLI_ASK_RANGE:
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL ICLI_address6_zero(const mesa_ipv6_t *const ipv6_addr)
+{
+    u8  i;
+
+    for (i = 0; ipv6_addr && i < 16; i++) {
+        if (ipv6_addr->addr[i]) {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static void ICLI_dhcp6c_convert_timestamp_txt(const mesa_timestamp_t *const ts, char *const txt)
+{
+    if (!ts) {
+        sprintf(txt, "NULL");
+    } else {
+        u32 dd;
+        u32 hh;
+        u8  mm;
+        u8  ss;
+        u16 ms;
+
+        ss = (u8)((ts->seconds % 60) & 0xFF);
+        hh = ts->seconds / 60;
+        mm = (u8)((hh % 60) & 0xFF);
+        hh = hh / 60;
+        dd = hh / 24;
+        hh = hh % 24;
+        ms = (u16)((ts->nanoseconds / 1000000) & 0xFFFF);
+        ms = ms % 1000;
+        if (dd > 365) {
+            sprintf(txt, "INFINITE (Over one year!)");
+        } else if (dd > 0) {
+            sprintf(txt, "%u Day%s %s%u:%s%u:%s%u.%s%u",
+                    dd, dd > 1 ? "s" : "",
+                    hh > 9 ? "" : "0", hh,
+                    mm > 9 ? "" : "0", mm,
+                    ss > 9 ? "" : "0", ss,
+                    ms < 10 ? "00" : (ms < 100 ? "0" : ""), ms);
+        } else {
+            sprintf(txt, "%s%u:%s%u:%s%u.%s%u",
+                    hh > 9 ? "" : "0", hh,
+                    mm > 9 ? "" : "0", mm,
+                    ss > 9 ? "" : "0", ss,
+                    ms < 10 ? "00" : (ms < 100 ? "0" : ""), ms);
+        }
+    }
+}
+
+static void ICLI_dhcp6c_interface_display(
+    const vtss_ifindex_t                *const ifidx,
+    const vtss_appl_dhcp6c_interface_t  *const intf,
+    u32 session_id
+)
+{
+    vtss_ifindex_elm_t  ife;
+    mesa_vid_t          vidx;
+    char                myString[40];
+
+    if (!ifidx || !intf ||
+        vtss_ifindex_decompose(*ifidx, &ife) != VTSS_RC_OK ||
+        ife.iftype != VTSS_IFINDEX_TYPE_VLAN) {
+        ICLI_PRINTF("%% Invalid operation.\n\n");
+        return;
+    }
+    vidx = (mesa_vid_t)ife.ordinal;
+
+    ICLI_PRINTF("IPv6 Vlan%u interface is running DHCPv6 client\n\r", vidx);
+    memset(myString, 0x0, sizeof(myString));
+    (void) icli_ipv6_to_str(intf->address, myString);
+    ICLI_PRINTF("  Internet address from DHCP is %s\n\r", myString);
+    ICLI_PRINTF("  List of known servers:\n\r");
+    memset(myString, 0x0, sizeof(myString));
+    (void) icli_ipv6_to_str(intf->srv_addr, myString);
+    ICLI_PRINTF("    Active DHCPv6 server is %s\n\r", myString);
+
+    if (!ICLI_address6_zero(&intf->srv_addr)) {
+        ICLI_PRINTF("    Configuration parameters:\n\r");
+        memset(myString, 0x0, sizeof(myString));
+        (void) icli_ipv6_to_str(intf->dns_srv_addr, myString);
+        ICLI_PRINTF("      Available DNS server: %s\n\r", myString);
+        memset(myString, 0x0, sizeof(myString));
+        ICLI_dhcp6c_convert_timestamp_txt(&intf->timers.t1, myString);
+        ICLI_PRINTF("      T1 expired in %s\n\r", myString);
+        memset(myString, 0x0, sizeof(myString));
+        ICLI_dhcp6c_convert_timestamp_txt(&intf->timers.t2, myString);
+        ICLI_PRINTF("      T2 expired in %s\n\r", myString);
+        memset(myString, 0x0, sizeof(myString));
+        ICLI_dhcp6c_convert_timestamp_txt(&intf->timers.preferred_lifetime, myString);
+        ICLI_PRINTF("      Preferred lifetime expired in %s\n\r", myString);
+        memset(myString, 0x0, sizeof(myString));
+        ICLI_dhcp6c_convert_timestamp_txt(&intf->timers.valid_lifetime, myString);
+        ICLI_PRINTF("      Valid lifetime expired in %s\n\r", myString);
+    }
+
+    ICLI_PRINTF("  DHCPv6 traffic statistics:\n\r");
+    ICLI_PRINTF("    Received Counters:\n\r");
+    ICLI_PRINTF("      %u ADVERTISE message%s, %u REPLY message%s\n\r",
+                intf->counters.rx_advertise, intf->counters.rx_advertise > 1 ? "s" : "",
+                intf->counters.rx_reply, intf->counters.rx_reply > 1 ? "s" : "");
+    ICLI_PRINTF("      %u RECONFIGURE message%s\n\r",
+                intf->counters.rx_reconfigure, intf->counters.rx_reconfigure > 1 ? "s" : "");
+    ICLI_PRINTF("      %u error, %u discarded, %u unknown\n\r",
+                intf->counters.rx_error, intf->counters.rx_drop, intf->counters.rx_unknown);
+    ICLI_PRINTF("    Transmitted Counters:\n\r");
+    ICLI_PRINTF("      %u SOLICIT message%s, %u REQUEST message%s\n\r",
+                intf->counters.tx_solicit, intf->counters.tx_solicit > 1 ? "s" : "",
+                intf->counters.tx_request, intf->counters.tx_request > 1 ? "s" : "");
+    ICLI_PRINTF("      %u CONFIRM message%s, %u RENEW message%s\n\r",
+                intf->counters.tx_confirm, intf->counters.tx_confirm > 1 ? "s" : "",
+                intf->counters.tx_renew, intf->counters.tx_renew > 1 ? "s" : "");
+    ICLI_PRINTF("      %u REBIND message%s, %u RELEASE message%s\n\r",
+                intf->counters.tx_rebind, intf->counters.tx_rebind > 1 ? "s" : "",
+                intf->counters.tx_release, intf->counters.tx_release > 1 ? "s" : "");
+    ICLI_PRINTF("      %u DECLINE message%s, %u INFORMATION_REQUEST message%s\n\r",
+                intf->counters.tx_decline, intf->counters.tx_decline > 1 ? "s" : "",
+                intf->counters.tx_information_request, intf->counters.tx_information_request > 1 ? "s" : "");
+    ICLI_PRINTF("      %u error, %u discarded, %u unknown\n\n\r",
+                intf->counters.tx_error, intf->counters.tx_drop, intf->counters.tx_unknown);
+}
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+HELP_MGMT_DHCP6C            = Manage DHCPv6 client service
+HELP_EXEC_DHCP6C_RESTART    = Restart DHCPv6 client service
+HELP_INTERFACE_SLAAC        = Enable IPv6 Stateless Auto-configuration
+HELP_INTERFACE_NO_SLAAC     = Disable IPv6 Stateless Auto-configuration
+HELP_INTERFACE_DHCP6C       = Enable DHCPv6 client function
+HELP_INTERFACE_NO_DHCP6C    = Disable DHCPv6 client function
+HELP_DHCP6C_VLAN            = VLAN of IPv6 interface
+HELP_DHCP6C_VLAN_LIST       = IPv6 interface VLAN list
+HELP_DHCP6C_RAPID_COMMIT    = Enable DHCPv6 client Rapid-Commit option
+HELP_DHCP6C_NO_RAPID_COMMIT = Disable DHCPv6 client Rapid-Commit option
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = debug ipv6 dhcp-client capability
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = icli_dhcp6c_service_capability
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! 1: debug
+! 2: ipv6
+! 3: dhcp-client
+! 4: capability
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = ##ICLI_HELP_IPV6
+HELP = ##HELP_MGMT_DHCP6C
+HELP = Display DHCP6C Capabilities
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+    mesa_rc                         cmd_rc = ICLI_RC_OK;
+    vtss_appl_dhcp6c_capabilities_t cap;
+VARIABLE_END
+
+CODE_BEGIN
+    if ((cmd_rc = vtss_appl_dhcp6c_capabilities_get(&cap)) != VTSS_RC_OK) {
+        ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+        return ICLI_RC_ERROR;
+    }
+
+    ICLI_PRINTF("\nDHCPv6 Client Max. Interface Count: %u\n", cap.max_number_of_interfaces);
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = ipv6 dhcp-client restart [ interface vlan <vlan_list> ]
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = icli_dhcp6c_service_restart
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! 1: ipv6
+! 2: dhcp-client
+! 3: restart
+! 4: interface
+! 5: vlan
+! 6: <vlan_list>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_interface
+CMD_VAR = 
+CMD_VAR = v_vlan_list
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##HELP_MGMT_DHCP6C
+HELP = ##HELP_EXEC_DHCP6C_RESTART
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##HELP_DHCP6C_VLAN
+HELP = ##HELP_DHCP6C_VLAN_LIST
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = interface : Option
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+    mesa_rc                         cmd_rc = ICLI_RC_OK;
+    BOOL                            pass;
+    vtss_ifindex_t                  ifidx;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_interface && !v_vlan_list) {
+        ICLI_PRINTF("%% Invalid operation.\n\n");
+        return ICLI_RC_ERR_PARAMETER;
+    }
+
+    pass = TRUE;
+    if (has_interface) {
+        u32         idx;
+        mesa_vid_t  vidx, bnd;
+
+        for (idx = 0; idx < v_vlan_list->cnt; idx++) {
+            bnd = v_vlan_list->range[idx].max;
+            for (vidx = v_vlan_list->range[idx].min; vidx <= bnd; vidx++) {
+                if (vtss_ifindex_from_vlan(vidx, &ifidx) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Failed to convert IfIndex from %u!\n\r\n", vidx);
+                    continue;
+                }
+
+                if ((cmd_rc = vtss_appl_dhcp6c_interface_restart_act(&ifidx)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Invalid DHCPv6 client interface Vlan%u\n\r\n", vidx);
+                    pass = FALSE;
+                }
+            }
+        }
+    } else {
+        vtss_ifindex_t  *ifx;
+
+        for (ifx = NULL; vtss_appl_dhcp6c_interface_itr(ifx, &ifidx) == VTSS_RC_OK; ifx = &ifidx) {
+            if ((cmd_rc = vtss_appl_dhcp6c_interface_restart_act(&ifidx)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+                pass = FALSE;
+            }
+        }
+    }
+
+    if (!pass || cmd_rc != VTSS_RC_OK) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = show ipv6 dhcp-client [ interface vlan <vlan_list> ]
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = icli_dhcp6c_status_show
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR = 
+
+! 1: show
+! 2: ipv6
+! 3: dhcp-client
+! 4: interface
+! 5: vlan
+! 6: <vlan_list>
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_interface
+CMD_VAR = 
+CMD_VAR = v_vlan_list
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+
+HELP = ##ICLI_HELP_SHOW
+HELP = ##ICLI_HELP_IPV6
+HELP = ##HELP_MGMT_DHCP6C
+HELP = ##ICLI_HELP_INTERFACE
+HELP = ##HELP_DHCP6C_VLAN
+HELP = ##HELP_DHCP6C_VLAN_LIST
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = interface : Option
+BYWORD = 
+BYWORD = 
+
+VARIABLE_BEGIN
+    mesa_rc                         cmd_rc = ICLI_RC_OK;
+    vtss_ifindex_t                  ifidx;
+    vtss_appl_dhcp6c_interface_t    intf;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_interface && !v_vlan_list) {
+        ICLI_PRINTF("%% Invalid operation.\n\n");
+        return ICLI_RC_ERR_PARAMETER;
+    }
+
+    if (has_interface) {
+        u32         idx;
+        mesa_vid_t  vidx, bnd;
+
+        for (idx = 0; idx < v_vlan_list->cnt; idx++) {
+            bnd = v_vlan_list->range[idx].max;
+            for (vidx = v_vlan_list->range[idx].min; vidx <= bnd; vidx++) {
+                if (vtss_ifindex_from_vlan(vidx, &ifidx) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Failed to convert IfIndex from %u!\n\r\n", vidx);
+                    continue;
+                }
+
+                if ((cmd_rc = vtss_appl_dhcp6c_interface_status_get(&ifidx, &intf)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% Invalid DHCPv6 client interface Vlan%u\n\r\n", vidx);
+                    continue;
+                }
+                ICLI_dhcp6c_interface_display(&ifidx, &intf, session_id);
+            }
+        }
+    } else {
+        vtss_ifindex_t  *ifx;
+
+        for (ifx = NULL; vtss_appl_dhcp6c_interface_itr(ifx, &ifidx) == VTSS_RC_OK; ifx = &ifidx) {
+            if ((cmd_rc = vtss_appl_dhcp6c_interface_status_get(&ifidx, &intf)) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+                continue;
+            }
+            ICLI_dhcp6c_interface_display(&ifidx, &intf, session_id);
+        }
+    }
+
+    if (cmd_rc != VTSS_RC_OK) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = ipv6 address { autoconfig | dhcp [ rapid-commit ] }
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = icli_dhcp6c_address_set
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = 
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlist
+
+! 1: ipv6
+! 2: address
+! 3: autoconfig
+! 4: dhcp
+! 5: rapid-commit
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_autoconfig
+CMD_VAR = has_dhcp
+CMD_VAR = has_rapid_commit
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = ICLI_dhcp6c_chk_slaac_present
+RUNTIME = 
+RUNTIME = 
+
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_IP6_ADRS
+HELP = ##HELP_INTERFACE_SLAAC
+HELP = ##HELP_INTERFACE_DHCP6C
+HELP = ##HELP_DHCP6C_RAPID_COMMIT
+
+BYWORD = 
+BYWORD = 
+BYWORD = autoconfig : Option
+BYWORD = dhcp : Option
+BYWORD = rapid-commit : Option
+
+VARIABLE_BEGIN
+    mesa_rc                         cmd_rc;
+    BOOL                            pass, new_if;
+    u32                             idx;
+    mesa_vid_t                      vidx, bnd;
+    vtss_ifindex_t                  ifidx;
+    vtss_appl_dhcp6c_intf_conf_t    dhcp6c_cfg;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!vlist) {
+        ICLI_PRINTF("%% Invalid operation.\n\n");
+        return ICLI_RC_ERR_PARAMETER;
+    }
+
+    pass = TRUE;
+    for (idx = 0; idx < vlist->cnt; idx++) {
+        bnd = vlist->range[idx].max;
+        for (vidx = vlist->range[idx].min; vidx <= bnd; vidx++) {
+            if (vtss_ifindex_from_vlan(vidx, &ifidx) != VTSS_RC_OK) {
+                continue;
+            }
+
+            if (!vtss_appl_ip_if_exists(ifidx)) {
+                continue;
+            }
+
+            new_if = FALSE;
+            if (vtss_appl_dhcp6c_interface_config_get(&ifidx, &dhcp6c_cfg) != VTSS_RC_OK) {
+                if (vtss_appl_dhcp6c_interface_config_default(&dhcp6c_cfg) == VTSS_RC_OK) {
+                    new_if = TRUE;
+                }
+            }
+
+            if (has_autoconfig) {
+
+            } else if (has_dhcp) {
+                if (has_rapid_commit) {
+                    dhcp6c_cfg.rapid_commit = TRUE;
+                }
+            }
+
+            if (!new_if) {
+                if ((cmd_rc = vtss_appl_dhcp6c_interface_config_set(&ifidx, &dhcp6c_cfg)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+                    pass = FALSE;
+                }
+            } else {
+                if ((cmd_rc = vtss_appl_dhcp6c_interface_config_add(&ifidx, &dhcp6c_cfg)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+                    pass = FALSE;
+                }
+            }
+        }
+    }
+
+    if (!pass) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+
+IF_FLAG = 
+
+COMMAND = no ipv6 address { autoconfig | dhcp [ rapid-commit ] }
+
+DOC_CMD_DESC    = 
+DOC_CMD_DEFAULT = 
+DOC_CMD_USAGE   = 
+DOC_CMD_EXAMPLE = 
+
+FUNC_NAME = icli_dhcp6c_address_no
+FUNC_REUSE = 
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_INTERFACE_VLAN
+MODE_VAR = vlist
+
+! 1: no
+! 2: ipv6
+! 3: address
+! 4: autoconfig
+! 5: dhcp
+! 6: rapid-commit
+
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = 
+CMD_VAR = has_autoconfig
+CMD_VAR = has_dhcp
+CMD_VAR = has_rapid_commit
+
+RUNTIME = 
+RUNTIME = 
+RUNTIME = 
+RUNTIME = ICLI_dhcp6c_chk_slaac_present
+RUNTIME = 
+RUNTIME = 
+
+HELP = ##ICLI_HELP_NO
+HELP = ##ICLI_HELP_IPV6
+HELP = ##ICLI_HELP_IP6_ADRS
+HELP = ##HELP_INTERFACE_NO_SLAAC
+HELP = ##HELP_INTERFACE_NO_DHCP6C
+HELP = ##HELP_DHCP6C_NO_RAPID_COMMIT
+
+BYWORD = 
+BYWORD = 
+BYWORD = 
+BYWORD = autoconfig : Option
+BYWORD = dhcp : Option
+BYWORD = rapid-commit : Option
+
+VARIABLE_BEGIN
+    mesa_rc                         cmd_rc;
+    BOOL                            pass, do_del;
+    u32                             idx;
+    mesa_vid_t                      vidx, bnd;
+    vtss_ifindex_t                  ifidx;
+    vtss_appl_dhcp6c_intf_conf_t    dhcp6c_cfg;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!vlist) {
+        ICLI_PRINTF("%% Invalid operation.\n\n");
+        return ICLI_RC_ERR_PARAMETER;
+    }
+
+    pass = TRUE;
+    for (idx = 0; idx < vlist->cnt; idx++) {
+        bnd = vlist->range[idx].max;
+        for (vidx = vlist->range[idx].min; vidx <= bnd; vidx++) {
+            if (vtss_ifindex_from_vlan(vidx, &ifidx) != VTSS_RC_OK) {
+                continue;
+            }
+
+            if (!vtss_appl_ip_if_exists(ifidx)) {
+                continue;
+            }
+
+            if (vtss_appl_dhcp6c_interface_config_get(&ifidx, &dhcp6c_cfg) != VTSS_RC_OK) {
+                ICLI_PRINTF("%% No such DHCPv6 client interface with VID %u!\n\r\n", vidx);
+                continue;
+            }
+
+            do_del = FALSE;
+            if (has_autoconfig) {
+
+            } else if (has_dhcp) {
+                if (has_rapid_commit) {
+                    dhcp6c_cfg.rapid_commit = FALSE;
+                } else {
+                    do_del = TRUE;
+                }
+            }
+
+            if (!do_del) {
+                if ((cmd_rc = vtss_appl_dhcp6c_interface_config_set(&ifidx, &dhcp6c_cfg)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+                    pass = FALSE;
+                }
+            } else {
+                if ((cmd_rc = vtss_appl_dhcp6c_interface_config_del(&ifidx)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("%% %s\n\n", error_txt(cmd_rc));
+                    pass = FALSE;
+                }
+            }
+        }
+    }
+
+    if (!pass) {
+        return ICLI_RC_ERROR;
+    }
+CODE_END
+
+CMD_END

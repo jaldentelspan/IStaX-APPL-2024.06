@@ -1,0 +1,2085 @@
+# Copyright (c) 2006-2023 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG = defined(VTSS_SW_OPTION_VCL)
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"
+#include "vcl_api.h"
+#include <vtss_trace_lvl_api.h>
+#include <vtss_trace_api.h>
+#include "mgmt_api.h"
+#include "ip_utils.hxx"
+#include "misc_api.h"    /* For uport2iport(), iport2uport()         */
+#include "port_iter.hxx" /* For switch_iter_init(), port_iter_init() */
+#include "topo_api.h"    /* For topo_usid2isid(), topo_isid2usid()   */
+#include "icfg_api.h"
+#include "qos_api.h"     /* For vtss_appl_qos_qcl_proto2txt()        */
+#include "mac_utils.hxx" /* For mesa_mac_t::operator==()             */
+#include <vtss/basics/enum_macros.hxx>
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include VCL's trace here, because ICLI defines its own that we
+// don't want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "vcl_trace.h"
+
+#undef IC_RC
+#define IC_RC(expr) do {                         \
+    mesa_rc _rc_ = (expr);                       \
+    if (_rc_ != VTSS_RC_OK) {                    \
+        ICLI_PRINTF("%% %s\n", error_txt(_rc_)); \
+        return ICLI_RC_ERROR;                    \
+    }                                            \
+} while (0)
+
+/******************************************************************************/
+// ICFG Functions
+/******************************************************************************/
+
+/******************************************************************************/
+// VCL_ICFG_global_conf()
+/******************************************************************************/
+static mesa_rc VCL_ICFG_global_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vcl_proto_mgmt_group_conf_proto_t entry = {0};
+    char                              eth2_proto_string[15], snap_oui_string[15];
+    BOOL                              first_entry = TRUE, next = FALSE;
+
+    while (vcl_proto_mgmt_proto_get(&entry, first_entry, next) == VTSS_RC_OK) {
+        first_entry = FALSE;
+
+        if (entry.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_ETH2) {
+            // ETH type
+            switch (entry.proto.eth2_proto.eth_type) {
+            case ETHERTYPE_ARP:
+                strcpy(eth2_proto_string, "arp");
+                break;
+
+            case ETHERTYPE_IP:
+                strcpy(eth2_proto_string, "ip");
+                break;
+
+            case ETHERTYPE_IPX:
+                strcpy(eth2_proto_string, "ipx");
+                break;
+
+            case ETHERTYPE_AT:
+                strcpy(eth2_proto_string, "at");
+                break;
+
+            default:
+                sprintf(eth2_proto_string, "0x%X", entry.proto.eth2_proto.eth_type);
+                break;
+            }
+
+            VTSS_RC(vtss_icfg_printf(result, "vlan protocol eth2 %s group %s\n", eth2_proto_string, entry.name));
+        } else if (entry.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP) {
+            // SNAP
+            // Convert snap OUI to string
+            if (entry.proto.llc_snap_proto.oui[0] == 0x0 &&
+                entry.proto.llc_snap_proto.oui[1] == 0x0 &&
+                entry.proto.llc_snap_proto.oui[2] == 0x0) {
+                strcpy(snap_oui_string, "rfc-1042");
+            } else if (entry.proto.llc_snap_proto.oui[0] == 0x0 &&
+                       entry.proto.llc_snap_proto.oui[1] == 0x0 &&
+                       entry.proto.llc_snap_proto.oui[2] == 0xF8) {
+                strcpy(snap_oui_string, "snap-8021h");
+            } else {
+                sprintf(snap_oui_string, "0x%X", (entry.proto.llc_snap_proto.oui[0] << 16) |
+                        (entry.proto.llc_snap_proto.oui[1] << 8) |
+                        (entry.proto.llc_snap_proto.oui[2]));
+            }
+
+            VTSS_RC(vtss_icfg_printf(result, "vlan protocol snap %s 0x%X group %s\n", snap_oui_string, entry.proto.llc_snap_proto.pid, entry.name));
+        } else {
+            // LLC
+            VTSS_RC(vtss_icfg_printf(result, "vlan protocol llc 0x%x 0x%x group %s\n", entry.proto.llc_other_proto.dsap, entry.proto.llc_other_proto.ssap, entry.name));
+        }
+
+        next = TRUE;
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICFG_port_conf()
+/******************************************************************************/
+static mesa_rc VCL_ICFG_port_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_isid_t                    isid = topo_usid2isid(req->instance_id.port.usid);
+    mesa_port_no_t                 iport = uport2iport(req->instance_id.port.begin_uport);
+    BOOL                           first, next;
+    vcl_mac_mgmt_vce_conf_global_t mac_vce;
+
+    // switchport vlan protocol
+    vcl_proto_mgmt_group_conf_entry_global_t proto_vce;
+
+    next = FALSE;
+    first = TRUE;
+    while (vcl_proto_mgmt_conf_get(isid, &proto_vce, first, next) == VTSS_RC_OK) {
+        next = TRUE;
+        first = FALSE;
+        if (proto_vce.ports[isid - VTSS_ISID_START][iport]) { // Only print if current port is part the entry
+            VTSS_RC(vtss_icfg_printf(result, " switchport vlan protocol group %s %s %u\n", proto_vce.name, "vlan", proto_vce.vid));
+        }
+    }
+
+#ifdef VTSS_SW_OPTION_IP
+    // switchport vlan ip-subnet
+    char buf[100];
+    char buf1[100];
+    vcl_ip_mgmt_vce_conf_global_t ip_vce = {};
+    mesa_ipv4_t                   mask;
+
+    next = FALSE;
+    first = TRUE;
+    while (vcl_ip_mgmt_conf_get(isid, &ip_vce, first, next) == VTSS_RC_OK) {
+        next = TRUE;
+        first = FALSE;
+        if (ip_vce.ports[isid - VTSS_ISID_START][iport]) {
+            // Only print if current port is part of IP subnet based VLAN membership
+            mask = vtss_ipv4_prefix_to_mask(ip_vce.mask_len);
+            VTSS_RC(vtss_icfg_printf(result, " switchport vlan ip-subnet %s/%s vlan %u\n", misc_ipv4_txt(ip_vce.ip_addr, buf), misc_ipv4_txt(mask, buf1), ip_vce.vid));
+        }
+    }
+#endif
+
+    // switchport vlan mac vlan
+    next = FALSE;
+    first = TRUE;
+    while (vcl_mac_mgmt_conf_get(isid, &mac_vce, first, next) == VTSS_RC_OK) {
+        next = TRUE;
+        first = FALSE;
+        if (mac_vce.ports[isid - VTSS_ISID_START][iport]) { // Only print if current port is part the entry
+            VTSS_RC(vtss_icfg_printf(result, " switchport vlan mac %s vlan %d\n",
+                                     misc_mac2str(mac_vce.smac.addr),
+                                     mac_vce.vid));
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// vcl_icfg_init()
+/******************************************************************************/
+mesa_rc vcl_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_VCL_GLOBAL_CONF, "vlan", VCL_ICFG_global_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_VCL_PORT_CONF,   "vlan", VCL_ICFG_port_conf));
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// ICLI Functions
+/******************************************************************************/
+
+/******************************************************************************/
+// VCL_ICLI_protocol_group_add()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_protocol_group_add(u32 session_id, BOOL has_eth2, u16 etype, BOOL has_arp, BOOL has_ip, BOOL has_ipx, BOOL has_at, BOOL has_snap, uint oui, BOOL has_rfc_1042, BOOL has_snap_8021h, u16 pid, BOOL has_llc, u8 dsap, u8 ssap, char *name)
+{
+    vcl_proto_mgmt_group_conf_proto_t group_conf;
+    u8                                proto_cnt = 0;
+    mesa_rc                           rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Add Protocol to Group mapping");
+    if (name == NULL) {
+        return VCL_ERROR_NULL_GROUP_NAME;
+    }
+    if (has_eth2) {
+        proto_cnt++;
+    }
+    if (has_snap) {
+        proto_cnt++;
+    }
+    if (has_llc) {
+        proto_cnt++;
+    }
+    if (proto_cnt > 1) {
+        return VCL_ERROR_INVALID_PROTO_CNT;
+    }
+    if (has_eth2) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_ETH2;
+        if (has_arp) {
+            etype = ETHERTYPE_ARP;
+        } else if (has_ip) {
+            etype = ETHERTYPE_IP;
+        } else if (has_ipx) {
+            etype = ETHERTYPE_IPX;
+        } else if (has_at) {
+            etype = ETHERTYPE_AT;
+        }
+        group_conf.proto.eth2_proto.eth_type = etype;
+    } else if (has_snap) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP;
+        group_conf.proto.llc_snap_proto.pid = pid;
+        if (has_rfc_1042) {
+            group_conf.proto.llc_snap_proto.oui[0] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[1] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[2] = 0x0;
+        } else if (has_snap_8021h) {
+            group_conf.proto.llc_snap_proto.oui[0] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[1] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[2] = 0xF8;
+        } else { /* valid OUI */
+            group_conf.proto.llc_snap_proto.oui[0] = (oui >> 16) & 0xFF;
+            group_conf.proto.llc_snap_proto.oui[1] = (oui >> 8) & 0xFF;
+            group_conf.proto.llc_snap_proto.oui[2] = oui & 0xFF;
+        }
+        if ((group_conf.proto.llc_snap_proto.oui[0] == 0) &&
+            (group_conf.proto.llc_snap_proto.oui[1] == 0) &&
+            (group_conf.proto.llc_snap_proto.oui[2] == 0)) {
+            if (pid < 0x600) {
+                return VCL_ERROR_INVALID_PID;
+            }
+        }
+    } else if (has_llc) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_OTHER;
+        group_conf.proto.llc_other_proto.dsap = dsap;
+        group_conf.proto.llc_other_proto.ssap = ssap;
+    } else {
+        return VCL_ERROR_NO_PROTO_SELECTED;
+    }
+    memcpy(group_conf.name, name, MAX_GROUP_NAME_LEN);
+    group_conf.name[strlen((char *)name)] = '\0';
+    if ((rc = vcl_proto_mgmt_proto_add(&group_conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("Adding Protocol to Group mapping Failed\n");
+        return rc;
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Add Protocol to Group mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_protocol_group_del()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_protocol_group_del(u32 session_id, BOOL has_eth2, u16 etype, BOOL has_arp, BOOL has_ip, BOOL has_ipx, BOOL has_at, BOOL has_snap, uint oui, BOOL has_rfc_1042, BOOL has_snap_8021h, u16 pid, BOOL has_llc, u8 dsap, u8 ssap)
+{
+    vcl_proto_mgmt_group_conf_proto_t group_conf;
+    u8                                proto_cnt = 0;
+    mesa_rc                           rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Delete Protocol to Group mapping");
+    if (has_eth2) {
+        proto_cnt++;
+    }
+    if (has_snap) {
+        proto_cnt++;
+    }
+    if (has_llc) {
+        proto_cnt++;
+    }
+    if (proto_cnt > 1) {
+        return VCL_ERROR_INVALID_PROTO_CNT;
+    }
+    if (has_eth2) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_ETH2;
+        if (has_arp) {
+            etype = ETHERTYPE_ARP;
+        } else if (has_ip) {
+            etype = ETHERTYPE_IP;
+        } else if (has_ipx) {
+            etype = ETHERTYPE_IPX;
+        } else if (has_at) {
+            etype = ETHERTYPE_AT;
+        }
+        group_conf.proto.eth2_proto.eth_type = etype;
+    } else if (has_snap) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP;
+        group_conf.proto.llc_snap_proto.pid = pid;
+        if (has_rfc_1042) {
+            group_conf.proto.llc_snap_proto.oui[0] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[1] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[2] = 0x0;
+        } else if (has_snap_8021h) {
+            group_conf.proto.llc_snap_proto.oui[0] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[1] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[2] = 0xF8;
+        } else { /* valid OUI */
+            group_conf.proto.llc_snap_proto.oui[0] = (oui >> 16) & 0xFF;
+            group_conf.proto.llc_snap_proto.oui[1] = (oui >> 8) & 0xFF;
+            group_conf.proto.llc_snap_proto.oui[2] = oui & 0xFF;
+        }
+        if ((group_conf.proto.llc_snap_proto.oui[0] == 0) &&
+            (group_conf.proto.llc_snap_proto.oui[1] == 0) &&
+            (group_conf.proto.llc_snap_proto.oui[2] == 0)) {
+            if (pid < 0x600) {
+                return VCL_ERROR_INVALID_PID;
+            }
+        }
+    } else if (has_llc) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_OTHER;
+        group_conf.proto.llc_other_proto.dsap = dsap;
+        group_conf.proto.llc_other_proto.ssap = ssap;
+    } else {
+        return VCL_ERROR_NO_PROTO_SELECTED;
+    }
+    if ((rc = vcl_proto_mgmt_proto_del(&group_conf)) != VTSS_RC_OK) {
+        ICLI_PRINTF("Deleting Protocol to Group mapping Failed\n");
+        return rc;
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Delete Protocol to Group mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_mac_add()
+// Function for adding mac-based
+// IN : ipv4   - Pointer to the IP address and mask
+//      vce_id - Entry id
+//      plist  - List of ports to configure
+/******************************************************************************/
+static mesa_rc VCL_ICLI_mac_add(mesa_mac_t mac_addr, mesa_vid_t vid, icli_stack_port_range_t *plist)
+{
+    vcl_mac_mgmt_vce_conf_global_t entry;
+    vcl_mac_mgmt_vce_conf_local_t  local_entry;
+    switch_iter_t                  sit;
+    port_iter_t                    pit;
+    mesa_rc                        rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Add MAC to VID mapping");
+    vtss_clear(entry);
+    memcpy(&entry.smac, &mac_addr, sizeof(mac_addr));
+    if (vcl_mac_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, FALSE, FALSE) != VTSS_RC_OK) {
+        vtss_clear(entry);
+    } else {
+        if (entry.vid != vid) {
+            T_DG(TRACE_GRP_ICLI, "The provided VLAN ID does not match the one of the existing MAC entry. If you wanted to update the VID, then you must delete the entry first (updating the VID is not possible!)");
+            return VCL_ERROR_ENTRY_DIFF_VID;
+        }
+    }
+    // Loop over all configurable switches in usid order...
+    (void)icli_switch_iter_init(&sit);
+    // ...provided they're also in the plist.
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        vtss_clear(local_entry);
+        /* Populate the mac_vlan_entry to pass it to VCL module */
+        memcpy(&local_entry.smac, &mac_addr, sizeof(mac_addr));
+        local_entry.vid = vid;
+        memcpy(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]));
+        // Loop over all ports in uport order...
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        // ... provided they're also in the plist.
+        while (icli_port_iter_getnext(&pit, plist)) {
+            local_entry.ports[pit.iport] = TRUE;
+        }
+        if (memcmp(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]))) {
+            if ((rc = vcl_mac_mgmt_conf_add(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                return rc;
+            }
+        } else {
+            T_DG(TRACE_GRP_ICLI, "The provided port list matches the existing one and therefore no update is required to the mapping");
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Add MAC to VID mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_mac_del()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_mac_del(u32 session_id, mesa_mac_t mac_addr, icli_stack_port_range_t *plist)
+{
+    vcl_mac_mgmt_vce_conf_global_t entry;
+    vcl_mac_mgmt_vce_conf_local_t  local_entry;
+    switch_iter_t                  sit;
+    port_iter_t                    pit;
+    mesa_port_list_t               ports;
+    mesa_rc                        rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Delete MAC to VID mapping");
+    vtss_clear(entry);
+    memcpy(&entry.smac, &mac_addr, sizeof(mac_addr));
+    if ((rc = vcl_mac_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, FALSE, FALSE)) != VTSS_RC_OK) {
+        return rc;
+    }
+    // Loop over all configurable switches in usid order...
+    (void)icli_switch_iter_init(&sit);
+    // ...provided they're also in the plist.
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        vtss_clear(local_entry);
+        /* Populate the mac_vlan_entry to pass it to VCL module */
+        memcpy(&local_entry.smac, &mac_addr, sizeof(mac_addr));
+        local_entry.vid = entry.vid;
+        memcpy(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]));
+        // Loop over all ports in uport order...
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        // ... provided they're also in the plist.
+        while (icli_port_iter_getnext(&pit, plist)) {
+            local_entry.ports[pit.iport] = FALSE;
+        }
+        if (memcmp(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]))) {
+            if (memcmp(ports, local_entry.ports, sizeof(local_entry.ports))) {
+                if ((rc = vcl_mac_mgmt_conf_add(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                    return rc;
+                }
+            } else {
+                if ((rc = vcl_mac_mgmt_conf_del(sit.isid, &mac_addr)) != VTSS_RC_OK) {
+                    return rc;
+                }
+            }
+        } else {
+            T_DG(TRACE_GRP_ICLI, "The provided port list matches the existing one and therefore no update is required to the mapping");
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Delete MAC to VID mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_protocol_add()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_protocol_add(u32 session_id, char *name, mesa_vid_t vid, icli_stack_port_range_t *plist)
+{
+    vcl_proto_mgmt_group_conf_entry_global_t entry;
+    vcl_proto_mgmt_group_conf_entry_local_t  local_entry;
+    switch_iter_t                            sit;
+    port_iter_t                              pit;
+    mesa_rc                                  rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Add Group to VID mapping");
+    if (name == NULL) {
+        return VCL_ERROR_NULL_GROUP_NAME;
+    }
+    vtss_clear(entry);
+    memcpy(entry.name, name, MAX_GROUP_NAME_LEN);
+    entry.name[strlen((char *)name)] = '\0';
+    entry.vid = vid;
+    if (vcl_proto_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, FALSE, FALSE) != VTSS_RC_OK) {
+        vtss_clear(entry);
+    } else {
+        if (entry.vid != vid) {
+            T_DG(TRACE_GRP_ICLI, "The provided VLAN ID does not match the one of the existing Protocol Group entry. If you wanted to update the VID, then you must delete the entry first (updating the VID is not possible!)");
+            return VCL_ERROR_ENTRY_DIFF_VID;
+        }
+    }
+    // Loop over all configurable switches in usid order...
+    (void)icli_switch_iter_init(&sit);
+    // ...provided they're also in the plist.
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        vtss_clear(local_entry);
+        memcpy(local_entry.name, name, MAX_GROUP_NAME_LEN);
+        local_entry.name[strlen((char *)name)] = '\0';
+        local_entry.vid = vid;
+        memcpy(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]));
+        // Loop over all ports in uport order...
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        // ... provided they're also in the plist.
+        while (icli_port_iter_getnext(&pit, plist)) {
+            local_entry.ports[pit.iport] = TRUE;
+        }
+        if (memcmp(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]))) {
+            if ((rc = vcl_proto_mgmt_conf_add(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                ICLI_PRINTF("Adding Group to VLAN mapping Failed\n");
+                return rc;
+            }
+        } else {
+            T_DG(TRACE_GRP_ICLI, "The provided port list matches the existing one and therefore no update is required to the mapping");
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Add Group to VID mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_protocol_del()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_protocol_del(u32 session_id, char *name, icli_stack_port_range_t *plist)
+{
+    vcl_proto_mgmt_group_conf_entry_global_t entry;
+    vcl_proto_mgmt_group_conf_entry_local_t  local_entry;
+    switch_iter_t                            sit;
+    port_iter_t                              pit;
+    mesa_rc                                  rc = VTSS_RC_OK;
+    mesa_port_list_t                         ports;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Delete Group to VID mapping");
+    if (name == NULL) {
+        return VCL_ERROR_NULL_GROUP_NAME;
+    }
+    vtss_clear(entry);
+    memcpy(entry.name, name, MAX_GROUP_NAME_LEN);
+    entry.name[strlen((char *)name)] = '\0';
+    if ((rc = vcl_proto_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, FALSE, FALSE)) != VTSS_RC_OK) {
+        return rc;
+    }
+    // Loop over all configurable switches in usid order...
+    (void)icli_switch_iter_init(&sit);
+    // ...provided they're also in the plist.
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        vtss_clear(local_entry);
+        memcpy(local_entry.name, name, MAX_GROUP_NAME_LEN);
+        local_entry.name[strlen((char *)name)] = '\0';
+        local_entry.vid = entry.vid;
+        memcpy(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]));
+        // Loop over all ports in uport order...
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        // ... provided they're also in the plist.
+        while (icli_port_iter_getnext(&pit, plist)) {
+            local_entry.ports[pit.iport] = FALSE;
+        }
+        if (memcmp(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]))) {
+            if (memcmp(ports, local_entry.ports, sizeof(local_entry.ports))) {
+                if ((rc = vcl_proto_mgmt_conf_add(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                    return rc;
+                }
+            } else {
+                if ((rc = vcl_proto_mgmt_conf_del(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                    ICLI_PRINTF("Deleting Group to VLAN mapping Failed\n");
+                    return rc;
+                }
+            }
+        } else {
+            T_DG(TRACE_GRP_ICLI, "The provided port list matches the existing one and therefore no update is required to the mapping");
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Delete Group to VID mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_show_protocol()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_show_protocol(u32 session_id, BOOL has_eth2, u16 etype, BOOL has_arp, BOOL has_ip, BOOL has_ipx, BOOL has_at, BOOL has_snap, uint oui, BOOL has_rfc_1042, BOOL has_snap_8021h, u16 pid, BOOL has_llc, u8 dsap, u8 ssap)
+{
+    vcl_proto_mgmt_group_conf_proto_t         group_conf = {0};
+    vcl_proto_mgmt_group_conf_entry_global_t  proto_vce;
+    BOOL                                      first_entry, first, next;
+    switch_iter_t                             sit;
+    char                                      str_buf[ICLI_STR_MAX_LEN];
+    mesa_rc                                   rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Show Protocol");
+    if (has_eth2) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_ETH2;
+        if (has_arp) {
+            etype = ETHERTYPE_ARP;
+        } else if (has_ip) {
+            etype = ETHERTYPE_IP;
+        } else if (has_ipx) {
+            etype = ETHERTYPE_IPX;
+        } else if (has_at) {
+            etype = ETHERTYPE_AT;
+        }
+        group_conf.proto.eth2_proto.eth_type = etype;
+    } else if (has_snap) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP;
+        group_conf.proto.llc_snap_proto.pid = pid;
+        if (has_rfc_1042) {
+            group_conf.proto.llc_snap_proto.oui[0] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[1] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[2] = 0x0;
+        } else if (has_snap_8021h) {
+            group_conf.proto.llc_snap_proto.oui[0] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[1] = 0x0;
+            group_conf.proto.llc_snap_proto.oui[2] = 0xF8;
+        } else { /* valid OUI */
+            group_conf.proto.llc_snap_proto.oui[0] = (oui >> 16) & 0xFF;
+            group_conf.proto.llc_snap_proto.oui[1] = (oui >> 8) & 0xFF;
+            group_conf.proto.llc_snap_proto.oui[2] = oui & 0xFF;
+        }
+        if ((group_conf.proto.llc_snap_proto.oui[0] == 0) &&
+            (group_conf.proto.llc_snap_proto.oui[1] == 0) &&
+            (group_conf.proto.llc_snap_proto.oui[2] == 0)) {
+            if (pid < 0x600) {
+                return VCL_ERROR_INVALID_PID;
+            }
+        }
+    } else if (has_llc) {
+        group_conf.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_OTHER;
+        group_conf.proto.llc_other_proto.dsap = dsap;
+        group_conf.proto.llc_other_proto.ssap = ssap;
+    }
+    if (has_eth2 | has_snap | has_llc) {
+        T_DG(TRACE_GRP_ICLI, "Searching for a specific protocol");
+        if ((rc = vcl_proto_mgmt_proto_get(&group_conf, FALSE, FALSE)) == VTSS_RC_OK) {
+            ICLI_PRINTF("Protocol Type  Protocol (Value)          Group ID\n");
+            ICLI_PRINTF("-------------  ------------------------  --------\n");
+            if (group_conf.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_ETH2) {
+                ICLI_PRINTF("%-13s  ETYPE:0x%-4x              %s\n", vcl_proto_mgmt_encaptype2string(group_conf.proto_encap_type),
+                            group_conf.proto.eth2_proto.eth_type, group_conf.name);
+            } else if (group_conf.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP) {
+                ICLI_PRINTF("%-13s  OUI-%02x:%02x:%02x; PID:0x%-4x  %s\n", vcl_proto_mgmt_encaptype2string(group_conf.proto_encap_type),
+                            group_conf.proto.llc_snap_proto.oui[0], group_conf.proto.llc_snap_proto.oui[1],
+                            group_conf.proto.llc_snap_proto.oui[2], group_conf.proto.llc_snap_proto.pid, group_conf.name);
+            } else {
+                ICLI_PRINTF("%-13s  DSAP:0x%-2x; SSAP:0x%-2x      %s\n",
+                            vcl_proto_mgmt_encaptype2string(group_conf.proto_encap_type), group_conf.proto.llc_other_proto.dsap,
+                            group_conf.proto.llc_other_proto.ssap, group_conf.name);
+            }
+        } else {
+            ICLI_PRINTF("The requested protocol was not found\n");
+            return rc;
+        }
+    } else {
+        T_DG(TRACE_GRP_ICLI, "Looping through all the entries");
+        T_DG(TRACE_GRP_ICLI, "Looping through all the Protocol to Group mappings");
+        first_entry = TRUE;
+        next = FALSE;
+        while (vcl_proto_mgmt_proto_get(&group_conf, first_entry, next) == VTSS_RC_OK) {
+            if (first_entry == TRUE) {
+                ICLI_PRINTF("Protocol Type  Protocol (Value)          Group ID\n");
+                ICLI_PRINTF("-------------  ------------------------  --------\n");
+                first_entry = FALSE;
+            }
+            if (group_conf.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_ETH2) {
+                ICLI_PRINTF("%-13s  ETYPE:0x%-4x              %s\n", vcl_proto_mgmt_encaptype2string(group_conf.proto_encap_type),
+                            group_conf.proto.eth2_proto.eth_type, group_conf.name);
+            } else if (group_conf.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP) {
+                ICLI_PRINTF("%-13s  OUI-%02x:%02x:%02x; PID:0x%-4x  %s\n", vcl_proto_mgmt_encaptype2string(group_conf.proto_encap_type),
+                            group_conf.proto.llc_snap_proto.oui[0], group_conf.proto.llc_snap_proto.oui[1],
+                            group_conf.proto.llc_snap_proto.oui[2], group_conf.proto.llc_snap_proto.pid, group_conf.name);
+            } else {
+                ICLI_PRINTF("%-13s  DSAP:0x%-2x; SSAP:0x%-2x      %s\n",
+                            vcl_proto_mgmt_encaptype2string(group_conf.proto_encap_type), group_conf.proto.llc_other_proto.dsap,
+                            group_conf.proto.llc_other_proto.ssap, group_conf.name);
+            }
+            next = TRUE;
+        }
+        T_DG(TRACE_GRP_ICLI, "Looping through all the Group to VID mappings");
+        (void)switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID_CFG);
+        while (switch_iter_getnext(&sit)) {
+            T_NG(TRACE_GRP_ICLI, "Entering switch %u", sit.isid);
+            first_entry = TRUE;
+            next = FALSE;
+            first = TRUE;
+            while (vcl_proto_mgmt_conf_get(sit.isid, &proto_vce, first, next) == VTSS_RC_OK) {
+                if (first_entry == TRUE) {
+                    ICLI_PRINTF("\nSwitch #%d\n", sit.usid);
+                    ICLI_PRINTF("---------\n");
+                    ICLI_PRINTF("Group ID          VID   Ports\n");
+                    ICLI_PRINTF("----------------  ----  -----\n");
+                    first_entry = FALSE;
+                }
+                ICLI_PRINTF("%-16s  %-4u  %s\n", proto_vce.name, proto_vce.vid,
+                            icli_port_list_info_txt(sit.isid, proto_vce.ports[sit.isid - VTSS_ISID_START], str_buf, FALSE));
+                next = TRUE;
+                first = FALSE;
+            }
+            T_NG(TRACE_GRP_ICLI, "Exiting switch %u", sit.isid);
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Show Protocol");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_show_mac()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_show_mac(const i32 session_id, const BOOL has_address, const mesa_mac_t *mac_addr)
+{
+    vcl_mac_mgmt_vce_conf_global_t entry;
+    BOOL                           first = TRUE, next, entry_found = FALSE, mac_found = FALSE,
+                                   found_sid = FALSE, found_sid_prev = FALSE, found_start = FALSE;
+    switch_iter_t                  sit, sit_ext;
+    vtss_isid_t                    start_isid;
+    port_iter_t                    pit;
+    char                           str_buf[ICLI_STR_MAX_LEN];
+
+    T_DG(TRACE_GRP_ICLI, "Enter Show MAC");
+    // Distinguish between show specific MAC add and show everything
+    if (has_address) {
+        memcpy(&entry.smac, mac_addr, sizeof(*mac_addr));
+        T_DG(TRACE_GRP_ICLI, "Searching for entry with MAC address %02x:%02x:%02x:%02x:%02x:%02x",  entry.smac.addr[0],
+             entry.smac.addr[1], entry.smac.addr[2], entry.smac.addr[3], entry.smac.addr[4], entry.smac.addr[5]);
+    } else {
+        T_DG(TRACE_GRP_ICLI, "Looping through all the entries");
+    }
+    VTSS_RC(switch_iter_init(&sit_ext, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID));
+    while (switch_iter_getnext(&sit_ext)) {
+        T_NG(TRACE_GRP_ICLI, "Entering switch %u - ext iteration", sit_ext.isid);
+        // Initialize the mgmt() parameters between iterations
+        if (has_address) {
+            first = FALSE;
+            next = FALSE;
+            memcpy(&entry.smac, mac_addr, sizeof(*mac_addr));
+        } else {
+            first = TRUE;
+            next = FALSE;
+        }
+        mac_found = FALSE;
+        // Call the management function to either get the specified entry or loop through all the entries
+        while ((mac_found == FALSE) && (vcl_mac_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, first, next) == VTSS_RC_OK)) {
+            next = TRUE;
+            first = FALSE;
+            found_sid_prev = FALSE;
+            found_start = FALSE;
+            start_isid = 0; // for lint purposes
+
+            // user has asked for a specific MAC address, skip all others.
+            if (has_address) {
+                if (memcmp(mac_addr, &entry.smac, sizeof(entry.smac)) != 0) {
+                    T_IG(TRACE_GRP_ICLI, "Returned MAC address does not match to the requested one");
+                    break;
+                } else {
+                    // Entry has been found, so stopping the mgmt loop
+                    mac_found = TRUE;
+                }
+            }
+
+            if (!entry_found) { // Printing header if this is the very first entry found
+                icli_parm_header(session_id, "MAC Address        VID   Interfaces");
+                entry_found = TRUE;
+            }
+
+            // Looping through all switches and printing only those that have active ports for that entry
+            VTSS_RC(switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID));
+            while (switch_iter_getnext(&sit)) {
+                VTSS_RC(port_iter_init(&pit, NULL, sit.isid, PORT_ITER_SORT_ORDER_IPORT, PORT_ITER_FLAGS_NORMAL));
+                while (port_iter_getnext(&pit)) {
+                    if (entry.ports[sit.isid - 1][pit.iport] == 1) {
+                        found_sid = TRUE;
+                        break;
+                    }
+                }
+                if (found_sid) {
+                    if (found_start == FALSE) {
+                        start_isid = sit.isid;
+                        found_start = TRUE;
+                        T_RG(TRACE_GRP_ICLI, "Found entry start on switch %u", sit.isid);
+                    }
+                    if (sit_ext.isid == start_isid) {
+                        if (found_sid_prev == FALSE) {
+                            ICLI_PRINTF("%02x:%02x:%02x:%02x:%02x:%02x  %-4u  %s\n", entry.smac.addr[0], entry.smac.addr[1],
+                                        entry.smac.addr[2], entry.smac.addr[3], entry.smac.addr[4], entry.smac.addr[5],
+                                        entry.vid, icli_port_list_info_txt(sit.isid, entry.ports[sit.isid - 1], str_buf, FALSE));
+                            found_sid_prev = TRUE;
+                        } else {
+                            ICLI_PRINTF("%23s  %s\n", "", icli_port_list_info_txt(sit.isid, entry.ports[sit.isid - 1], str_buf, FALSE));
+                        }
+                    } else {
+                        T_RG(TRACE_GRP_ICLI, "Skipping print of entry - not the right switch");
+                    }
+                } else {
+                    if (sit_ext.isid == sit.isid) { // the purpose of this check is to reduce the total number of iterations - entry is not needed in this case
+                        T_RG(TRACE_GRP_ICLI, "Skipping entire entry");
+                        break;
+                    }
+                }
+                found_sid = FALSE;
+            }
+        }
+        T_NG(TRACE_GRP_ICLI, "Exiting switch %u - ext iteration", sit_ext.isid);
+    }
+
+    if (!entry_found && has_address) {
+        ICLI_PRINTF("Entry with MAC address %02x-%02x-%02x-%02x-%02x-%02x was not found in the switch/stack\n", mac_addr->addr[0],
+                    mac_addr->addr[1], mac_addr->addr[2], mac_addr->addr[3], mac_addr->addr[4], mac_addr->addr[5]);
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Show MAC");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_show_ipsubnet()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_show_ipsubnet(const i32 session_id, const icli_ipv4_subnet_t *ipv4)
+{
+    vcl_ip_mgmt_vce_conf_global_t entry;
+    BOOL                          first = TRUE, next = FALSE, entry_found = FALSE, ip_found = FALSE, found_sid = FALSE, found_sid_prev = FALSE, found_start = FALSE;
+    char                          ip_str[100];
+    char                          str_buf[ICLI_STR_MAX_LEN];
+    switch_iter_t                 sit, sit_ext;
+    vtss_isid_t                   start_isid;
+    port_iter_t                   pit;
+    u32                           mask_len = 0;
+    i8                            i;
+    mesa_ipv4_t                   ip_addr = 0, ip_mask;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Show Subnet");
+    // Distinguish between show specific IP subnet and show everything
+    if (ipv4->ip) {
+        entry.ip_addr = ipv4->ip;
+        VTSS_RC(vtss_conv_ipv4mask_to_prefix(ipv4->netmask, &mask_len));
+        entry.mask_len = (u8) mask_len;
+        T_DG(TRACE_GRP_ICLI, "Searching for a specific subnet entry");
+    } else {
+        T_DG(TRACE_GRP_ICLI, "Looping through all the entries");
+    }
+    VTSS_RC(switch_iter_init(&sit_ext, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID));
+    while (switch_iter_getnext(&sit_ext)) {
+        T_NG(TRACE_GRP_ICLI, "Entering switch %u - ext iteration", sit_ext.isid);
+        // Initialize the mgmt() parameters between iterations
+        if (ipv4->ip) {
+            first = FALSE;
+            next = FALSE;
+            entry.ip_addr = ipv4->ip;
+            VTSS_RC(vtss_conv_ipv4mask_to_prefix(ipv4->netmask, &mask_len));
+            entry.mask_len = (u8) mask_len;
+        } else {
+            first = TRUE;
+            next = FALSE;
+        }
+        ip_found = FALSE;
+        // Call the management function to either get the specified entry or loop through all the entries
+        while ((ip_found == FALSE) && (vcl_ip_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, first, next) == VTSS_RC_OK)) {
+            next = TRUE;
+            first = FALSE;
+            found_sid_prev = FALSE;
+            found_start = FALSE;
+            start_isid = 0; // for lint purposes
+
+            // user has asked for a specific IP subnet, skip all others.
+            if (ipv4->ip) {
+                ip_mask = 0;
+                for (i = 31; i >= (32 - ((u8) mask_len)); i--) {
+                    ip_mask |= (1 << i);
+                }
+                ip_addr = ipv4->ip;
+                ip_addr = ip_addr & ip_mask;
+                if ((ip_addr != entry.ip_addr) || (((u8) mask_len) != entry.mask_len)) {
+                    T_RG(TRACE_GRP_ICLI, "Returned IP subnet does not match to the requested one");
+                    break;
+                } else {
+                    // Entry has been found, so stopping the mgmt loop
+                    ip_found = TRUE;
+                }
+            }
+
+            if (!entry_found) { // Printing header if this is the very first entry found
+                icli_parm_header(session_id, "IP Address       Mask Length  VID   Interfaces");
+                entry_found = TRUE;
+            }
+
+            // Looping through all switches and printing only those that have active ports for that entry
+            VTSS_RC(switch_iter_init(&sit, VTSS_ISID_GLOBAL, SWITCH_ITER_SORT_ORDER_USID));
+            while (switch_iter_getnext(&sit)) {
+                VTSS_RC(port_iter_init(&pit, NULL, sit.isid, PORT_ITER_SORT_ORDER_IPORT, PORT_ITER_FLAGS_NORMAL));
+                while (port_iter_getnext(&pit)) {
+                    if (entry.ports[sit.isid - 1][pit.iport] == 1) {
+                        found_sid = TRUE;
+                        break;
+                    }
+                }
+                if (found_sid) {
+                    if (found_start == FALSE) {
+                        start_isid = sit.isid;
+                        found_start = TRUE;
+                        T_RG(TRACE_GRP_ICLI, "Found entry start on switch %u", sit.isid);
+                    }
+                    if (sit_ext.isid == start_isid) {
+                        if (found_sid_prev == FALSE) {
+                            ICLI_PRINTF("%-15s  %-11u  %-4u  %s\n", misc_ipv4_txt(entry.ip_addr, ip_str),
+                                        entry.mask_len, entry.vid, icli_port_list_info_txt(sit.isid, entry.ports[sit.isid - 1],
+                                                                                           str_buf, FALSE));
+                            found_sid_prev = TRUE;
+                        } else {
+                            ICLI_PRINTF("%34s  %s\n", "", icli_port_list_info_txt(sit.isid, entry.ports[sit.isid - 1], str_buf, FALSE));
+                        }
+                    } else {
+                        T_RG(TRACE_GRP_ICLI, "Skipping print of entry - not the right switch");
+                    }
+                } else {
+                    if (sit_ext.isid == sit.isid) { // the purpose of this check is to reduce the total number of iterations - entry is not needed in this case
+                        T_RG(TRACE_GRP_ICLI, "Skipping entire entry");
+                        break;
+                    }
+                }
+                found_sid = FALSE;
+            }
+        }
+        T_NG(TRACE_GRP_ICLI, "Exiting switch %u - ext iteration", sit_ext.isid);
+    }
+
+    if (!entry_found && (ipv4->ip)) {
+        ICLI_PRINTF("Entry with IP subnet was not found in the switch/stack\n");
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Show Subnet");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_subnet_add()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_subnet_add(const icli_ipv4_subnet_t *ipv4, mesa_vid_t vid, icli_stack_port_range_t *plist)
+{
+    vcl_ip_mgmt_vce_conf_global_t entry;
+    vcl_ip_mgmt_vce_conf_local_t  local_entry;
+    switch_iter_t                 sit;
+    port_iter_t                   pit;
+    u32                           mask_len;
+    mesa_rc                       rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Add Subnet to VID mapping");
+    vtss_clear(entry);
+    entry.ip_addr = ipv4->ip;
+    // Mask length will only be from 1-32 even though this function takes an u32 type as length.
+    VTSS_RC(vtss_conv_ipv4mask_to_prefix(ipv4->netmask, &mask_len));
+    entry.mask_len = (u8) mask_len; // Convert to u8
+    if (vcl_ip_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, FALSE, FALSE) != VTSS_RC_OK) {
+        vtss_clear(entry);
+    } else {
+        if (entry.vid != vid) {
+            T_DG(TRACE_GRP_ICLI, "The provided VLAN ID does not match the one of the existing IP Subnet entry. If you wanted to update the VID, then you must delete the entry first (updating the VID is not possible!)");
+            return VCL_ERROR_ENTRY_DIFF_VID;
+        }
+    }
+    // Loop over all configurable switches in usid order...
+    (void)icli_switch_iter_init(&sit);
+    // ...provided they're also in the plist.
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        vtss_clear(local_entry);
+        local_entry.ip_addr = ipv4->ip;
+        local_entry.mask_len = (u8) mask_len; // Convert to u8
+        local_entry.vid = vid;
+        memcpy(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]));
+        // Loop over all ports in uport order...
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        // ... provided they're also in the plist.
+        while (icli_port_iter_getnext(&pit, plist)) {
+            local_entry.ports[pit.iport] = TRUE;
+        }
+        if (memcmp(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]))) {
+            if ((rc = vcl_ip_mgmt_conf_add(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                return rc;
+            }
+        } else {
+            T_DG(TRACE_GRP_ICLI, "The provided port list matches the existing one and therefore no update is required to the mapping");
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Add Subnet to VID mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_subnet_del()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_subnet_del(const icli_ipv4_subnet_t *ipv4, icli_stack_port_range_t *plist)
+{
+    vcl_ip_mgmt_vce_conf_global_t entry;
+    vcl_ip_mgmt_vce_conf_local_t  local_entry;
+    switch_iter_t                 sit;
+    port_iter_t                   pit;
+    u32                           mask_len;
+    mesa_port_list_t              ports;
+    mesa_rc                       rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Delete Subnet to VID mapping");
+    vtss_clear(entry);
+    entry.ip_addr = ipv4->ip;
+    VTSS_RC(vtss_conv_ipv4mask_to_prefix(ipv4->netmask, &mask_len));
+    entry.mask_len = (u8) mask_len;
+    if ((rc = vcl_ip_mgmt_conf_get(VTSS_ISID_GLOBAL, &entry, FALSE, FALSE)) != VTSS_RC_OK) {
+        return rc;
+    }
+    // Loop over all configurable switches in usid order...
+    (void)icli_switch_iter_init(&sit);
+    // ...provided they're also in the plist.
+    while (icli_switch_iter_getnext(&sit, plist)) {
+        vtss_clear(local_entry);
+        local_entry.ip_addr = ipv4->ip;
+        local_entry.mask_len = (u8) mask_len;
+        local_entry.vid = entry.vid;
+        memcpy(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]));
+        // Loop over all ports in uport order...
+        (void)icli_port_iter_init(&pit, sit.isid, PORT_ITER_FLAGS_NORMAL);
+        // ... provided they're also in the plist.
+        while (icli_port_iter_getnext(&pit, plist)) {
+            local_entry.ports[pit.iport] = FALSE;
+        }
+        if (memcmp(local_entry.ports, entry.ports[sit.isid - VTSS_ISID_START], sizeof(entry.ports[sit.isid - VTSS_ISID_START]))) {
+            if (memcmp(ports, local_entry.ports, sizeof(local_entry.ports))) {
+                if ((rc = vcl_ip_mgmt_conf_add(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                    return rc;
+                }
+            } else {
+                if ((rc = vcl_ip_mgmt_conf_del(sit.isid, &local_entry)) != VTSS_RC_OK) {
+                    return rc;
+                }
+            }
+        } else {
+            T_DG(TRACE_GRP_ICLI, "The provided port list matches the existing one and therefore no update is required to the mapping");
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Delete Subnet to VID mapping");
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// VCL_ICLI_runtime_policy_no()
+/******************************************************************************/
+static BOOL VCL_ICLI_runtime_policy_no(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    u32 max = (fast_cap(MESA_CAP_ACL_POLICY_CNT) - 1);
+
+    switch (ask) {
+    case ICLI_ASK_BYWORD:
+        icli_sprintf(runtime->byword, "<Policy : 0-%u>", max);
+        return TRUE;
+    case ICLI_ASK_RANGE:
+        runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+        runtime->range.u.ur.cnt = 1;
+        runtime->range.u.ur.range[0].min = 0;
+        runtime->range.u.ur.range[0].max = max;
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/******************************************************************************/
+// VCL_ICLI_debug_show_mac()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_debug_show_mac(u32 session_id, BOOL has_address, mesa_mac_t *mac_addr)
+{
+    vcl_mac_mgmt_vce_conf_local_t entry;
+    BOOL                          first, next, entry_found = FALSE, mac_found = FALSE;
+    char                          str_buf[ICLI_STR_MAX_LEN];
+
+    T_DG(TRACE_GRP_ICLI, "Enter Debug Show MAC");
+    vtss_clear(entry);
+    // Distinguish between show specific MAC Address and show everything
+    if (has_address) {
+        first = FALSE;
+        next = FALSE;
+        memcpy(&entry.smac, mac_addr, sizeof(*mac_addr));
+        T_DG(TRACE_GRP_ICLI, "Searching for entry with MAC address %02x:%02x:%02x:%02x:%02x:%02x",  entry.smac.addr[0],
+             entry.smac.addr[1], entry.smac.addr[2], entry.smac.addr[3], entry.smac.addr[4], entry.smac.addr[5]);
+    } else {
+        first = TRUE;
+        next = FALSE;
+        T_DG(TRACE_GRP_ICLI, "Looping through all the entries");
+    }
+    while ((mac_found == FALSE) && (vcl_mac_mgmt_conf_local_get(&entry, first, next) == VTSS_RC_OK)) {
+        first = FALSE;
+        next = TRUE;
+        if (has_address) {
+            if (memcmp(mac_addr, &entry.smac, sizeof(entry.smac)) != 0) {
+                T_IG(TRACE_GRP_ICLI, "Returned MAC address does not match to the requested one");
+                break;
+            } else {
+                // Entry has been found, so stopping the mgmt loop
+                mac_found = TRUE;
+            }
+        }
+        if (!entry_found) { // Printing header if this is the very first entry found
+            icli_parm_header(session_id, "MAC Address        VID   Interfaces");
+            entry_found = TRUE;
+        }
+        ICLI_PRINTF("%02x:%02x:%02x:%02x:%02x:%02x  %-4u  %s\n", entry.smac.addr[0], entry.smac.addr[1],
+                    entry.smac.addr[2], entry.smac.addr[3], entry.smac.addr[4], entry.smac.addr[5],
+                    entry.vid, icli_iport_list_txt(entry.ports, str_buf));
+    }
+    if (!entry_found && has_address) {
+        ICLI_PRINTF("Entry with MAC address %02x-%02x-%02x-%02x-%02x-%02x was not found in the switch\n", mac_addr->addr[0],
+                    mac_addr->addr[1], mac_addr->addr[2], mac_addr->addr[3], mac_addr->addr[4], mac_addr->addr[5]);
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Debug Show MAC");
+    return VTSS_RC_OK;
+}
+
+#if defined(VTSS_SW_OPTION_IP)
+/******************************************************************************/
+// VCL_ICLI_debug_show_ipsubnet()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_debug_show_ipsubnet(u32 session_id, icli_ipv4_subnet_t *ipv4)
+{
+    vcl_ip_mgmt_vce_conf_local_t entry;
+    BOOL                         first, next, entry_found = FALSE, ip_found = FALSE;
+    char                         str_buf[ICLI_STR_MAX_LEN];
+    char                         ip_str[100];
+    u32                          mask_len = 0;
+    i8                           i;
+    mesa_ipv4_t                  ip_addr = 0, ip_mask;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Debug Show Subnet");
+    vtss_clear(entry);
+    // Distinguish between show specific Subnet and show everything
+    if (ipv4->ip) {
+        first = FALSE;
+        next = FALSE;
+        entry.ip_addr = ipv4->ip;
+        VTSS_RC(vtss_conv_ipv4mask_to_prefix(ipv4->netmask, &mask_len));
+        entry.mask_len = (u8) mask_len;
+        T_DG(TRACE_GRP_ICLI, "Searching for a specific subnet entry");
+    } else {
+        first = TRUE;
+        next = FALSE;
+        T_DG(TRACE_GRP_ICLI, "Looping through all the entries");
+    }
+    while ((ip_found == FALSE) && (vcl_ip_mgmt_conf_local_get(&entry, first, next) == VTSS_RC_OK)) {
+        first = FALSE;
+        next = TRUE;
+        if (ipv4->ip) {
+            ip_mask = 0;
+            for (i = 31; i >= (32 - ((u8) mask_len)); i--) {
+                ip_mask |= (1 << i);
+            }
+            ip_addr = ipv4->ip;
+            ip_addr = ip_addr & ip_mask;
+            if ((ip_addr != entry.ip_addr) || (((u8) mask_len) != entry.mask_len)) {
+                T_RG(TRACE_GRP_ICLI, "Returned IP subnet does not match to the requested one");
+                break;
+            } else {
+                // Entry has been found, so stopping the mgmt loop
+                ip_found = TRUE;
+            }
+        }
+
+        if (!entry_found) { // Printing header if this is the very first entry found
+            icli_parm_header(session_id, "IP Address       Mask Length  VID   Interfaces");
+            entry_found = TRUE;
+        }
+        ICLI_PRINTF("%-15s  %-11u  %-4u  %s\n", misc_ipv4_txt(entry.ip_addr, ip_str),
+                    entry.mask_len, entry.vid, icli_iport_list_txt(entry.ports, str_buf));
+    }
+    if (!entry_found && (ipv4->ip)) {
+        ICLI_PRINTF("Entry with IP subnet was not found in the switch\n");
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Debug Show Subnet");
+    return VTSS_RC_OK;
+}
+#endif
+
+/******************************************************************************/
+// VCL_ICLI_debug_show_protocol()
+/******************************************************************************/
+static mesa_rc VCL_ICLI_debug_show_protocol(u32 session_id, BOOL has_eth2, u16 etype, BOOL has_arp, BOOL has_ip, BOOL has_ipx, BOOL has_at, BOOL has_snap, uint oui, BOOL has_rfc_1042, BOOL has_snap_8021h, u16 pid, BOOL has_llc, u8 dsap, u8 ssap)
+{
+    vcl_proto_mgmt_proto_conf_local_t entry;
+    BOOL                              first, next, found_entry = FALSE;
+    char                              str_buf[ICLI_STR_MAX_LEN];
+    mesa_rc                           rc = VTSS_RC_OK;
+
+    T_DG(TRACE_GRP_ICLI, "Enter Debug Show Protocol");
+    vtss_clear(entry);
+    if (has_eth2) {
+        entry.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_ETH2;
+        if (has_arp) {
+            etype = ETHERTYPE_ARP;
+        } else if (has_ip) {
+            etype = ETHERTYPE_IP;
+        } else if (has_ipx) {
+            etype = ETHERTYPE_IPX;
+        } else if (has_at) {
+            etype = ETHERTYPE_AT;
+        }
+        entry.proto.eth2_proto.eth_type = etype;
+    } else if (has_snap) {
+        entry.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP;
+        entry.proto.llc_snap_proto.pid = pid;
+        if (has_rfc_1042) {
+            entry.proto.llc_snap_proto.oui[0] = 0x0;
+            entry.proto.llc_snap_proto.oui[1] = 0x0;
+            entry.proto.llc_snap_proto.oui[2] = 0x0;
+        } else if (has_snap_8021h) {
+            entry.proto.llc_snap_proto.oui[0] = 0x0;
+            entry.proto.llc_snap_proto.oui[1] = 0x0;
+            entry.proto.llc_snap_proto.oui[2] = 0xF8;
+        } else { /* valid OUI */
+            entry.proto.llc_snap_proto.oui[0] = (oui >> 16) & 0xFF;
+            entry.proto.llc_snap_proto.oui[1] = (oui >> 8) & 0xFF;
+            entry.proto.llc_snap_proto.oui[2] = oui & 0xFF;
+        }
+        if ((entry.proto.llc_snap_proto.oui[0] == 0) &&
+            (entry.proto.llc_snap_proto.oui[1] == 0) &&
+            (entry.proto.llc_snap_proto.oui[2] == 0)) {
+            if (pid < 0x600) {
+                return VCL_ERROR_INVALID_PID;
+            }
+        }
+    } else if (has_llc) {
+        entry.proto_encap_type = VTSS_APPL_VCL_PROTO_ENCAP_LLC_OTHER;
+        entry.proto.llc_other_proto.dsap = dsap;
+        entry.proto.llc_other_proto.ssap = ssap;
+    }
+    // Distinguish between show specific MAC Address and show everything
+    if (has_eth2 | has_snap | has_llc) {
+        first = FALSE;
+        next = FALSE;
+        T_DG(TRACE_GRP_ICLI, "Searching for a specific protocol");
+        while ((rc = vcl_proto_mgmt_conf_local_proto_get(&entry, first, next)) == VTSS_RC_OK) {
+            if (!found_entry) {
+                found_entry = TRUE;
+                ICLI_PRINTF("Protocol Type  Protocol (Value)          VID   Ports\n");
+                ICLI_PRINTF("-------------  ------------------------  ----  -----\n");
+            }
+            if (entry.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_ETH2) {
+                ICLI_PRINTF("%-13s  ETYPE:0x%-4x              %-4d  %s\n", vcl_proto_mgmt_encaptype2string(entry.proto_encap_type),
+                            entry.proto.eth2_proto.eth_type, entry.vid, icli_iport_list_txt(entry.ports, str_buf));
+            } else if (entry.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP) {
+                ICLI_PRINTF("%-13s  OUI-%02x:%02x:%02x; PID:0x%-4x  %-4d  %s\n", vcl_proto_mgmt_encaptype2string(entry.proto_encap_type),
+                            entry.proto.llc_snap_proto.oui[0], entry.proto.llc_snap_proto.oui[1],
+                            entry.proto.llc_snap_proto.oui[2], entry.proto.llc_snap_proto.pid, entry.vid,
+                            icli_iport_list_txt(entry.ports, str_buf));
+            } else {
+                ICLI_PRINTF("%-13s  DSAP:0x%-2x; SSAP:0x%-2x      %-4d  %s\n",
+                            vcl_proto_mgmt_encaptype2string(entry.proto_encap_type), entry.proto.llc_other_proto.dsap,
+                            entry.proto.llc_other_proto.ssap, entry.vid, icli_iport_list_txt(entry.ports, str_buf));
+            }
+        }
+        if (!found_entry) {
+            ICLI_PRINTF("The requested protocol was not found in the switch\n");
+            return rc;
+        }
+    } else {
+        first = TRUE;
+        next = FALSE;
+        T_DG(TRACE_GRP_ICLI, "Looping through all the entries");
+        while (vcl_proto_mgmt_conf_local_proto_get(&entry, first, next) == VTSS_RC_OK) {
+            if (first == TRUE) {
+                ICLI_PRINTF("Protocol Type  Protocol (Value)          VID   Ports\n");
+                ICLI_PRINTF("-------------  ------------------------  ----  -----\n");
+                first = FALSE;
+            }
+            if (entry.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_ETH2) {
+                ICLI_PRINTF("%-13s  ETYPE:0x%-4x              %-4d  %s\n", vcl_proto_mgmt_encaptype2string(entry.proto_encap_type),
+                            entry.proto.eth2_proto.eth_type, entry.vid, icli_iport_list_txt(entry.ports, str_buf));
+            } else if (entry.proto_encap_type == VTSS_APPL_VCL_PROTO_ENCAP_LLC_SNAP) {
+                ICLI_PRINTF("%-13s  OUI-%02x:%02x:%02x; PID:0x%-4x  %-4d  %s\n", vcl_proto_mgmt_encaptype2string(entry.proto_encap_type),
+                            entry.proto.llc_snap_proto.oui[0], entry.proto.llc_snap_proto.oui[1],
+                            entry.proto.llc_snap_proto.oui[2], entry.proto.llc_snap_proto.pid, entry.vid,
+                            icli_iport_list_txt(entry.ports, str_buf));
+            } else {
+                ICLI_PRINTF("%-13s  DSAP:0x%-2x; SSAP:0x%-2x      %-4d  %s\n",
+                            vcl_proto_mgmt_encaptype2string(entry.proto_encap_type), entry.proto.llc_other_proto.dsap,
+                            entry.proto.llc_other_proto.ssap, entry.vid, icli_iport_list_txt(entry.ports, str_buf));
+            }
+            next = TRUE;
+        }
+    }
+    T_DG(TRACE_GRP_ICLI, "Exit Debug Show Protocol");
+    return VTSS_RC_OK;
+}
+
+FUNCTION_END
+
+// Shared help texts
+VLAN_SWITCH_PORT_HELP       = Switching mode characteristics
+VLAN_COMMAND_HELP           = VLAN commands
+VLAN_VCE_ID_KEYWORD_HELP    = id keyword
+VLAN_VCE_ID_HELP            = Unique VCE ID for each VCL entry (1-128)
+VLAN_VCE_IP_SUBNET_HELP     = VCL IP Subnet-based VLAN configuration.
+VLAN_KEYWORD_HELP           = VLAN keyword
+VLAN_ID_HELP                = VLAN ID required for the group to VLAN mapping (Range: 1-4095)
+VLAN_SHOW                   = VLAN status
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = vlan protocol {{eth2 {<0x600-0xffff>|arp|ip|ipx|at}} | {snap {<0x0-0xffffff>|rfc-1042|snap-8021h} <0x0-0xffff>} | {llc <0x0-0xff> <0x0-0xff>} } group <word16>
+
+DOC_CMD_EXA_PRO_SHOW_HELP = You can verify your settings by entering the 'show vlan protocol' privileged EXEC command.
+# /* ------------------------------------------------------------------------------------------------------------------------
+DOC_CMD_DESC    = Use the vlan protocol command to add protocol to group mapping.
+DOC_CMD_DEFAULT = Use the no form of this command to remove the protocol to group mapping.
+DOC_CMD_USAGE   = This command can be used to configure any of Ethernet, SNAP or LLC protocols to group mapping.
+DOC_CMD_EXAMPLE = This example shows to configure a mapping of IP protocol to group.
+DOC_CMD_EXAMPLE = Switch(config-if)#vlan protocol Eth2 ip group g1
+DOC_CMD_EXAMPLE = ##DOC_CMD_EXA_PRO_SHOW_HELP
+# --------------------------------------------------------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_proto_vlan_group_conf
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+   HELP = VLAN commands
+   HELP = Protocol-based VLAN commands
+   HELP = Ethernet-based VLAN commands
+   HELP = Ether Type (Range: 0x600 - 0xFFFF)
+   HELP = Ether Type is ARP
+   HELP = Ether Type is IP
+   HELP = Ether Type is IPX
+   HELP = Ether Type is AppleTalk
+   HELP = SNAP-based VLAN group
+   HELP = SNAP OUI (Range 0x000000 - 0XFFFFFF)
+   HELP = SNAP OUI is rfc-1042
+   HELP = SNAP OUI is 8021h
+   HELP = PID (Range: 0x0 - 0xFFFF)
+   HELP = LLC-based VLAN group
+   HELP = DSAP (Range: 0x00 - 0xFF)
+   HELP = SSAP (Range: 0x00 - 0xFF)
+   HELP = Protocol-based VLAN group commands
+   HELP = Group Name (Range: 1 - 16 characters)
+
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   = has_eth2
+   CMD_VAR   = etype
+   CMD_VAR   = has_arp
+   CMD_VAR   = has_ip
+   CMD_VAR   = has_ipx
+   CMD_VAR   = has_at
+   CMD_VAR   = has_snap
+   CMD_VAR   = oui
+   CMD_VAR   = has_rfc_1042
+   CMD_VAR   = has_snap_8021h
+   CMD_VAR   = pid
+   CMD_VAR   = has_llc
+   CMD_VAR   = dsap
+   CMD_VAR   = ssap
+   CMD_VAR   =
+   CMD_VAR   = grp_id
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_protocol_group_add(session_id, has_eth2, etype, has_arp, has_ip, has_ipx, has_at, has_snap, oui, has_rfc_1042, has_snap_8021h, pid, has_llc, dsap, ssap, grp_id), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = no vlan protocol {{eth2 {<0x600-0xffff>|arp|ip|ipx|at}} | {snap {<0x0-0xffffff>|rfc-1042|snap-8021h} <0x0-0xffff>} | {llc <0x0-0xff> <0x0-0xff>} } [group <word16>]
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+   HELP =
+   HELP = VLAN commands
+   HELP = Protocol-based VLAN commands
+   HELP = Ethernet-based VLAN commands
+   HELP = Ether Type (Range: 0x600 - 0xFFFF)
+   HELP = Ether Type is ARP
+   HELP = Ether Type is IP
+   HELP = Ether Type is IPX
+   HELP = Ether Type is AppleTalk
+   HELP = SNAP-based VLAN group
+   HELP = SNAP OUI (Range 0x000000 - 0XFFFFFF)
+   HELP = SNAP OUI is rfc-1042
+   HELP = SNAP OUI is 8021h
+   HELP = PID (Range: 0x0 - 0xFFFF)
+   HELP = LLC-based VLAN group
+   HELP = DSAP (Range: 0x00 - 0xFF)
+   HELP = SSAP (Range: 0x00 - 0xFF)
+   HELP = Protocol-based VLAN group commands (deprecated since mapping is unique)
+   HELP = Group Name (Range: 1 - 16 characters) (deprecated since mapping is unique)
+
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   = has_eth2
+   CMD_VAR   = etype
+   CMD_VAR   = has_arp
+   CMD_VAR   = has_ip
+   CMD_VAR   = has_ipx
+   CMD_VAR   = has_at
+   CMD_VAR   = has_snap
+   CMD_VAR   = oui
+   CMD_VAR   = has_rfc_1042
+   CMD_VAR   = has_snap_8021h
+   CMD_VAR   = pid
+   CMD_VAR   = has_llc
+   CMD_VAR   = dsap
+   CMD_VAR   = ssap
+   CMD_VAR   =
+   CMD_VAR   =
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_protocol_group_del(session_id, has_eth2, etype, has_arp, has_ip, has_ipx, has_at, has_snap, oui, has_rfc_1042, has_snap_8021h, pid, has_llc, dsap, ssap), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = switchport vlan mac <mac_ucast> vlan <vlan_id>
+# /* ------------------------------------------------------------------------------------------------------------------------
+DOC_CMD_DESC    = Use the switchport vlan mac command to associate a MAC address to VLAN ID.
+DOC_CMD_DEFAULT = Use the no form of this command to remove the MAC address to VLAN ID association.
+DOC_CMD_USAGE   = This command will add the ports to the MAC-based VLAN entry.
+DOC_CMD_EXAMPLE = This example shows to configure a association of MAC addr 00-00-00-00-00-11 to VLAN 3
+DOC_CMD_EXAMPLE = Switch(config-if)#switchport vlan mac 00-00-00-00-00-11 vlan 3
+DOC_CMD_EXAMPLE = You can verify your settings by entering the show vlan mac privileged EXEC command.
+# --------------------------------------------------------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_mac_vlan_conf
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = mode_port_list
+RUNTIME = icli_is_switchport_runtime
+
+   HELP = ##VLAN_SWITCH_PORT_HELP
+   HELP = ##VLAN_COMMAND_HELP
+   HELP = MAC-based VLAN commands
+   HELP = 48 bit unicast MAC address: xx:xx:xx:xx:xx:xx
+   HELP = ##VLAN_KEYWORD_HELP
+   HELP = ##VLAN_ID_HELP
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   = mac_addr
+   CMD_VAR   =
+   CMD_VAR   = vid
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_mac_add(mac_addr, vid, mode_port_list), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = no switchport vlan mac <mac_ucast> [vlan <vlan_id>]
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR  = mode_port_list
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+HELP =
+HELP = ##VLAN_SWITCH_PORT_HELP
+HELP = ##VLAN_COMMAND_HELP
+HELP = MAC-based VLAN commands
+HELP = 48 bit unicast MAC address: xx:xx:xx:xx:xx:xx
+HELP = VLAN keyword (deprecated since mapping is unique)
+HELP = VLAN ID of the mapping (deprecated since mapping is unique)
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = mac_addr
+CMD_VAR   =
+CMD_VAR   =
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_mac_del(session_id, mac_addr, mode_port_list), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = switchport vlan protocol group <word16> vlan <vlan_id>
+# /* ------------------------------------------------------------------------------------------------------------------------
+DOC_CMD_EXAMPLE_PROTOCOL_HELP = This example shows to configure a mapping of group g1 to VLAN 2 \n. Switch(config-if)#switchport vlan protocol group g1 vlan 2
+DOC_CMD_USAGE_PROTOCOL_HELP   = This command will add the ports to the protocol-based VLAN entry.
+DOC_CMD_DEF_PROTOCOL_HELP = Use the no form of this command to remove the group to vlan mapping.
+DOC_CMD_DESC_PROTOCOL_HELP    = Use the switchport vlan protocol group command to add group to vlan mapping.
+
+DOC_CMD_DESC    = ##DOC_CMD_DESC_PROTOCOL_HELP
+DOC_CMD_DEFAULT = ##DOC_CMD_DEF_PROTOCOL_HELP
+DOC_CMD_USAGE   = ##DOC_CMD_USAGE_PROTOCOL_BASED_HELP
+DOC_CMD_EXAMPLE = ##DOC_CMD_EXAMPLE_PROTOCOL_HELP
+DOC_CMD_EXAMPLE = ##DOC_CMD_EXA_PRO_SHOW_HELP
+# --------------------------------------------------------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_proto_vlan_vlan_conf
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = mode_port_list
+
+RUNTIME = icli_is_switchport_runtime
+
+   HELP = ##VLAN_SWITCH_PORT_HELP
+   HELP = ##VLAN_COMMAND_HELP
+   HELP = Protocol-based VLAN commands
+   HELP = Protocol-based VLAN group commands
+   HELP = Group Name (Range: 1 - 16 characters)
+   HELP = ##VLAN_KEYWORD_HELP
+   HELP = ##VLAN_ID_HELP
+
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   = grp_id
+   CMD_VAR   =
+   CMD_VAR   = vid
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_protocol_add(session_id, grp_id, vid, mode_port_list), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = no switchport vlan protocol group <word16> [vlan <vlan_id>]
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = mode_port_list
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+   HELP =
+   HELP = ##VLAN_SWITCH_PORT_HELP
+   HELP = ##VLAN_COMMAND_HELP
+   HELP = Protocol-based VLAN commands
+   HELP = Protocol-based VLAN group commands
+   HELP = Group Name (Range: 1 - 16 characters)
+   HELP = VLAN of the mapping (deprecated since mapping is unique)
+   HELP = VLAN number (deprecated since mapping is unique)
+
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   =
+   CMD_VAR   = grp_id
+   CMD_VAR   =
+   CMD_VAR   =
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_protocol_del(session_id, grp_id, mode_port_list), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+CMD_BEGIN
+COMMAND = show vlan protocol [eth2 {<0x600-0xffff>|arp|ip|ipx|at}] [snap {<0x0-0xffffff>|rfc-1042|snap-8021h} <0x0-0xffff>] [llc <0x0-0xff> <0x0-0xff>]
+# /* ------------------------------------------------------------------------------------------------------------------------
+DOC_CMD_DESC    = ##DOC_CMD_DESC_PROTOCOL_HELP
+DOC_CMD_DEFAULT = ##DOC_CMD_DEF_PROTOCOL_HELP
+DOC_CMD_USAGE   = ##DOC_CMD_USAGE_PROTOCOL_BASED_HELP
+DOC_CMD_EXAMPLE = ##DOC_CMD_EXAMPLE_PROTOCOL_HELP
+DOC_CMD_EXAMPLE = ##DOC_CMD_EXA_PRO_SHOW_HELP
+# --------------------------------------------------------------------------------------------------------------------------*/
+
+FUNC_NAME = icli_proto_vlan_show
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = Show running system information
+HELP = ##VLAN_SHOW
+HELP = Protocol-based VLAN status
+HELP = Ethernet protocol based VLAN status
+HELP = Ether Type (Range: 0x600 - 0xFFFF)
+HELP = Ether Type is ARP
+HELP = Ether Type is IP
+HELP = Ether Type is IPX
+HELP = Ether Type is AppleTalk
+HELP = SNAP-based VLAN status
+HELP = SNAP OUI (Range 0x000000 - 0XFFFFFF)
+HELP = SNAP OUI is rfc-1042
+HELP = SNAP OUI is 8021h
+HELP = PID (Range: 0x0 - 0xFFFF)
+HELP = LLC-based VLAN status
+HELP = DSAP (Range: 0x00 - 0xFF)
+HELP = SSAP (Range: 0x00 - 0xFF)
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_eth2
+CMD_VAR   = etype
+CMD_VAR   = has_arp
+CMD_VAR   = has_ip
+CMD_VAR   = has_ipx
+CMD_VAR   = has_at
+CMD_VAR   = has_snap
+CMD_VAR   = oui
+CMD_VAR   = has_rfc_1042
+CMD_VAR   = has_snap_8021h
+CMD_VAR   = pid
+CMD_VAR   = has_llc
+CMD_VAR   = dsap
+CMD_VAR   = ssap
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_show_protocol(session_id, has_eth2, etype, has_arp, has_ip, has_ipx, has_at, has_snap, oui, has_rfc_1042, has_snap_8021h, pid, has_llc, dsap, ssap), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = show vlan mac [address <mac_ucast>]
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP =
+HELP = ##VLAN_SHOW
+HELP = Show VLAN MAC entries.
+HELP = Show a specific MAC entry.
+HELP = The specific MAC entry to show.
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_address
+CMD_VAR   = mac_addr
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_show_mac(session_id, has_address, &mac_addr), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+
+COMMAND = show vlan ip-subnet [<ipv4_subnet>]
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP =
+HELP = ##VLAN_SHOW
+HELP = Show VCL IP Subnet entries.
+HELP = Specify a specific IP Subnet.
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = ipv4
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_show_ipsubnet(session_id, &ipv4), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = switchport vlan ip-subnet [id <1-128>] <ipv4_subnet> vlan <vlan_id>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = plist
+
+RUNTIME = icli_is_switchport_runtime
+
+HELP = ##VLAN_SWITCH_PORT_HELP
+HELP = ##VLAN_COMMAND_HELP
+HELP = ##VLAN_VCE_IP_SUBNET_HELP
+HELP = Specify an index for the IP subnet entry (deprecated).
+HELP = The index of the IP subnet entry (deprecated).
+HELP = Source IP address and mask (Format: xx.xx.xx.xx/mm.mm.mm.mm).
+HELP = ##VLAN_KEYWORD_HELP
+HELP = ##VLAN_ID_HELP
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = ipv4
+CMD_VAR   =
+CMD_VAR   = vid
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_subnet_add(&ipv4, vid, plist), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = no switchport vlan ip-subnet <ipv4_subnet>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE =
+DOC_CMD_EXAMPLE =
+
+PRIVILEGE = ICLI_PRIVILEGE_13
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+
+MODE_VAR  = plist
+
+RUNTIME =
+RUNTIME = icli_is_switchport_runtime
+
+HELP =
+HELP = ##VLAN_SWITCH_PORT_HELP
+HELP = ##VLAN_COMMAND_HELP
+HELP = ##VLAN_VCE_IP_SUBNET_HELP
+HELP = Source IP address and mask (Format: xx.xx.xx.xx/mm.mm.mm.mm).
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = ipv4
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_subnet_del(&ipv4, plist), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+
+CMD_BEGIN
+COMMAND = vcl {dmacdip | smacsip}
+
+DOC_CMD_DESC    = Configure port to match on either DMAC/DIP or SMAC/SIP. This command is deprecated and not needed anymore.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = vcl dmacdip
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_INTERFACE_PORT_LIST
+MODE_VAR  =
+RUNTIME   =
+
+! vcl
+CMD_VAR =
+RUNTIME =
+HELP    = Configure stream matching per port (either DMAC/DIP or SMAC/SIP). Deprecated. Not required anymore.
+BYWORD  =
+
+! dmacdip
+CMD_VAR = has_dmacdip
+RUNTIME =
+HELP    = Do stream matching on DMAC/DIP
+BYWORD  =
+
+! smacsip
+CMD_VAR =
+RUNTIME =
+HELP    = Do stream matching on SMAC/SIP
+BYWORD  =
+
+CODE_BEGIN
+    // This command is deprecated and not needed anymore.
+    // The VCL module initializes MESA to always use full rules, which can match
+    // both DMAC/DIP and SMAC/SIP at the same time.
+    // To be backwards compatible with startup-configs, we do accept the
+    // command, but don't sythesize it.
+    has_dmacdip = has_dmacdip;
+CODE_END
+
+NO_FORM_CODE_BEGIN
+    has_dmacdip = has_dmacdip;
+NO_FORM_CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug vcl policy <uint>
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! vcl
+CMD_VAR =
+RUNTIME =
+HELP    = VCL commands
+BYWORD  =
+
+! policy
+CMD_VAR =
+RUNTIME =
+HELP    = Policy configuration
+BYWORD  =
+
+! <0-255>
+CMD_VAR = policy_no
+RUNTIME = VCL_ICLI_runtime_policy_no
+HELP    = Policy number to apply
+BYWORD  = <Policy : uint>
+
+CODE_BEGIN
+    ICLI_RC_CHECK(vcl_debug_policy_no_set(policy_no), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug no vcl policy
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE  = ICLI_CMD_MODE_GLOBAL_CONFIG
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+BYWORD  =
+
+! vcl
+CMD_VAR =
+RUNTIME =
+HELP    = VCL commands
+BYWORD  =
+
+! policy
+CMD_VAR =
+RUNTIME =
+HELP    = Policy configuration
+BYWORD  =
+
+CODE_BEGIN
+    ICLI_RC_CHECK(vcl_debug_policy_no_set(MESA_ACL_POLICY_NO_NONE), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = debug show vcl policy
+
+DOC_CMD_DESC    =
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! debug
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_DEBUG
+BYWORD  =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = Show running system information
+BYWORD  =
+
+! vcl
+CMD_VAR =
+RUNTIME =
+HELP    = VCL commands
+BYWORD  =
+
+! policy
+CMD_VAR =
+RUNTIME =
+HELP    = Policy configuration
+BYWORD  =
+
+VARIABLE_BEGIN
+    mesa_acl_policy_no_t policy_no;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_RC_CHECK(vcl_debug_policy_no_get(&policy_no), NULL);
+    if (policy_no == MESA_ACL_POLICY_NO_NONE) {
+        ICLI_PRINTF("VCL Policy: none\n");
+    } else {
+        ICLI_PRINTF("VCL Policy: %u\n", policy_no);
+    }
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = debug show vcl mac [address <mac_ucast>]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Show running system information
+HELP = Show VCL configurations (debug)
+HELP = Show local MAC to VLAN ID mappings
+HELP = Specify a local MAC to VLAN ID mapping
+HELP = The specific MAC entry to show
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_address
+CMD_VAR   = mac_addr
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_debug_show_mac(session_id, has_address, &mac_addr), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+
+IF_FLAG = defined(VTSS_SW_OPTION_IP)
+
+COMMAND = debug show vcl ip-subnet [<ipv4_subnet>]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Show running system information
+HELP = Show VCL configurations (debug)
+HELP = Show local Subnet to VLAN ID mappings
+HELP = The specific Subnet entry to show
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = ipv4
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_debug_show_ipsubnet(session_id, &ipv4), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = debug show vcl protocol [eth2 {<0x600-0xffff>|arp|ip|ipx|at}] [snap {<0x0-0xffffff>|rfc-1042|snap-8021h} <0x0-0xffff>] [llc <0x0-0xff> <0x0-0xff>]
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+HELP = Show running system information
+HELP = Show VCL configurations (debug)
+HELP = Show local Protocol to VLAN ID mappings
+HELP = Ethernet protocol based VLAN status
+HELP = Ether Type (Range: 0x600 - 0xFFFF)
+HELP = Ether Type is ARP
+HELP = Ether Type is IP
+HELP = Ether Type is IPX
+HELP = Ether Type is AppleTalk
+HELP = SNAP-based VLAN status
+HELP = SNAP OUI (Range 0x000000 - 0XFFFFFF)
+HELP = SNAP OUI is rfc-1042
+HELP = SNAP OUI is 8021h
+HELP = PID (Range: 0x0 - 0xFFFF)
+HELP = LLC-based VLAN status
+HELP = DSAP (Range: 0x00 - 0xFF)
+HELP = SSAP (Range: 0x00 - 0xFF)
+
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   =
+CMD_VAR   = has_eth2
+CMD_VAR   = etype
+CMD_VAR   = has_arp
+CMD_VAR   = has_ip
+CMD_VAR   = has_ipx
+CMD_VAR   = has_at
+CMD_VAR   = has_snap
+CMD_VAR   = oui
+CMD_VAR   = has_rfc_1042
+CMD_VAR   = has_snap_8021h
+CMD_VAR   = pid
+CMD_VAR   = has_llc
+CMD_VAR   = dsap
+CMD_VAR   = ssap
+
+CODE_BEGIN
+    ICLI_RC_CHECK(VCL_ICLI_debug_show_protocol(session_id, has_eth2, etype, has_arp, has_ip, has_ipx, has_at, has_snap, oui, has_rfc_1042, has_snap_8021h, pid, has_llc, dsap, ssap), NULL);
+CODE_END
+CMD_END
+
+#==============================================================================
+#==============================================================================
+CMD_BEGIN
+COMMAND = debug show vce registry
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+CMD_MODE  = ICLI_CMD_MODE_EXEC
+
+HELP = ##ICLI_HELP_DEBUG
+
+CODE_BEGIN
+    char buf[1024];
+    vcl_vce_debug_print(buf, sizeof(buf));
+    ICLI_PRINTF("%s", buf);
+CODE_END
+CMD_END
+

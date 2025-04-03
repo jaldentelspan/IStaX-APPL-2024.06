@@ -1,0 +1,113 @@
+# Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+# Microchip is aware that some terminology used in this technical document is
+# antiquated and inappropriate. As a result of the complex nature of software
+# where seemingly simple changes have unpredictable, and often far-reaching
+# negative results on the software's functionality (requiring extensive retesting
+# and revalidation) we are unable to make the desired changes in all legacy
+# systems without compromising our product or our clients' products.
+
+# PIM - Port Information Machine  - 17.26 - Fig. 17-27
+
+stm PortInformation(MSTI)
+
+BEGIN:
+        >> DISABLED
+
+GLOBAL:
+        when (!portEnabled && (infoIs != Disabled)) >> DISABLED
+
+DISABLED:
+        rcvdMsg = FALSE;
+        proposing = proposed = agree = agreed = FALSE;
+        rcvdInfoWhile = 0;
+        infoIs = Disabled; reselect = TRUE; selected = FALSE;
+        when rcvdMsg >> DISABLED
+        when portEnabled >> AGED
+
+AGED:
+        infoIs = Aged;
+        reselect = TRUE; selected = FALSE;
+        when (selected && updtInfo) >> UPDATE
+
+UPDATE:
+        proposing = proposed = FALSE;
+        agreed = agreed && betterorsameInfo(port, Mine);
+        synced = synced && agreed; portPriority = designatedPriority;
+        portTimes = designatedTimes;
+        updtInfo = FALSE; infoIs = Mine; newInfoXst(port,TRUE);
+        >> CURRENT
+
+CURRENT:
+        loop_protect 10
+        when (selected && updtInfo) >> UPDATE
+        when (infoIs == Received) && (rcvdInfoWhile == 0) && !updtInfo && !rcvdXstMsg(port) >> AGED
+        when rcvdXstMsg(port) && !updtXstInfo(port) >> RECEIVE
+
+RECEIVE:
+        rcvdInfo = rcvInfo(port);
+        recordMastered(port);
+        when rcvdInfo == OtherInfo >> OTHER
+        when rcvdInfo == InferiorRootAlternateInfo >> NOT_DESIGNATED
+        when rcvdInfo == InferiorDesignatedInfo >> INFERIOR_DESIGNATED
+        when rcvdInfo == RepeatedDesignatedInfo >> REPEATED_DESIGNATED
+        when rcvdInfo == SuperiorDesignatedInfo >> SUPERIOR_DESIGNATED
+
+OTHER:
+        reselect = TRUE; selected = FALSE;
+        rcvdMsg = FALSE;
+        >> CURRENT
+
+NOT_DESIGNATED:
+        recordAgreement(port); setTcFlags(port);
+        rcvdMsg = FALSE;
+        >> CURRENT
+
+INFERIOR_DESIGNATED:
+        reselect = TRUE; selected = FALSE;
+        recordDispute(port);
+        rcvdMsg = FALSE;
+        >> CURRENT
+
+REPEATED_DESIGNATED:
+        infoInternal = rcvdInternal;
+        recordProposal(port); setTcFlags(port);
+        recordAgreement(port);
+        updtRcvdInfoWhile(port);
+        rcvdMsg = FALSE;
+        >> CURRENT
+
+SUPERIOR_DESIGNATED:
+        infoInternal = rcvdInternal;
+        agreed = proposing = FALSE;
+        recordProposal(port); setTcFlags(port);
+        agree = agree && betterorsameInfo(port, Received);
+        recordAgreement(port); synced = synced && agreed;
+        recordPriority(port); recordTimes(port);
+        updtRcvdInfoWhile(port);
+        infoIs = Received; reselect = TRUE; selected = FALSE;
+        rcvdMsg = FALSE;
+        >> CURRENT
+

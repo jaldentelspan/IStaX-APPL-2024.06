@@ -1,0 +1,3266 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include <vtss/appl/tsn.h>          /* For vtss_appl_tsn_XXX()                   */
+#include <vtss/appl/psfp.h>         /* For vtss_appl_psfp_XXX()                  */
+#include "qos_api.h"                /* For vtss_appl_qos_XXX()                   */
+#include "tsn_api.h"                /* For vtss_appl_qos_capabilities            */
+#include "icli_cmd_func.h"          /* For icli_config_XXX()                     */
+#include "icli_porting_util.h"      /* For icli_port_info_txt()                  */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()     */
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                       */
+#include "topo_api.h"               /* for topo_usid2isid()                      */
+#include "mgmt_api.h"               /* For mgmt_enum_descriptor2txt()            */
+#include "tsn_serializer.hxx"       /* For mgmt_enum_descriptor2txt()            */
+#include "tsn_fp_serializer.hxx"    /* For mgmt_enum_descriptor2txt()          */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable() */
+#include "vtss_tod_api.h"           /* for '!=' on mesa_timestamp_t              */
+#include "psfp_api.h"
+
+#define CAPA vtss_appl_tsn_capabilities
+#define CAPA_QOS vtss_appl_qos_capabilities
+
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include PSFP's trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "psfp_trace.h"
+
+#undef IC_RC
+#define IC_RC(expr) do {                          \
+    mesa_rc _rc_ = (expr);                        \
+    if (_rc_ != VTSS_RC_OK) {                     \
+        ICLI_PRINTF("%% %s!\n", error_txt(_rc_)); \
+        return ICLI_RC_ERROR;                     \
+    }                                             \
+} while (0)
+
+#ifdef VTSS_SW_OPTION_ICFG
+
+// Helper macros:
+#define SHOW_(p)  ((req->all_defaults) || (c.p != dc.p))
+#define PRT_(...) do {VTSS_RC(vtss_icfg_printf(result, __VA_ARGS__));} while (0)
+
+#define CAPA vtss_appl_tsn_capabilities
+
+/******************************************************************************/
+// PSFP_ICFG_flow_meter_conf()
+/******************************************************************************/
+static mesa_rc PSFP_ICFG_flow_meter_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_psfp_flow_meter_conf_t dc, c;
+    vtss_appl_psfp_flow_meter_id_t   flow_meter_id = req->instance_id.generic_u32;
+
+    VTSS_RC(vtss_appl_psfp_flow_meter_conf_default_get(&dc));
+    VTSS_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &c));
+
+    // [no] cir <uint>
+    // [no] cbs <uint>
+    // [no] eir <uint>
+    // [no] ebs <uint>
+    // [no] coupling-flag
+    // [no] color-mode
+    // [no] drop-on-yellow
+    // [no] mark-red-enable
+
+    if (SHOW_(cir)) {
+        PRT_(" cir %u\n", c.cir);
+    }
+
+    if (SHOW_(cbs)) {
+        PRT_(" cbs %u\n", c.cbs);
+    }
+
+    if (SHOW_(eir)) {
+        PRT_(" eir %u\n", c.eir);
+    }
+
+    if (SHOW_(ebs)) {
+        PRT_(" ebs %u\n", c.ebs);
+    }
+
+    if (SHOW_(cf)) {
+        PRT_(" %scoupling-flag\n", c.cf ? "" : "no ");
+    }
+
+    if (SHOW_(cm)) {
+        PRT_(" %scolor-mode\n", (c.cm == VTSS_APPL_PSFP_FLOW_METER_CM_AWARE) ? "" : "no ");
+    }
+
+    if (SHOW_(drop_on_yellow)) {
+        PRT_(" %sdrop-on-yellow\n", c.drop_on_yellow ? "" : "no ");
+    }
+
+    if (SHOW_(mark_all_frames_red_enable)) {
+        PRT_(" %smark-red-enable\n", c.mark_all_frames_red_enable ? "" : "no ");
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// PSFP_ICFG_gate_conf()
+/******************************************************************************/
+static mesa_rc PSFP_ICFG_gate_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_psfp_gate_conf_t dc, c;
+    vtss_appl_psfp_gate_id_t   gate_id = req->instance_id.generic_u32;
+    psfp_util_time_t           psfp_time;
+    uint32_t                   gcl_idx;
+    char                       buf[100];
+
+    VTSS_RC(vtss_appl_psfp_gate_conf_default_get(&dc));
+    VTSS_RC(vtss_appl_psfp_gate_conf_get(gate_id, &c));
+
+    // [no] state {open | closed}
+    // [no] ipv <0-7>
+    // [no] close-due-to-invalid-rx-enable
+    // [no] close-due-to-octets-exceeded-enable
+    // [no] cycle-time <1-1000000000> {ms | us | ns}
+    // [no] time-extension <1-1000000000> {ms | us | ns}
+    // [no] base-time seconds <0-4294967295> [nanoseconds <0-999999999>]
+    //      control-list-length <uint>
+    // [no] control-list index <uint> gate-state {open | closed} time-interval <1-999999999> {ms | us | ns} [ipv <uint>] [octet-max <uint>]
+    // [no] enable
+    //      config-change
+
+    if (SHOW_(gate_state)) {
+        PRT_(" state %s\n", psfp_util_gate_state_to_str(c.gate_state));
+    }
+
+    if (SHOW_(ipv)) {
+        if (c.ipv != -1) {
+            PRT_(" ipv %u\n", c.ipv);
+        } else {
+            PRT_(" no ipv\n");
+        }
+    }
+
+    if (SHOW_(close_gate_due_to_invalid_rx_enable)) {
+        PRT_(" %sclose-due-to-invalid-rx-enable\n", c.close_gate_due_to_invalid_rx_enable ? "" : "no ");
+    }
+
+    if (SHOW_(close_gate_due_to_octets_exceeded_enable)) {
+        PRT_(" %sclose-due-to-octets-exceeded-enable\n", c.close_gate_due_to_octets_exceeded_enable ? "" : "no ");
+    }
+
+    if (SHOW_(cycle_time_ns)) {
+        if (c.cycle_time_ns != dc.cycle_time_ns) {
+            psfp_util_time_to_num_denom(c.cycle_time_ns, psfp_time);
+            PRT_(" cycle-time %u %s\n", psfp_time.numerator, psfp_util_time_unit_to_str(psfp_time.unit));
+        } else {
+            PRT_(" no cycle-time\n");
+        }
+    }
+
+    if (SHOW_(cycle_time_extension_ns)) {
+        if (c.cycle_time_extension_ns != dc.cycle_time_extension_ns) {
+            psfp_util_time_to_num_denom(c.cycle_time_extension_ns, psfp_time);
+            PRT_(" time-extension %u %s\n", psfp_time.numerator, psfp_util_time_unit_to_str(psfp_time.unit));
+        } else {
+            PRT_(" no time-extension\n");
+        }
+    }
+
+    if (SHOW_(base_time)) {
+        if (c.base_time.nanoseconds != 0 || req->all_defaults) {
+            sprintf(buf, " nanoseconds %u", c.base_time.nanoseconds);
+        } else {
+            buf[0] = '\0';
+        }
+
+        PRT_(" base-time seconds %u%s\n", c.base_time.seconds, buf);
+    }
+
+    if (SHOW_(gcl_length)) {
+        PRT_(" control-list-length %u\n", c.gcl_length);
+    }
+
+    for (gcl_idx = 0; gcl_idx < c.gcl_length; gcl_idx++) {
+        vtss_appl_psfp_gate_gce_conf_t &gce = c.gcl[gcl_idx];
+
+        psfp_util_time_to_num_denom(gce.time_interval_ns, psfp_time);
+        PRT_(" control-list index %u gate-state %s time-interval %u %s", gcl_idx, psfp_util_gate_state_to_str(gce.gate_state), psfp_time.numerator, psfp_util_time_unit_to_str(psfp_time.unit));
+        if (gce.ipv != -1) {
+            PRT_(" ipv %u", gce.ipv);
+        }
+
+        if (gce.interval_octet_max) {
+            PRT_(" octet-max %u", gce.interval_octet_max);
+        }
+
+        PRT_("\n");
+    }
+
+    if (SHOW_(gate_enabled)) {
+        PRT_(" %senable\n", c.gate_enabled ? "" : "no ");
+        if (c.gate_enabled) {
+            PRT_(" config-change\n");
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// PSFP_ICFG_filter_conf()
+/******************************************************************************/
+static mesa_rc PSFP_ICFG_filter_conf(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    vtss_appl_psfp_filter_conf_t dc, c;
+    vtss_appl_psfp_filter_id_t   filter_id = req->instance_id.generic_u32;
+
+    VTSS_RC(vtss_appl_psfp_filter_conf_default_get(&dc));
+    VTSS_RC(vtss_appl_psfp_filter_conf_get(filter_id, &c));
+
+    // [no] stream-id <uint>
+    // [no] stream-collection-id <uint>
+    // [no] flow-meter id <uint>
+    // [no] gate id <uint>
+    // [no] max-sdu <uint>
+    // [no] block-due-to-oversize-enable
+
+    if (SHOW_(stream_id)) {
+        if (c.stream_id != dc.stream_id) {
+            PRT_(" stream-id %u\n", c.stream_id);
+        } else {
+            PRT_(" no stream-id\n");
+        }
+    }
+
+    if (SHOW_(stream_collection_id)) {
+        if (c.stream_collection_id != dc.stream_collection_id) {
+            PRT_(" stream-collection-id %u\n", c.stream_collection_id);
+        } else {
+            PRT_(" no stream-collection-id\n");
+        }
+    }
+
+    if (SHOW_(flow_meter_id)) {
+        if (c.flow_meter_id != dc.flow_meter_id) {
+            PRT_(" flow-meter id %u\n", c.flow_meter_id);
+        } else {
+            PRT_(" no flow-meter\n");
+        }
+    }
+
+    if (SHOW_(gate_id)) {
+        if (c.gate_id != dc.gate_id) {
+            PRT_(" gate id %u\n", c.gate_id);
+        } else {
+            PRT_(" no gate\n");
+        }
+    }
+
+    if (SHOW_(max_sdu_size)) {
+        if (c.max_sdu_size != dc.max_sdu_size) {
+            PRT_(" max-sdu %u\n", c.max_sdu_size);
+        } else {
+            PRT_(" no max-sdu\n");
+        }
+    }
+
+    if (SHOW_(block_due_to_oversize_frame_enable)) {
+        if (c.block_due_to_oversize_frame_enable) {
+            PRT_(" block-due-to-oversize-enable\n");
+        } else {
+            PRT_(" no block-due-to-oversize-enable\n");
+        }
+    }
+
+    return VTSS_RC_OK;
+}
+
+/******************************************************************************/
+// psfp_icfg_init()
+/******************************************************************************/
+mesa_rc psfp_icfg_init(void)
+{
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_PSFP_FLOW_METER_CONF, "tsn", PSFP_ICFG_flow_meter_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_PSFP_GATE_CONF,       "tsn", PSFP_ICFG_gate_conf));
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_PSFP_FILTER_CONF,     "tsn", PSFP_ICFG_filter_conf));
+    return VTSS_RC_OK;
+}
+#endif /* VTSS_SW_OPTION_ICFG */
+
+/******************************************************************************/
+// PSFP_ICLI_member_of_list()
+/******************************************************************************/
+static bool PSFP_ICLI_member_of_list(uint32_t id, icli_range_t *index_list)
+{
+    u8 cnt_index;
+
+    if (index_list == NULL) { // User has not given a list, use wildcart
+        return true;
+    }
+    for (cnt_index = 0; cnt_index < index_list->u.sr.cnt; cnt_index++) {
+        if (id >= index_list->u.sr.range[cnt_index].min &&
+            id <= index_list->u.sr.range[cnt_index].max) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_flow_meter_range_get()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_flow_meter_range_get(icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_created)
+{
+    vtss_appl_psfp_flow_meter_id_t flow_meter_id;
+    vtss_appl_psfp_capabilities_t  cap;
+    uint32_t                       cnt;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    (void)vtss_appl_psfp_capabilities_get(&cap);
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.range[0].min = 0;
+    runtime->range.u.sr.range[0].max = cap.max_flow_meter_instances - 1;
+    runtime->range.u.sr.cnt = ++cnt;
+
+    if (!include_created) {
+        return TRUE;
+    }
+
+    flow_meter_id = VTSS_APPL_PSFP_FLOW_METER_ID_NONE;
+    while (vtss_appl_psfp_flow_meter_itr(&flow_meter_id, &flow_meter_id) == VTSS_RC_OK) {
+        runtime->range.u.ur.range[cnt].min = flow_meter_id;
+        runtime->range.u.ur.range[cnt].max = flow_meter_id;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_flow_meter_range()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_flow_meter_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_flow_meter_range_get(ask, runtime, false /* don't include created */);
+}
+
+/******************************************************************************/
+// psfp_icli_runtime_flow_meter_range()
+// This is used by .../icli/platform/script/icli_config.icli
+/******************************************************************************/
+BOOL psfp_icli_runtime_flow_meter_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_flow_meter_range_get(ask, runtime, true /* include created */);
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_gate_range_get()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_gate_range_get(icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_created)
+{
+    vtss_appl_psfp_gate_id_t      gate_id;
+    vtss_appl_psfp_capabilities_t cap;
+    uint32_t                      cnt;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    (void)vtss_appl_psfp_capabilities_get(&cap);
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.range[0].min = 0;
+    runtime->range.u.sr.range[0].max = cap.max_gate_instances - 1;
+    runtime->range.u.sr.cnt = ++cnt;
+
+    if (!include_created) {
+        return TRUE;
+    }
+
+    gate_id = VTSS_APPL_PSFP_GATE_ID_NONE;
+    while (vtss_appl_psfp_gate_itr(&gate_id, &gate_id) == VTSS_RC_OK) {
+        runtime->range.u.ur.range[cnt].min = gate_id;
+        runtime->range.u.ur.range[cnt].max = gate_id;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_gate_range()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_gate_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_gate_range_get(ask, runtime, false /* don't include created */);
+}
+
+/******************************************************************************/
+// psfp_icli_runtime_gate_range()
+// This is used by .../icli/platform/script/icli_config.icli
+/******************************************************************************/
+BOOL psfp_icli_runtime_gate_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_gate_range_get(ask, runtime, true /* include created */);
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_gcl_length_range()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_gcl_length_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include)
+{
+    vtss_appl_psfp_capabilities_t cap;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    (void)vtss_appl_psfp_capabilities_get(&cap);
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.cnt = 1;
+    runtime->range.u.sr.range[0].min = 0;
+    runtime->range.u.sr.range[0].max = include ? cap.gate_control_list_length_max : cap.gate_control_list_length_max - 1;
+    return TRUE;
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_gcl_length_range_include()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_gcl_length_range_include(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_gcl_length_range(session_id, ask, runtime, true /* include the upper bound */);
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_gcl_length_range_exclude()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_gcl_length_range_exclude(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_gcl_length_range(session_id, ask, runtime, false /* exclude the upper bound */);
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_filter_range_get()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_filter_range_get(icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_created)
+{
+    vtss_appl_psfp_filter_id_t     filter_id;
+    vtss_appl_psfp_capabilities_t cap;
+    uint32_t                      cnt;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    (void)vtss_appl_psfp_capabilities_get(&cap);
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.sr.range[0].min = 0;
+    runtime->range.u.sr.range[0].max = cap.max_filter_instances - 1;
+    runtime->range.u.sr.cnt = ++cnt;
+
+    if (!include_created) {
+        return TRUE;
+    }
+
+    filter_id = VTSS_APPL_PSFP_FILTER_ID_NONE;
+    while (vtss_appl_psfp_filter_itr(&filter_id, &filter_id) == VTSS_RC_OK) {
+        runtime->range.u.ur.range[cnt].min = filter_id;
+        runtime->range.u.ur.range[cnt].max = filter_id;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_filter_range()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_filter_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_filter_range_get(ask, runtime, false /* don't include created */);
+}
+
+/******************************************************************************/
+// psfp_icli_runtime_filter_range()
+// This is used by .../icli/platform/script/icli_config.icli
+/******************************************************************************/
+BOOL psfp_icli_runtime_filter_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return PSFP_ICLI_runtime_filter_range_get(ask, runtime, true /* include created */);
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_stream_range()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_stream_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    // Use the stream range function from stream.icli.
+    BOOL stream_icli_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing);
+    return stream_icli_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_stream_collection_range()
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_stream_collection_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    // Use the stream collection range function from stream.icli.
+    BOOL stream_collection_icli_instance_range(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing);
+    return stream_collection_icli_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// PSFP_ICLI_runtime_loading_startup_config()
+// The asked-for keyword is obsolete and will no longer be synthesized into
+// running-config, but will have to be present during loading of startup-config
+// in order to be backwards compatible with what is out there.
+/******************************************************************************/
+static BOOL PSFP_ICLI_runtime_loading_startup_config(uint32_t session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    icli_session_way_t way;
+    icli_rc_t          icli_rc;
+
+    if (ask != ICLI_ASK_PRESENT) {
+        return FALSE;
+    }
+
+    if ((icli_rc = (icli_rc_t)icli_session_way_get(session_id, &way)) != ICLI_RC_OK) {
+        T_EG(PSFP_TRACE_GRP_ICLI, "icli_session_way_get() failed: %d", icli_rc);
+        return true;
+    }
+
+    // Only when ICFG is applying startup-config, will 'way' be
+    // ICLI_SESSION_WAY_APP_EXEC. When normal RS232 CLI is running, 'way' will
+    // be ICLI_SESSION_WAY_THREAD_CONSOLE - also when a config is copied from
+    // flash to running-config (which is kind-of a shame).
+    runtime->present = way == ICLI_SESSION_WAY_APP_EXEC;
+    return TRUE;
+}
+
+FUNCTION_END
+
+EXPORT_BEGIN
+EXPORT_END
+
+!-------------------------------------------------------------------------------
+! Flow Meter functions
+!-------------------------------------------------------------------------------
+
+CMD_BEGIN
+COMMAND = no tsn flow meter <uint>
+
+DOC_CMD_DESC    = Delete flow meter
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Delete a flow metr
+DOC_CMD_EXAMPLE = no tsn flow meter 1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = Delete TSN related object
+
+! flow
+CMD_VAR =
+RUNTIME =
+HELP    = Delete a flow meter
+
+! meter
+CMD_VAR =
+RUNTIME =
+HELP    = Delete a flow meter
+
+! <uint>
+CMD_VAR = flow_meter_id
+RUNTIME = PSFP_ICLI_runtime_flow_meter_range
+HELP    = The flow meter instance to be deleted
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_del(flow_meter_id));
+CODE_END
+CMD_END
+
+CMD_BEGIN
+COMMAND = cir <uint>
+
+DOC_CMD_DESC    = Configure Flow Meter Committed Information Rate in kbps
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = cir 1000
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! cir
+CMD_VAR =
+RUNTIME =
+HELP    = Committed Information Rate
+
+! <uint>
+CMD_VAR = cir
+RUNTIME =
+HELP    = Committed Information Rate measured in kbps. Gets rounded up to the nearest value supported by the policer and will be reflected in running-config
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cir = cir;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cir = flow_meter_conf_default.cir;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = cbs <uint>
+
+DOC_CMD_DESC    = Configure Flow Meter Committed Burst Size in bytes
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = cbs 1000
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! cbs
+CMD_VAR =
+RUNTIME =
+HELP    = Committed Burst Size
+
+! <uint>
+CMD_VAR = cbs
+RUNTIME =
+HELP    = Committed Burst Size measured in bytes. Gets rounded up to the nearest value supported by the policer and will be reflected in running-config
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cbs = cbs;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cbs = flow_meter_conf_default.cbs;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = eir <uint>
+
+DOC_CMD_DESC    = Configure Excess Information Rate in kbps
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = eir 1000
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! eir
+CMD_VAR =
+RUNTIME =
+HELP    = Excess Information Rate
+
+! <uint>
+CMD_VAR = eir
+RUNTIME =
+HELP    = Excess Information Rate measured in kbps. Gets rounded up to the nearest value supported by the policer and will be reflected in running-config
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.eir = eir;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.eir = flow_meter_conf_default.eir;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = ebs <uint>
+
+DOC_CMD_DESC    = Configure Flow Meter Excess Burst Size in bytes
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = ebs 1000
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! ebs
+CMD_VAR =
+RUNTIME =
+HELP    = Excess Burst Size
+
+! <uint>
+CMD_VAR = ebs
+RUNTIME =
+HELP    = Excess Burst Size measured in bytes. Gets rounded up to the nearest value supported by the policer and will be reflected in running-config
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.ebs = ebs;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.ebs = flow_meter_conf_default.ebs;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = coupling-flag
+
+DOC_CMD_DESC    = Configure Coupling flag to be enabled
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = coupling-flag
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! coupling-flag
+CMD_VAR =
+RUNTIME =
+HELP    = Coupling flag. When set, frames that would overflow the committed bucket will be added to the excess bucket unless it's full
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cf = true;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cf = flow_meter_conf_default.cf;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = color-mode
+
+DOC_CMD_DESC    = Configure color mode enabled
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = color-mode
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! color-mode
+CMD_VAR =
+RUNTIME =
+HELP    = Color mode. When cleared (no-form), the frame starts green, when set, the frame starts at the classified color based on its DEI value
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cm = VTSS_APPL_PSFP_FLOW_METER_CM_AWARE;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.cm = flow_meter_conf_default.cm;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = drop-on-yellow
+
+DOC_CMD_DESC    = Set PSFP Flow Meter Drop on Yellow
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = drop-on-yellow
+
+NO_FORM_DOC_CMD_DESC    = Clear PSFP Flow Meter Drop on Yellow
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE = no drop-on-yellow
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! drop-on-yellow
+CMD_VAR =
+RUNTIME =
+HELP    = If cleared (no-form), frames will have their DEI value set to 1, otherwise frames marked yellow are discarded
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.drop_on_yellow = true;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.drop_on_yellow = flow_meter_conf_default.drop_on_yellow;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = mark-red-enable
+
+DOC_CMD_DESC    = Set PSFP Flow Meter Mark All Frames Red Enable
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = mark-red-enable
+
+NO_FORM_DOC_CMD_DESC    = Clear PSFP Flow Meter Mark All Frames Red Enable
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE = no mark-red-enable
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FLOW_METER
+MODE_VAR = flow_meter_id
+
+! mark-red-enable
+CMD_VAR =
+RUNTIME =
+HELP    = If set, all subsequent frames are discarded if a red frame is seen
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.mark_all_frames_red_enable = true;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_conf_t flow_meter_conf, flow_meter_conf_default;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_flow_meter_conf_default_get(&flow_meter_conf_default));
+    IC_RC(vtss_appl_psfp_flow_meter_conf_get(flow_meter_id, &flow_meter_conf));
+    flow_meter_conf.mark_all_frames_red_enable = flow_meter_conf_default.mark_all_frames_red_enable;
+    IC_RC(vtss_appl_psfp_flow_meter_conf_set(flow_meter_id, &flow_meter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = show tsn flow meter [<range_list>] status
+
+DOC_CMD_DESC    = Show flow meter status
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show tsn flow meter 3-7 status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = Show TSN related status
+
+! flow
+CMD_VAR =
+RUNTIME =
+HELP    = Flow meter status
+
+! meter
+CMD_VAR =
+RUNTIME =
+HELP    = Flow meter status
+
+! <range_list>
+CMD_VAR = index_list
+RUNTIME = PSFP_ICLI_runtime_flow_meter_range
+HELP    = Flow meter instances to show status for
+
+! status
+CMD_VAR =
+RUNTIME =
+HELP    = Flow meter status
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_status_t status;
+    vtss_appl_psfp_flow_meter_id_t     flow_meter_id = VTSS_APPL_PSFP_FLOW_METER_ID_NONE;
+VARIABLE_END
+
+CODE_BEGIN
+    ICLI_PRINTF("Flow  Mark all\n");
+    ICLI_PRINTF("Meter frames red\n");
+    ICLI_PRINTF("----- ----------\n");
+
+    while (vtss_appl_psfp_flow_meter_itr(&flow_meter_id, &flow_meter_id) == VTSS_RC_OK) {
+        if (PSFP_ICLI_member_of_list(flow_meter_id, index_list)) {
+            IC_RC(vtss_appl_psfp_flow_meter_status_get(flow_meter_id, &status));
+            ICLI_PRINTF("%5d  %10s\n", flow_meter_id, status.mark_all_frames_red ? "true" : "false");
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = clear tsn flow meter [<range_list>] [mark-red]
+
+DOC_CMD_DESC    = Clear the markAllFramesRed flag
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = clear tsn flow meter 1 mark-red
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = clear TSN related flags
+
+! flow
+CMD_VAR =
+RUNTIME =
+HELP    = Clear flow-meter
+
+! meter
+CMD_VAR =
+RUNTIME =
+HELP    = Clear flow-meter
+
+! <range_list>
+CMD_VAR = index_list
+RUNTIME = PSFP_ICLI_runtime_flow_meter_range
+HELP    =
+
+! mark-red
+CMD_VAR =
+RUNTIME =
+HELP    = Clear stream-blocked-due-to-oversize-frame flag
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_flow_meter_control_t ctrl = {};
+    vtss_appl_psfp_flow_meter_id_t      flow_meter_id = VTSS_APPL_PSFP_FLOW_METER_ID_NONE;
+VARIABLE_END
+
+CODE_BEGIN
+    ctrl.clear_mark_all_frames_red = true;
+
+    while (vtss_appl_psfp_flow_meter_itr(&flow_meter_id, &flow_meter_id) == VTSS_RC_OK) {
+        if (PSFP_ICLI_member_of_list(flow_meter_id, index_list)) {
+            IC_RC(vtss_appl_psfp_flow_meter_control_set(flow_meter_id, &ctrl));
+        }
+    }
+CODE_END
+CMD_END
+
+!-------------------------------------------------------------------------------
+! Stream Gate functions
+!-------------------------------------------------------------------------------
+
+CMD_BEGIN
+COMMAND = no tsn stream gate <uint>
+
+DOC_CMD_DESC    = Delete stream gate
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Used to delete a stream gate
+DOC_CMD_EXAMPLE = no tsn stream gate 1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = Delete TSN related object
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Delete a stream gate
+
+! gate
+CMD_VAR =
+RUNTIME =
+HELP    = Delete a stream gate
+
+! <uint>
+CMD_VAR = gate_id
+RUNTIME = PSFP_ICLI_runtime_gate_range
+HELP    = The stream gate instance to be deleted
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_del(gate_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = state {open | closed}
+
+DOC_CMD_DESC    = Set state when no gate control list is executing. Default state is closed
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = state open
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! state
+CMD_VAR =
+RUNTIME =
+HELP    = Set admin state
+
+! open
+CMD_VAR = has_open
+RUNTIME =
+HELP    = Set initial gate state to open
+
+! closed
+CMD_VAR =
+RUNTIME =
+HELP    = Set initial gate state to closed
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.gate_state = has_open ? VTSS_APPL_PSFP_GATE_STATE_OPEN : VTSS_APPL_PSFP_GATE_STATE_CLOSED;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = ipv <0-7>
+
+DOC_CMD_DESC    = Set admin internal priority value to be used when no gate control list is executing
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = ipv 3
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! ipv
+CMD_VAR =
+RUNTIME =
+HELP    = Set admin internal priority value
+
+! <0-7>
+CMD_VAR = ipv
+RUNTIME =
+HELP    = Set frame's initial internal priority value (egress queue). May be overridden by a control list entry later
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.ipv = ipv;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no ipv
+
+DOC_CMD_DESC    = No admin internal priority value to be used when no gate control list is executing
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no ipv
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! ipv
+CMD_VAR =
+RUNTIME =
+HELP    = Let frame retain its original internal priority value (egress queue). May be overridden by a control list entry later
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf, gate_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_default_get(&gate_default_conf));
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.ipv = gate_default_conf.ipv;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = close-due-to-invalid-rx-enable
+
+DOC_CMD_DESC    = Set Gate Closed Due To Invalid Rx Enable
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = close-due-to-invalid-rx-enable
+
+NO_FORM_DOC_CMD_DESC    = Set Gate Closed Due To Invalid Rx Disable
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE = no close-due-to-invalid-rx-enable
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! close-due-to-invalid-rx-enable
+CMD_VAR =
+RUNTIME =
+HELP    = If set, a stream gate gets permanently closed if receiving a frame during a closed gate state
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.close_gate_due_to_invalid_rx_enable = true;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.close_gate_due_to_invalid_rx_enable = false;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = close-due-to-octets-exceeded-enable
+
+DOC_CMD_DESC    = Set Gate Closed Due To Octets exceeded Enable
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = close-due-to-octets-exceeded-enable
+
+NO_FORM_DOC_CMD_DESC    = Set Gate Closed Due To Octets exceeded Disable
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE = no close-octets-exceeded-enable
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! close-due-to-octets-exceeded-enable
+CMD_VAR =
+RUNTIME =
+HELP    = If set, a stream gate gets permanently closed if receiving a frame that exceeds the configured 'octet-max'
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.close_gate_due_to_octets_exceeded_enable = true;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.close_gate_due_to_octets_exceeded_enable = false;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = cycle-time <1-1000000000> {ms | us | ns}
+
+DOC_CMD_DESC    = Set admin cycle time in units of either milliseconds (ms), microseconds (us) or nano seconds (ns)
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = The total cycle time cannot exceeed 1 second.
+DOC_CMD_EXAMPLE = cycle-time 100 ms
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! cycle-time
+CMD_VAR =
+RUNTIME =
+HELP    = Set the gate's cycle time. A cycle time of up to 1 second can be specified
+
+! <1-1000000000>
+CMD_VAR = cycle_time
+RUNTIME =
+HELP    = Set the gate's cycle time
+
+! ms
+CMD_VAR = has_ms
+RUNTIME =
+HELP    = Set cycle time value in units of milliseconds. With this unit, the cycle time cannot exceed 1000 ms
+
+! us
+CMD_VAR = has_us
+RUNTIME =
+HELP    = Set cycle time value in units of microseconds. With this unit, the cycle time cannot exceed 1,000,000 us
+
+! ns
+CMD_VAR =
+RUNTIME =
+HELP    = Set cycle time value in units of nanoseconds. With this unit, the cycle time cannot exceed 1,000,000,000 ns
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+    psfp_util_time_t           psfp_time;
+VARIABLE_END
+
+CODE_BEGIN
+    psfp_time.unit      = has_ms ? PSFP_UTIL_TIME_UNIT_MSEC : has_us ? PSFP_UTIL_TIME_UNIT_USEC : PSFP_UTIL_TIME_UNIT_NSEC;
+    psfp_time.numerator = cycle_time;
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    IC_RC(psfp_util_time_from_num_denom(gate_conf.cycle_time_ns, psfp_time));
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no cycle-time
+
+DOC_CMD_DESC    = Set admin cycle time to 0.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no cycle-time
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+CMD_MODE  = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR  = gate_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! cycle-time
+CMD_VAR =
+RUNTIME =
+HELP    = Set the gate's cycle time to 0
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.cycle_time_ns = 0;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = time-extension <1-1000000000> {ms | us | ns}
+
+DOC_CMD_DESC    = Set admin cycle time extension in units of either milliseconds (ms), microseconds (us) or nano seconds (ns)
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = time-extension 100 ns
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+CMD_MODE  = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR  = gate_id
+
+! time-extension
+CMD_VAR =
+RUNTIME =
+HELP    = Set the gate's cycle time extension
+
+! <1-1000000000>
+CMD_VAR = time_extension
+RUNTIME =
+HELP    = Set the gate's cycle time extension. An extension of up to 1 second can be specified
+
+! ms
+CMD_VAR = has_ms
+RUNTIME =
+HELP    = Set cycle time extension value in units of milliseconds. With this unit, the cycle time extension cannot exceed 1000 ms
+
+! us
+CMD_VAR = has_us
+RUNTIME =
+HELP    = Set cycle time extension value in units of microseconds. With this unit, the cycle time extension cannot exceed 1,000,000 us
+
+! ns
+CMD_VAR =
+RUNTIME =
+HELP    = Set cycle time extension value in units of nanoseconds. With this unit, the cycle time extension cannot exceed 1,000,000,000 ns
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+    psfp_util_time_t           psfp_time;
+VARIABLE_END
+
+CODE_BEGIN
+    psfp_time.unit      = has_ms ? PSFP_UTIL_TIME_UNIT_MSEC : has_us ? PSFP_UTIL_TIME_UNIT_USEC : PSFP_UTIL_TIME_UNIT_NSEC;
+    psfp_time.numerator = time_extension;
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    IC_RC(psfp_util_time_from_num_denom(gate_conf.cycle_time_extension_ns, psfp_time));
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no time-extension
+
+DOC_CMD_DESC    = Clear the time extension (set it to 0 ns).
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no time-extension
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+CMD_MODE  = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR  = gate_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! time-extension
+CMD_VAR =
+RUNTIME =
+HELP    = Set the gate's cyle time extension to 0
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.cycle_time_extension_ns = 0;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = base-time seconds <0-4294967295> [nanoseconds <0-999999999>]
+
+DOC_CMD_DESC    = Set admin base time
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = base-time seconds 3600 nanoseconds 400
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! base-time
+CMD_VAR =
+RUNTIME =
+HELP    = Set the time for the next config-change to take place
+
+! seconds
+CMD_VAR =
+RUNTIME =
+HELP    = Specify seconds
+
+! <uint>
+CMD_VAR = seconds
+RUNTIME =
+HELP    = Seconds
+
+! nanoseconds
+CMD_VAR = has_nanoseconds
+RUNTIME =
+HELP    = Specify nanoseconds
+
+! <0-999999999>
+CMD_VAR = nanoseconds
+RUNTIME =
+HELP    = Nanoseconds. Default is 0
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.base_time.seconds     = seconds;
+    gate_conf.base_time.nanoseconds = has_nanoseconds ? nanoseconds : 0;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no base-time
+
+DOC_CMD_DESC    = Set admin base time to 0
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no base-time
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! base-time
+CMD_VAR =
+RUNTIME =
+HELP    = Set admin base-time to 0
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf, gate_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_default_get(&gate_default_conf));
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.base_time = gate_default_conf.base_time;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = control-list-length <uint>
+
+DOC_CMD_DESC    = Set size of gate control list
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = control-list-length 4
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! control-list-length
+CMD_VAR =
+RUNTIME =
+HELP    = Set size of gate control list. Gate control list entries beyond the configured size will be defaulted
+
+! <uint>
+CMD_VAR = gcl_length
+RUNTIME = PSFP_ICLI_runtime_gcl_length_range_include
+HELP    = Length of gate control list
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.gcl_length = gcl_length;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = control-list index <uint> gate-state {open | closed} time-interval <1-999999999> {ms | us | ns} [ipv <0-7>] [octet-max <uint>]
+
+DOC_CMD_DESC    = Configures PSFP Admin Control List
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = The time-interval cannot exceeed 999,999,999 nanoseconds.
+DOC_CMD_EXAMPLE = control-list index 1 gate-state open time-interval 1000 us ipv 4
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! control-list
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Admin Control List
+
+! index
+CMD_VAR =
+RUNTIME =
+HELP    = Specify index into the Gate Control List
+
+! <uint>
+CMD_VAR = index
+RUNTIME = PSFP_ICLI_runtime_gcl_length_range_exclude
+HELP    = Select an index into the Gate Control List. Only indices smaller than the configured control-list-length are allowed
+
+! gate-state
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Gate State
+
+! open
+CMD_VAR = has_open
+RUNTIME =
+HELP    = Open stream gate
+
+! closed
+CMD_VAR =
+RUNTIME =
+HELP    = Close stream gate
+
+! time-interval
+CMD_VAR =
+RUNTIME =
+HELP    = Configure Time Interval
+
+! <1-999999999>
+CMD_VAR = interval
+RUNTIME =
+HELP    = Set gate control entry's time interval (default is 1 nanosecond)
+
+! ms
+CMD_VAR = has_ms
+RUNTIME =
+HELP    = Unit of time interval is milliseconds. With this unit, the interval cannot exceed 999 ms
+
+! us
+CMD_VAR = has_us
+RUNTIME =
+HELP    = Unit of time interval is microseconds. With this unit, the interval cannot exceed 999,999 us
+
+! ns
+CMD_VAR =
+RUNTIME =
+HELP    = Unit of time interval is nanoseconds. With this unit, the interval cannot exceed 999,999,999 ns
+
+! ipv
+CMD_VAR = has_ipv
+RUNTIME =
+HELP    = Configure internal priority value. If left out, the IPV it has received so far will be kept
+
+! <0-7>
+CMD_VAR = ipv
+RUNTIME =
+HELP    = Select frame's internal priority value (egress queue).
+
+! octet-max
+CMD_VAR = has_octet_max
+RUNTIME =
+HELP    = Configure the size of the largest frame that can slip through this gate. If left out, any-sized frame is allowed
+
+! <uint>
+CMD_VAR = octet_max
+RUNTIME =
+HELP    = Size of the largest frame to let through gate. Use 0 to disable check
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+    psfp_util_time_t           psfp_time;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+
+    if (index >= gate_conf.gcl_length) {
+       ICLI_PRINTF("%% Index must be lower than the configured GCL length\n");
+       return ICLI_RC_ERROR;
+    }
+
+    psfp_time.unit      = has_ms ? PSFP_UTIL_TIME_UNIT_MSEC : has_us ? PSFP_UTIL_TIME_UNIT_USEC : PSFP_UTIL_TIME_UNIT_NSEC;
+    psfp_time.numerator = interval;
+
+    vtss_appl_psfp_gate_gce_conf_t &c = gate_conf.gcl[index];
+    c.gate_state               = has_open ? VTSS_APPL_PSFP_GATE_STATE_OPEN : VTSS_APPL_PSFP_GATE_STATE_CLOSED;
+    c.ipv                      = has_ipv ? ipv : -1;
+    IC_RC(psfp_util_time_from_num_denom(c.time_interval_ns, psfp_time));
+    c.interval_octet_max       = has_octet_max ? octet_max : 0;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no control-list index <uint>
+
+DOC_CMD_DESC    = Remove entry from control list
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no control-list index 1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+CMD_MODE  = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR  = gate_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! control-list
+CMD_VAR =
+RUNTIME =
+HELP    = Default an entry into the Gate Control List
+
+! index
+CMD_VAR =
+RUNTIME =
+HELP    = Specify index into the Gate Control List
+
+! <uint>
+CMD_VAR = index
+RUNTIME = PSFP_ICLI_runtime_gcl_length_range_exclude
+HELP    = Index into the Gate Control List that will be defaulted
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf, gate_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_default_get(&gate_default_conf));
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+
+    if (index >= gate_conf.gcl_length) {
+       ICLI_PRINTF("%% Index must be lower than the configured GCL length\n");
+       return ICLI_RC_ERROR;
+    }
+
+    gate_conf.gcl[index] = gate_default_conf.gcl[index];
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = enable
+
+DOC_CMD_DESC    = Enable the gate
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = enable
+
+NO_FORM_DOC_CMD_DESC    = Disable the gate
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE = no enable
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! enable
+CMD_VAR =
+RUNTIME =
+HELP    = Enable the gate. Use the no-form to disable the gate. When disabled, the gate is not programmed to hardware
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.gate_enabled = true;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.gate_enabled = false;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = config-change
+
+DOC_CMD_DESC    = Apply current config to hardware.
+DOC_CMD_DESC    = When changing configuration while gate is enabled, config-change needs to be issued before the configuration is applied.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = config-change
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_GATE
+MODE_VAR = gate_id
+
+! config-change
+CMD_VAR =
+RUNTIME =
+HELP    = One-shot parameter. Apply base-time based configuration to hardware. Requires gate to be enabled
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t gate_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_gate_conf_get(gate_id, &gate_conf));
+    gate_conf.config_change = true;
+    IC_RC(vtss_appl_psfp_gate_conf_set(gate_id, &gate_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = show tsn stream gate [<range_list>] status [details]
+
+DOC_CMD_DESC    = Show status of TSN stream gate
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show tsn stream gate 3 status
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = Show TSN related status
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Stream status
+
+! gate
+CMD_VAR =
+RUNTIME =
+HELP    = Stream gate state
+
+! <range_list>
+CMD_VAR = index_list
+RUNTIME = PSFP_ICLI_runtime_gate_range
+HELP    =
+
+! status
+CMD_VAR =
+RUNTIME =
+HELP    = Stream gate status
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed stream gate status
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_conf_t   gate_conf;
+    vtss_appl_psfp_gate_status_t gate_status;
+    vtss_appl_psfp_gate_id_t     gate_id;
+    vtss_appl_psfp_gate_state_t  gs;
+    bool                         first, valid[3];
+    uint32_t                     ct, ce, gl, ti, oc, gcl_length[3], gcl_length_max;
+    int32_t                      i, gce, iv;
+    mesa_timestamp_t             bt;
+    psfp_util_time_t             psfp_time;
+    char                         buf[50], ct_buf[3][50], ce_buf[3][50], bt_buf[3][50], ht_buf[3][50], gs_buf[3][50], iv_buf[3][50], gl_buf[3][50], ti_buf[3][50], oc_buf[3][50];
+VARIABLE_END
+
+CODE_BEGIN
+    gate_id = VTSS_APPL_PSFP_GATE_ID_NONE;
+    first = true;
+    while (vtss_appl_psfp_gate_itr(&gate_id, &gate_id) == VTSS_RC_OK) {
+        if (!PSFP_ICLI_member_of_list(gate_id, index_list)) {
+            continue;
+        }
+
+        IC_RC(vtss_appl_psfp_gate_conf_get(  gate_id, &gate_conf));
+        IC_RC(vtss_appl_psfp_gate_status_get(gate_id, &gate_status));
+
+        if (has_details) {
+            if (!first) {
+                ICLI_PRINTF("\n--------------------------------------------------------------------\n\n");
+            }
+
+            first = false;
+            if (!gate_conf.gate_enabled) {
+                ICLI_PRINTF("Stream Gate #%u: Not enabled\n", gate_id);
+                continue;
+            }
+
+            if (gate_status.oper_ipv != -1) {
+                sprintf(iv_buf[0], "%u", gate_status.oper_ipv);
+            } else {
+                strcpy(iv_buf[0], "Disabled");
+            }
+
+            ICLI_PRINTF("Stream Gate #%u:\n", gate_id);
+            ICLI_PRINTF("Enabled:                       Yes\n");
+            ICLI_PRINTF("Config Pending:                %s\n", gate_status.config_pending                     ? "Yes" : "No");
+            ICLI_PRINTF("Gate State:                    %s\n", psfp_util_gate_state_to_str(gate_status.oper_gate_state, true /* capitals */));
+            ICLI_PRINTF("IPV:                           %s\n", iv_buf[0]);
+            ICLI_PRINTF("Closed Due To Invalid Rx:      %s\n", gate_status.gate_closed_due_to_invalid_rx      ? "Yes" : "No");
+            ICLI_PRINTF("Closed Due To Octets Exceeded: %s\n", gate_status.gate_closed_due_to_octets_exceeded ? "Yes" : "No");
+            ICLI_PRINTF("Config Change Errors:          %u\n", gate_status.config_change_errors);
+            ICLI_PRINTF("Current Time (seconds):        %s\n", tsn_util_timestamp_to_str(buf, sizeof(buf), gate_status.current_time));
+            ICLI_PRINTF("Current Time (ISO 8601):       %s\n", tsn_util_timestamp_to_iso8601(buf, sizeof(buf), gate_status.current_time));
+
+            gcl_length_max = 0;
+            for (i = 0; i < 3; i++) {
+                valid[i] = i == 0 ? gate_status.oper_conf_valid :
+                           i == 1 ? gate_status.config_pending  :
+                           true;
+
+                if (valid[i]) {
+                    gcl_length[i] = i == 0 ? gate_status.oper_conf.gcl_length :
+                                    i == 1 ? gate_status.pend_conf.gcl_length :
+                                    gate_conf.gcl_length;
+                } else {
+                    // If the configuration is not valid, don't use it's GCL
+                    // length.
+                    gcl_length[i] = 0;
+                }
+
+                if (gcl_length[i] > gcl_length_max) {
+                    gcl_length_max = gcl_length[i];
+                }
+            }
+
+            for (i = 0; i < 3; i++) {
+                ct = i == 0 ? gate_status.oper_conf.cycle_time_ns :
+                     i == 1 ? gate_status.pend_conf.cycle_time_ns :
+                              gate_conf.cycle_time_ns;
+
+                if (valid[i]) {
+                    psfp_util_time_to_num_denom(ct, psfp_time);
+                    sprintf(ct_buf[i], "%u %s", psfp_time.numerator, psfp_util_time_unit_to_str(psfp_time.unit));
+                } else {
+                    strcpy(ct_buf[i], "-");
+                }
+
+                ce = i == 0 ? gate_status.oper_conf.cycle_time_extension_ns :
+                     i == 1 ? gate_status.pend_conf.cycle_time_extension_ns :
+                              gate_conf.cycle_time_extension_ns;
+
+                if (valid[i]) {
+                    psfp_util_time_to_num_denom(ce, psfp_time);
+                    sprintf(ce_buf[i], "%u %s", psfp_time.numerator, psfp_util_time_unit_to_str(psfp_time.unit));
+                } else {
+                    strcpy(ce_buf[i], "-");
+                }
+
+                bt = i == 0 ? gate_status.config_change_time  :
+                     i == 1 ? gate_status.pend_conf.base_time :
+                              gate_conf.base_time;
+
+                if (valid[i]) {
+                    (void)tsn_util_timestamp_to_str(    bt_buf[i], sizeof(bt_buf[i]), bt);
+                    (void)tsn_util_timestamp_to_iso8601(ht_buf[i], sizeof(ht_buf[i]), bt);
+                } else {
+                    strcpy(bt_buf[i], "-");
+                    strcpy(ht_buf[i], "-");
+                }
+
+                gl = i == 0 ? gate_status.oper_conf.gcl_length :
+                     i == 1 ? gate_status.pend_conf.gcl_length :
+                              gate_conf.gcl_length;
+
+                if (valid[i]) {
+                    sprintf(gl_buf[i], "%u", gl);
+                } else if (i == 0) {
+                    // If the operational configuration is not valid, print a
+                    // GCL length of 0
+                    strcpy(gl_buf[i], "0");
+                } else {
+                    strcpy(gl_buf[i], "-");
+                }
+            }
+
+            ICLI_PRINTF("\n");
+            ICLI_PRINTF("Configuration                      Operational               Pending                   Configured\n");
+            ICLI_PRINTF("---------------------------------- ------------------------- ------------------------- -------------------------\n");
+            ICLI_PRINTF("Config Change Time (seconds)       %25s %25s %25s\n", bt_buf[0], bt_buf[1], bt_buf[2]);
+            ICLI_PRINTF("Config Change Time (ISO 8601)      %25s %25s %25s\n", ht_buf[0], ht_buf[1], ht_buf[2]);
+            ICLI_PRINTF("Cycle Time                         %25s %25s %25s\n", ct_buf[0], ct_buf[1], ct_buf[2]);
+            ICLI_PRINTF("Cycle Time Extension               %25s %25s %25s\n", ce_buf[0], ce_buf[1], ce_buf[2]);
+            ICLI_PRINTF("Control List Length                %25s %25s %25s\n", gl_buf[0], gl_buf[1], gl_buf[2]);
+
+            // Print GCEs
+            // GCE Gate State
+            for (gce = 0; gce < gcl_length_max; gce++) {
+                for (i = 0; i < 3; i++) {
+                    gs = i == 0 ? gate_status.oper_conf.gcl[gce].gate_state :
+                         i == 1 ? gate_status.pend_conf.gcl[gce].gate_state :
+                         gate_conf.gcl[gce].gate_state;
+
+                    if (valid[i] && gce < gcl_length[i]) {
+                        sprintf(gs_buf[i], "%s", psfp_util_gate_state_to_str(gs, true /* capitals */));
+                    } else {
+                        strcpy(gs_buf[i], "-");
+                    }
+                }
+
+                ICLI_PRINTF("Control List Index %u Gate State    %25s %25s %25s\n", gce, gs_buf[0], gs_buf[1], gs_buf[2]);
+            }
+
+            // GCE IPV
+            for (gce = 0; gce < gcl_length_max; gce++) {
+                for (i = 0; i < 3; i++) {
+                    iv = i == 0 ? gate_status.oper_conf.gcl[gce].ipv :
+                         i == 1 ? gate_status.pend_conf.gcl[gce].ipv :
+                                  gate_conf.gcl[gce].ipv;
+
+                    if (valid[i] && gce < gcl_length[i]) {
+                        if (iv != -1) {
+                            sprintf(iv_buf[i], "%u", iv);
+                        } else {
+                            strcpy(iv_buf[i], "Disabled");
+                        }
+                    } else {
+                       strcpy(iv_buf[i], "-");
+                    }
+                }
+
+                ICLI_PRINTF("Control List Index %u IPV           %25s %25s %25s\n", gce, iv_buf[0], iv_buf[1], iv_buf[2]);
+            }
+
+            // GCE Time Interval
+            for (gce = 0; gce < gcl_length_max; gce++) {
+                for (i = 0; i < 3; i++) {
+                    ti = i == 0 ? gate_status.oper_conf.gcl[gce].time_interval_ns :
+                         i == 1 ? gate_status.pend_conf.gcl[gce].time_interval_ns :
+                                  gate_conf.gcl[gce].time_interval_ns;
+
+                    if (valid[i] && gce < gcl_length[i]) {
+                        psfp_util_time_to_num_denom(ti, psfp_time);
+                        sprintf(ti_buf[i], "%u %s", psfp_time.numerator, psfp_util_time_unit_to_str(psfp_time.unit));
+                    } else {
+                        strcpy(ti_buf[i], "-");
+                    }
+                }
+
+                ICLI_PRINTF("Control List Index %u Time Interval %25s %25s %25s\n", gce, ti_buf[0], ti_buf[1], ti_buf[2]);
+            }
+
+            // GCE Octet Max
+            for (gce = 0; gce < gcl_length_max; gce++) {
+                for (i = 0; i < 3; i++) {
+                    oc = i == 0 ? gate_status.oper_conf.gcl[gce].interval_octet_max :
+                         i == 1 ? gate_status.pend_conf.gcl[gce].interval_octet_max :
+                                  gate_conf.gcl[gce].interval_octet_max;
+
+                    if (valid[i] && gce < gcl_length[i]) {
+                        if (oc != 0) {
+                            sprintf(oc_buf[i], "%u", oc);
+                        } else {
+                            strcpy(oc_buf[i], "Disabled");
+                        }
+                    } else {
+                       strcpy(oc_buf[i], "-");
+                    }
+                }
+
+                ICLI_PRINTF("Control List Index %u Octet Max     %25s %25s %25s\n", gce, oc_buf[0], oc_buf[1], oc_buf[2]);
+            }
+        } else {
+            // Overview
+
+            if (first) {
+                ICLI_PRINTF("Gate # Enabled Pending State  IPV      Closed Inv. Rx Closed Octets Exc.\n");
+                ICLI_PRINTF("------ ------- ------- ------ -------- -------------- ------------------\n");
+                first = false;
+            }
+
+            ICLI_PRINTF("%6u %-7s", gate_id, gate_conf.gate_enabled ? "Yes" : "No");
+
+            if (!gate_conf.gate_enabled) {
+                ICLI_PRINTF("\n");
+                continue;
+            }
+
+            if (gate_status.oper_ipv != -1) {
+                sprintf(iv_buf[0], "%u", gate_status.oper_ipv);
+            } else {
+                strcpy(iv_buf[0], "Disabled");
+            }
+
+            ICLI_PRINTF(" %-7s %-6s %8s %-14s %-18s\n",
+                        gate_status.config_pending                     ? "Yes" : "No",
+                        psfp_util_gate_state_to_str(gate_status.oper_gate_state, true /* capitals */),
+                        iv_buf[0],
+                        gate_status.gate_closed_due_to_invalid_rx      ? "Yes" : "No",
+                        gate_status.gate_closed_due_to_octets_exceeded ? "Yes" : "No");
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = clear tsn stream gate [<range_list>] [gate-closed-due-to-octets-exceeded | gate-closed-due-to-invalid-rx]
+
+DOC_CMD_DESC    = Clear the stream-closed flags on stream gate
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = clear tsn stream gate 1 gate-closed-due-to-octets-exceeded
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = clear TSN related flags
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Clear stream gate closed flags
+
+! gate
+CMD_VAR =
+RUNTIME =
+HELP    = Clear stream gate closed flags
+
+! <range_list>
+CMD_VAR = index_list
+RUNTIME = PSFP_ICLI_runtime_gate_range
+HELP    =
+
+! gate-closed-due-to-octets-exceeded
+CMD_VAR = has_gate_closed_due_to_octets_exceeded
+RUNTIME =
+HELP    = Clear gate-closed-due-to-octets-exceeded flag
+
+! gate-closed-due-to-invalid-rx
+CMD_VAR = has_gate_closed_due_to_invalid_rx
+RUNTIME =
+HELP    = Clear gate-closed-due-to-invalid-rx flag
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_gate_control_t ctrl = {};
+    vtss_appl_psfp_gate_id_t      gate_id;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_gate_closed_due_to_octets_exceeded && !has_gate_closed_due_to_invalid_rx) {
+        has_gate_closed_due_to_octets_exceeded = true;
+        has_gate_closed_due_to_invalid_rx      = true;
+    }
+
+    ctrl.clear_gate_closed_due_to_invalid_rx      = has_gate_closed_due_to_invalid_rx;
+    ctrl.clear_gate_closed_due_to_octets_exceeded = has_gate_closed_due_to_octets_exceeded;
+
+    gate_id = VTSS_APPL_PSFP_GATE_ID_NONE;
+    while (vtss_appl_psfp_gate_itr(&gate_id, &gate_id) == VTSS_RC_OK) {
+        if (PSFP_ICLI_member_of_list(gate_id, index_list)) {
+            IC_RC(vtss_appl_psfp_gate_control_set(gate_id, &ctrl));
+        }
+    }
+CODE_END
+CMD_END
+
+!-------------------------------------------------------------------------------
+! Stream filter functions
+!-------------------------------------------------------------------------------
+
+CMD_BEGIN
+COMMAND = no tsn stream filter <uint>
+
+DOC_CMD_DESC    = Delete stream filter
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Used to delete a stream filter
+DOC_CMD_EXAMPLE = no tsn stream filter 1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = Delete TSN related object
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Delete a stream filter
+
+! filter
+CMD_VAR =
+RUNTIME =
+HELP    = Delete a stream filter
+
+! <uint>
+CMD_VAR = filter_id
+RUNTIME = PSFP_ICLI_runtime_filter_range
+HELP    = The stream filter instance to be deleted
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_del(filter_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = stream-id <uint>
+
+DOC_CMD_DESC    = Set filter to point to a stream
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = stream-id 3
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Configure stream ID
+
+! <uint>
+CMD_VAR = stream_id
+RUNTIME = PSFP_ICLI_runtime_stream_range
+HELP    = ID of the stream to attach this filter to
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.stream_id = stream_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no stream-id
+
+DOC_CMD_DESC    = Remove configuration of stream for the filter
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no stream
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = No
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Remove configuration of stream ID
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf, filter_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_default_get(&filter_default_conf));
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.stream_id = filter_default_conf.stream_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = stream-collection-id <uint>
+
+DOC_CMD_DESC    = Set filter to point to a stream collection
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = stream-collection-id 3
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Configure stream collection ID
+
+! <uint>
+CMD_VAR = stream_collection_id
+RUNTIME = PSFP_ICLI_runtime_stream_collection_range
+HELP    = ID of the stream collection to attach this filter to
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.stream_collection_id = stream_collection_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no stream-collection-id
+
+DOC_CMD_DESC    = Remove configuration of stream-collection for the filter
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no stream-collection-id
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = No
+
+! stream-collection-id
+CMD_VAR =
+RUNTIME =
+HELP    = Remove configuration of stream collection ID
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf, filter_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_default_get(&filter_default_conf));
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.stream_collection_id = filter_default_conf.stream_collection_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = flow-meter id <uint>
+
+DOC_CMD_DESC    = Set PSFP Flow Meter Instance ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = flow-meter id 7
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! flow-meter
+CMD_VAR =
+RUNTIME =
+HELP    = Set PSFP Flow Meter Instance ID
+
+! id
+CMD_VAR =
+RUNTIME =
+HELP    = Set PSFP Flow Meter Instance ID
+
+! <uint>
+CMD_VAR = flow_meter_id
+RUNTIME = PSFP_ICLI_runtime_flow_meter_range
+HELP    = ID of a flow meter to use with this filter
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.flow_meter_id = flow_meter_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no flow-meter
+
+DOC_CMD_DESC    = Set PSFP Flow Meter Instance ID to default
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = flow-meter id 7
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = Set to default
+
+! flow-meter
+CMD_VAR =
+RUNTIME =
+HELP    = Set PSFP Flow Meter Instance ID to default
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf, filter_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_default_get(&filter_default_conf));
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.flow_meter_id = filter_default_conf.flow_meter_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = gate id <uint>
+
+DOC_CMD_DESC    = Set PSFP Stream Gate Instance ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = gate id 5
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! gate
+CMD_VAR =
+RUNTIME =
+HELP    = Gate
+
+! id
+CMD_VAR =
+RUNTIME =
+HELP    = PSFP stream gate ID
+
+! <uint>
+CMD_VAR = gate_id
+RUNTIME = PSFP_ICLI_runtime_gate_range
+HELP    = ID of a stream gate to use with this filter
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.gate_id = gate_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no gate
+
+DOC_CMD_DESC    = Set PSFP Stream Gate Instance ID to default
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no gate
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = Set to default
+
+! gate
+CMD_VAR =
+RUNTIME =
+HELP    = Set PSFP Stream Gate Instance ID to default
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf, filter_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_default_get(&filter_default_conf));
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.gate_id = filter_default_conf.gate_id;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = max-sdu <uint>
+
+HELP_PSFP_MAX_SDU = Set maximum allowed frame size for the filter. Any frame exceeding this value will be discarded. A value of 0 disables the feature
+DOC_CMD_DESC    = Set PSFP Maximum SDU Size
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = max-sdu 2048
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! max-sdu
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_PSFP_MAX_SDU
+
+! <uint>
+CMD_VAR = sz
+RUNTIME =
+HELP    = ##HELP_PSFP_MAX_SDU
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.max_sdu_size = sz;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no max-sdu
+
+DOC_CMD_DESC    = Set PSFP Maximum SDU Size to default
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no max-sdu
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_LOOSELY
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = Set to default
+
+! max-sdu
+CMD_VAR =
+RUNTIME =
+HELP    = Set PSFP Maximum SDU Size to default (default is 0)
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf, filter_default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_default_get(&filter_default_conf));
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.max_sdu_size = filter_default_conf.max_sdu_size;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = block-due-to-oversize-enable
+
+DOC_CMD_DESC    = Set PSFP Stream Block Due To Oversize Frame Enable
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = block-due-to-oversize-enable
+
+NO_FORM_DOC_CMD_DESC    = Clear PSFP Stream Block Due To Oversize Frame Enable
+NO_FORM_DOC_CMD_DEFAULT =
+NO_FORM_DOC_CMD_USAGE   =
+NO_FORM_DOC_CMD_EXAMPLE = no block-due-to-oversize-enable
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR = filter_id
+
+! block-due-to-oversize-enable
+CMD_VAR =
+RUNTIME =
+HELP    = If enabled and a frame exceeds the max-sdu size, all subsequent frames will be discarded as well
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.block_due_to_oversize_frame_enable = true;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_psfp_filter_conf_t filter_conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    IC_RC(vtss_appl_psfp_filter_conf_get(filter_id, &filter_conf));
+    filter_conf.block_due_to_oversize_frame_enable = false;
+    IC_RC(vtss_appl_psfp_filter_conf_set(filter_id, &filter_conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = priority {<0-7> | any}
+
+DOC_CMD_DESC    = Set PSFP Priority to match. This is an obsolete command and will only be supported during loading of startup-config.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = priority 3
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR =
+
+! priority
+! This command had no real effect in older systems, except for a check against
+! the configured stream's outer tag's PCP, which had to be the same as this
+! priority and with a PCP mask of 0x7.
+! This was kind of stupid, because the stream's priority could afterwards be
+! changed to another value than that configured for the stream filter without
+! any errors being shown.
+! Therefore, we allow it during loading of startup-config, but not during normal
+! CLI-based configuration.
+CMD_VAR =
+RUNTIME = PSFP_ICLI_runtime_loading_startup_config
+HELP    = Priority
+
+! <0-7>
+CMD_VAR = prio
+RUNTIME =
+HELP    = Priority of traffic to match
+
+! any
+CMD_VAR = has_any
+RUNTIME =
+HELP    = Match any priority
+
+CODE_BEGIN
+    // Prevent compiler from throwing warnings about unused variables:
+    prio    = prio;
+    has_any = has_any;
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = no priority
+
+DOC_CMD_DESC    = Set PSFP Priority to default
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = no priority
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_PSFP_FILTER
+MODE_VAR =
+
+! no
+! See comment in the command above.
+CMD_VAR =
+RUNTIME = PSFP_ICLI_runtime_loading_startup_config
+HELP    = Set to default
+
+! priority
+CMD_VAR =
+RUNTIME =
+HELP    = Priority
+
+CODE_BEGIN
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = show tsn stream filter [<range_list>] {status [details] | statistics}
+
+DOC_CMD_DESC    = Show statistics for PSFP filter
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = show tsn stream filter 3 statistics
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = show TSN related status
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Stream status
+
+! filter
+CMD_VAR =
+RUNTIME =
+HELP    = Stream filter statistics
+
+! <range_list>
+CMD_VAR = index_list
+RUNTIME = PSFP_ICLI_runtime_filter_range
+HELP    =
+
+! status
+CMD_VAR = has_status
+RUNTIME =
+HELP    = Stream filter status
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed stream filter status
+
+! statistics
+CMD_VAR = has_statistics
+RUNTIME =
+HELP    = Stream filter statistics
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_id_t            filter_id;
+    vtss_appl_psfp_filter_status_t        status;
+    vtss_appl_psfp_filter_statistics_t    statistics;
+    vtss_appl_psfp_filter_oper_warnings_t one_warning, mask;
+    char                                  small_buf[30], buf[500];
+    int                                   i;
+    bool                                  first;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_status) {
+        filter_id = VTSS_APPL_PSFP_FILTER_ID_NONE;
+
+        first = true;
+        while (vtss_appl_psfp_filter_itr(&filter_id, &filter_id) == VTSS_RC_OK) {
+            if (!PSFP_ICLI_member_of_list(filter_id, index_list)) {
+                continue;
+            }
+
+            IC_RC(vtss_appl_psfp_filter_status_get(filter_id, &status));
+
+            if (has_details) {
+                if (!first) {
+                    ICLI_PRINTF("\n--------------------------------------------------------------------\n\n");
+                }
+
+                first = false;
+
+                ICLI_PRINTF("Stream Filter ID:              %u\n", filter_id);
+                ICLI_PRINTF("Blocked due to Oversize Frame: %s\n", status.stream_blocked_due_to_oversize_frame ? "Yes" : "No");
+
+                strcpy(small_buf, "Configurational warnings:");
+                if (status.oper_warnings) {
+                    for (i = 0; i < 8 * sizeof(status.oper_warnings); i++) {
+                        mask = (vtss_appl_psfp_filter_oper_warnings_t)VTSS_BIT(i);
+                        one_warning = status.oper_warnings & mask;
+
+                        if (one_warning) {
+                            ICLI_PRINTF("%-30s %s\n", small_buf, psfp_util_filter_oper_warnings_to_str(buf, sizeof(buf), one_warning));
+                            small_buf[0] = '\0';
+                        }
+                    }
+                } else {
+                    ICLI_PRINTF("%-30s None\n", small_buf);
+                }
+            } else {
+                if (first) {
+                    ICLI_PRINTF("Filter ID Blocked due to Configurational\n");
+                    ICLI_PRINTF("          Oversize Frame Warnings\n");
+                    ICLI_PRINTF("--------- -------------- ---------------\n");
+                    first = false;
+                }
+
+                ICLI_PRINTF("%9u %-14s %s\n", filter_id, status.stream_blocked_due_to_oversize_frame ? "Yes" : "No", status.oper_warnings ? "YES!": "No");
+            }
+        }
+    } else if (has_statistics) {
+        ICLI_PRINTF("Filter ID Matching        Passing         Not Passing     Passing SDU     Not Passing SDU Red\n");
+        ICLI_PRINTF("--------- --------------- --------------- --------------- --------------- --------------- ---------------\n");
+
+        filter_id = VTSS_APPL_PSFP_FILTER_ID_NONE;
+        while (vtss_appl_psfp_filter_itr(&filter_id, &filter_id) == VTSS_RC_OK) {
+            if (!PSFP_ICLI_member_of_list(filter_id, index_list)) {
+                continue;
+            }
+
+           IC_RC(vtss_appl_psfp_filter_statistics_get(filter_id, &statistics));
+           ICLI_PRINTF("%9u "
+                       VPRI64Fu("15") " " VPRI64Fu("15") " " VPRI64Fu("15") " "
+                       VPRI64Fu("15") " " VPRI64Fu("15") " " VPRI64Fu("15") "\n",
+                       filter_id,
+                       statistics.matching,
+                       statistics.passing,
+                       statistics.not_passing,
+                       statistics.passing_sdu,
+                       statistics.not_passing_sdu,
+                       statistics.red);
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+
+CMD_BEGIN
+COMMAND = clear tsn stream filter [<range_list>] [stream-blocked-due-to-oversize-frame | statistics]
+
+DOC_CMD_DESC    = Clear the gate-closed-due-to-octets-exceeded flag
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = clear tsn stream filter 1 stream-blocked-due-to-oversize-frame
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = clear TSN related flags
+
+! stream
+CMD_VAR =
+RUNTIME =
+HELP    = Clear stream
+
+! filter
+CMD_VAR =
+RUNTIME =
+HELP    = Clear stream filter
+
+! <range_list>
+CMD_VAR = index_list
+RUNTIME = PSFP_ICLI_runtime_filter_range
+HELP    =
+
+! stream-blocked-due-to-oversize-frame
+CMD_VAR = has_stream_blocked_due_to_oversize_frame
+RUNTIME =
+HELP    = Clear stream-blocked-due-to-oversize-frame flag
+
+! statistics
+CMD_VAR = has_statistics
+RUNTIME =
+HELP    = Clear statistics for stream filter
+
+VARIABLE_BEGIN
+    vtss_appl_psfp_filter_id_t      filter_id;
+    vtss_appl_psfp_filter_control_t filter_ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    if (!has_stream_blocked_due_to_oversize_frame && !has_statistics) {
+        has_statistics = true;
+        has_stream_blocked_due_to_oversize_frame = true;
+    }
+
+    filter_id = VTSS_APPL_PSFP_FILTER_ID_NONE;
+    while (vtss_appl_psfp_filter_itr(&filter_id, &filter_id) == VTSS_RC_OK) {
+        if (!PSFP_ICLI_member_of_list(filter_id, index_list)) {
+            continue;
+        }
+
+        if (has_stream_blocked_due_to_oversize_frame) {
+            vtss_clear(filter_ctrl);
+            filter_ctrl.clear_blocked_due_to_oversize_frame = true;
+            IC_RC(vtss_appl_psfp_filter_control_set(filter_id, &filter_ctrl));
+        }
+
+        if (has_statistics) {
+            IC_RC(vtss_appl_psfp_filter_statistics_clear(filter_id));
+        }
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_PSFP_DEBUG_TIMERS = Show current PSFP timers
+COMMAND         = debug show tsn psfp timers
+DOC_CMD_DESC    = ##HELP_PSFP_DEBUG_TIMERS
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_PSFP_DEBUG_TIMERS
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = TSN
+HELP            = PSFP
+HELP            = ##HELP_PSFP_DEBUG_TIMERS
+
+CODE_BEGIN
+    void psfp_timer_debug_dump(u32 session_id, i32 (*pr)(u32 session_id, const char *fmt, ...));
+    psfp_timer_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+

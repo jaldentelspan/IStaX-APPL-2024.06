@@ -1,0 +1,293 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>ACL Ports Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/mootools-core.js"></script>
+ <script type="text/javascript" src="lib/HeaderControl.js"></script>
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/spom.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page macic
+var help_page = "/help/help_acl_ports.htm";
+
+var reqObject;
+var oVNormal = genArrayInt(0, configNormalPortMax);
+var oTAction = Array("Deny", "Permit");
+var oTRateLimiter = Array("Disabled").concat(genArrayStr(1, configAclRateLimitIdMax));
+var oVRate = genArrayInt(0, oTRateLimiter.length);
+var oTPortCopy, oVPortCopy;
+var oTEnable = Array("Disabled", "Enabled");
+var oTFlagsAct = Array("0","1","Any");
+var hasAclV2 = 1;
+var hasAclLogging = 1;
+var hasAclShutdown = 1;
+
+function addRow(index, frag, values)
+{
+    var tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var values_idx = 0;
+
+    if (typeof(configHasAclV2) == "function") {
+        hasAclV2 = configHasAclV2();
+    }
+    if (typeof(configHasAclLogging) == "function") {
+        hasAclLogging = configHasAclLogging();
+    }
+    if (typeof(configHasAclShutdown) == "function") {
+        hasAclShutdown = configHasAclShutdown();
+    }
+
+    var portno = parseInt(values[values_idx++], 10);
+    addTextCell(tr, configPortName(portno, 0), "cr");
+    addInputCell(tr, values[values_idx++], "cr", "policy_id" + portno, 6, 3);
+    addSelectCell(tr, oTAction, oVNormal, parseInt(values[values_idx++], 10), "cr", "action" + portno);
+    addSelectCell(tr, oTRateLimiter, oVRate, parseInt(values[values_idx++], 10), "cr", "rate_limiter_id" + portno);
+    if (hasAclV2) {
+        var chosen = values[values_idx++].split(":");
+        addMultiSelectCell(tr, oTPortCopy, oVPortCopy, chosen, "cr", "port_copy_no" + portno, 3);
+        addSelectCell(tr, oTEnable, oVNormal, parseInt(values[values_idx++], 10), "cr", "mirror" + portno);
+    } else {
+        addSelectCell(tr, oTPortCopy, oVPortCopy, parseInt(values[values_idx++], 10), "cr", "port_copy_no" + portno);
+        values_idx++;
+    }
+    if (hasAclLogging) {
+        addSelectCell(tr, oTEnable, oVNormal, parseInt(values[values_idx++], 10), "cr", "logging" + portno);
+    } else {
+        values_idx++;
+    }
+    if (hasAclShutdown) {
+        addSelectCell(tr, oTEnable, oVNormal, parseInt(values[values_idx++], 10), "cr", "shutdown" + portno);
+    } else {
+        values_idx++;
+    }
+    addSelectCell(tr, oTEnable, oVNormal, parseInt(values[values_idx++], 10), "cr", "state" + portno);
+    addTextCell(tr, parseInt(values[values_idx], 10), "cr");
+    frag.appendChild(tr);   // Add row to fragment
+}
+
+function processUpdate(req, ref)
+{
+    if (redirectOnError(req)) {
+        return;
+    }
+    if (reqObject != req) {
+        reqObject = req;
+    }
+    if (req.responseText) {
+        var i, portsConfig = req.responseText.split("|");
+
+	// Build port dropdown list
+        oTPortCopy = Array("Disabled");
+        oVPortCopy = Array("0");
+        var count = SpomCurrentPorts();
+        for (i = 1; i <= count; i++) {
+            if (!isStackPort(i)) {
+                oTPortCopy.push(configPortName(i, 1));
+                oVPortCopy.push(i);
+            }
+        }
+
+        //create holder for accumulated tbody elements and text nodes
+        var frag = document.createDocumentFragment();
+        for (i = 0; i < portsConfig.length; i++) {
+            if (portsConfig[i]) {
+                var pval = portsConfig[i].split("/");
+                addRow(i, frag, pval);
+            }
+        }
+        var tbody = document.getElementById(ref);
+        clearChildNodes(tbody);
+        if (!tbody.appendChild(frag)) { // Add Frag to table body
+            alert("This browser doesn't support dynamic tables.");
+        }
+        var cBar = new HeaderControlBar([{text: "*", className: "cr"},
+                                        {name: "policy_id"}, 
+                                        {name: "action"}, 
+                                        {name: "rate_limiter_id"}, 
+                                        {name: "port_copy_no"},
+                                        {name: "mirror", className: "acl_v2_only"},
+                                        {name: "logging", className: "acl_log_only"}, 
+                                        {name: "shutdown", className: "acl_shutdown_only"},
+                                        {name: "state"},
+                                        {text: "*", className: "cr"}
+                                        ]);
+        cBar.construct('portsCtrl', 'config_odd');
+    } else {
+        SpomHandleError();
+    }
+    document.getElementById("update").style.visibility = "hidden";
+}
+
+function requestUpdate()
+{
+    // Format: [port_no]/[action]/[rate_limiter]/[port_copy_1]:[port_copy_2]:.../[mirror]/[logging]/[shutdown]/[state]/[counter]|...
+    //var req="1/1/1/0/0/1/0/0/0/0/0|2/1/1/0/0/1/0/0/0/0/0";
+    //processUpdate(req, 'portsData');
+    if (SpomNavigationLoading()) {
+        return;                 // Bail out, navigation will trigger update
+    }
+    document.getElementById("update").style.visibility = "visible";
+    loadXMLDoc(SpomAddSidArg("/config/acl_ports"), processUpdate, 'portsData');
+    SpomUpdateDisplaySid("display_sid");
+    SpomUpdateFormSid("submit_sid");
+}
+
+function requestClear()
+{
+    document.getElementById("update").style.visibility = "visible";
+    loadXMLDoc(SpomAddSidArg("/config/acl_ports?aceConfigFlag=1"), processUpdate, 'portsData');
+}
+
+function SpomSidSelectorUpdate(sid)
+{
+    SpomSetCurrentSid(sid);     // Save current SID
+    requestUpdate();            // Update page to reflect selector
+}
+
+function checkForm()
+{
+    var fld, fld1;
+    for (var i = configPortMin; i <= configNormalPortMax; i++) {
+        // Stack ports are skipped
+        if (!document.getElementById("policy_id" + i)) {
+            continue;
+        }
+
+        //policy_id
+        if(!isWithinRange("policy_id" + i, 0, configPolicyMax, "'Policy ID'")) {
+            return false;
+        }
+
+        if (hasAclV2) {
+            fld = document.getElementById("port_copy_no" + i);
+            if (!fld) {
+                continue;
+            }
+            if (fld.options[0].selected) {
+                for (var j = 1; j < fld.options.length; j++) {
+                    if (fld.options[j].selected) {
+                        alert("The 'Port Redirect' on port " + i + " is invalid. (Either disabled or ports)");
+                        fld.focus();
+                        return false;
+                    }
+                }
+            }
+
+            //port_copy
+            fld = document.getElementById("port_copy_no" + i);
+            if (!fld.options[0].selected) {
+                fld1 = document.getElementById("action" + i);
+                if (fld1 && fld1.value == 1) {
+                    GiveAlert("The parameter of 'Port Redirect' can't be set when action is permitted", fld);
+                    return false;
+                }
+            }
+        } else if (configArchJaguar_1) {
+            //port_copy
+            fld = document.getElementById("port_copy_no" + i);
+            if (!fld.options[0].selected) {
+                fld1 = document.getElementById("action" + i);
+                if (fld1 && fld1.value == 1) {
+                    GiveAlert("The parameter of 'Port Redirect' can't be set when action is permitted", fld);
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+function resetForm()
+{
+    processUpdate(reqObject, 'portsData');
+}
+ </script>
+</head>
+
+<body class="content" onload="processResponseErrMsg(); requestUpdate();">
+
+<h1>ACL Ports Configuration <span id="display_sid"></span></h1>
+
+<div class="refreshbar">
+ <form action="#">
+  <input type="button" value="Refresh" onclick="requestUpdate(); this.blur();">
+  <input type="button" value="Clear"   onclick="requestClear();  this.blur();">
+  <img id="update" alt="" src="images/updating.gif">
+ </form>
+</div>
+
+<form method="POST" action="/config/acl_ports" onsubmit="return checkForm();">
+
+<table summary="ACL Port Configuration" class="config">
+ <thead>
+  <tr class="config_header">
+   <th>Port</th>
+   <th>Policy ID</th>
+   <th>Action</th>
+   <th>Rate Limiter ID</th>
+   <th>Port Redirect</th>
+   <th class="acl_v2_only">Mirror</th>
+   <th class="acl_log_only">Logging</th>
+   <th class="acl_shutdown_only">Shutdown</th>
+   <th>State</th>
+   <th>Counter</th>
+  </tr>
+ </thead>
+ <tbody id="portsCtrl">
+ </tbody>
+ <tbody id="portsData">
+ </tbody>
+</table>
+
+<p>
+<input type="hidden" id="submit_sid" name="sid">
+<input type="submit" value="Save">
+<input type="button" value="Reset" onclick="resetForm();">
+</p>
+
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->
+

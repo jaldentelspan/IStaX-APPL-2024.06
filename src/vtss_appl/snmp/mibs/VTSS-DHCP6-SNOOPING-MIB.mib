@@ -1,0 +1,634 @@
+-- *****************************************************************
+-- DHCP6-SNOOPING-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-DHCP6-SNOOPING-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    InetAddressIPv6 FROM INET-ADDRESS-MIB
+    Unsigned32 FROM SNMPv2-SMI
+    MacAddress FROM SNMPv2-TC
+    VTSSDisplayString FROM VTSS-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    VTSSUnsigned8 FROM VTSS-TC
+    ;
+
+vtssDhcp6SnoopingMib MODULE-IDENTITY
+    LAST-UPDATED "201805250000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "This is a private version of the DHCPv6 Snooping MIB"
+    REVISION    "201805250000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 146 }
+
+
+VTSSDhcp6SnoopingModeEnum ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the mode of snooping."
+    SYNTAX      INTEGER { disabled(0), enabled(1) }
+
+VTSSDhcp6SnoopingPortTrustModeEnum ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the trust mode of a port."
+    SYNTAX      INTEGER { untrusted(0), trusted(1) }
+
+VTSSDhcp6SnoopingUnknownModeEnum ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "This enumeration defines the mode of operation when meeting a unknown
+         IPv6 next header."
+    SYNTAX      INTEGER { drop(0), allow(1) }
+
+vtssDhcp6SnoopingMibObjects OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMib 1 }
+
+vtssDhcp6SnoopingConfig OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMibObjects 2 }
+
+vtssDhcp6SnoopingConfigGlobals OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingConfig 1 }
+
+vtssDhcp6SnoopingConfigGlobalsSnoopingMode OBJECT-TYPE
+    SYNTAX      VTSSDhcp6SnoopingModeEnum
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates the DHCP snooping mode operation. Possible modes are -
+         enable: Enable DHCP snooping mode operation. When DHCP snooping mode
+         operation is enabled, the DHCP request messages will be forwarded to
+         trusted ports and only allow reply packets from trusted ports. disable:
+         Disable DHCP snooping mode operation."
+    ::= { vtssDhcp6SnoopingConfigGlobals 1 }
+
+vtssDhcp6SnoopingConfigGlobalsUnknownNextHeaderMode OBJECT-TYPE
+    SYNTAX      VTSSDhcp6SnoopingUnknownModeEnum
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates the DHCP snooping mode operation. Possible modes are - allow:
+         Allow packets with unknown IPv6 ext. headers. drop: Drop packets with
+         unknown IPv6 ext. header."
+    ::= { vtssDhcp6SnoopingConfigGlobals 2 }
+
+vtssDhcp6SnoopingConfigInterfaceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSDhcp6SnoopingConfigInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of DHCPv6 Snooping port configuration parameters"
+    ::= { vtssDhcp6SnoopingConfig 2 }
+
+vtssDhcp6SnoopingConfigInterfaceEntry OBJECT-TYPE
+    SYNTAX      VTSSDhcp6SnoopingConfigInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each port has a set of parameters"
+    INDEX       { vtssDhcp6SnoopingConfigInterfaceIfIndex }
+    ::= { vtssDhcp6SnoopingConfigInterfaceTable 1 }
+
+VTSSDhcp6SnoopingConfigInterfaceEntry ::= SEQUENCE {
+    vtssDhcp6SnoopingConfigInterfaceIfIndex    VTSSInterfaceIndex,
+    vtssDhcp6SnoopingConfigInterfaceTrustMode  VTSSDhcp6SnoopingPortTrustModeEnum
+}
+
+vtssDhcp6SnoopingConfigInterfaceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number of the physical port."
+    ::= { vtssDhcp6SnoopingConfigInterfaceEntry 1 }
+
+vtssDhcp6SnoopingConfigInterfaceTrustMode OBJECT-TYPE
+    SYNTAX      VTSSDhcp6SnoopingPortTrustModeEnum
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates the DHCP snooping port mode. Possible port modes are -
+         trusted: Configures the port as trusted source of the DHCP messages.
+         untrusted: Configures the port as untrusted source of the DHCP
+         messages."
+    ::= { vtssDhcp6SnoopingConfigInterfaceEntry 2 }
+
+vtssDhcp6SnoopingStatus OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMibObjects 3 }
+
+vtssDhcp6SnoopingStatusGlobals OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingStatus 1 }
+
+vtssDhcp6SnoopingStatusGlobalsLastChangeTs OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Timestamp for last change to snooping tables content."
+    ::= { vtssDhcp6SnoopingStatusGlobals 1 }
+
+vtssDhcp6SnoopingStatusClientTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSDhcp6SnoopingStatusClientEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of known DHCPv6 clients"
+    ::= { vtssDhcp6SnoopingStatus 2 }
+
+vtssDhcp6SnoopingStatusClientEntry OBJECT-TYPE
+    SYNTAX      VTSSDhcp6SnoopingStatusClientEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry has a set of parameters"
+    INDEX       { vtssDhcp6SnoopingStatusClientClientDuidHash }
+    ::= { vtssDhcp6SnoopingStatusClientTable 1 }
+
+VTSSDhcp6SnoopingStatusClientEntry ::= SEQUENCE {
+    vtssDhcp6SnoopingStatusClientClientDuidHash  Unsigned32,
+    vtssDhcp6SnoopingStatusClientClientDuid      VTSSDisplayString,
+    vtssDhcp6SnoopingStatusClientMacAddress      MacAddress,
+    vtssDhcp6SnoopingStatusClientIfIndex         VTSSInterfaceIndex
+}
+
+vtssDhcp6SnoopingStatusClientClientDuidHash OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Client DUID hash value."
+    ::= { vtssDhcp6SnoopingStatusClientEntry 1 }
+
+vtssDhcp6SnoopingStatusClientClientDuid OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..255))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Client DUID."
+    ::= { vtssDhcp6SnoopingStatusClientEntry 2 }
+
+vtssDhcp6SnoopingStatusClientMacAddress OBJECT-TYPE
+    SYNTAX      MacAddress
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Client MAC address."
+    ::= { vtssDhcp6SnoopingStatusClientEntry 3 }
+
+vtssDhcp6SnoopingStatusClientIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number of the physical port."
+    ::= { vtssDhcp6SnoopingStatusClientEntry 4 }
+
+vtssDhcp6SnoopingStatusAddressTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSDhcp6SnoopingStatusAddressEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of addresses for known DHCPv6 clients"
+    ::= { vtssDhcp6SnoopingStatus 3 }
+
+vtssDhcp6SnoopingStatusAddressEntry OBJECT-TYPE
+    SYNTAX      VTSSDhcp6SnoopingStatusAddressEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry has a set of parameters"
+    INDEX       { vtssDhcp6SnoopingStatusAddressClientDuidHash,
+                  vtssDhcp6SnoopingStatusAddressInterfaceIaid }
+    ::= { vtssDhcp6SnoopingStatusAddressTable 1 }
+
+VTSSDhcp6SnoopingStatusAddressEntry ::= SEQUENCE {
+    vtssDhcp6SnoopingStatusAddressClientDuidHash  Unsigned32,
+    vtssDhcp6SnoopingStatusAddressInterfaceIaid   Unsigned32,
+    vtssDhcp6SnoopingStatusAddressIpAddress       InetAddressIPv6,
+    vtssDhcp6SnoopingStatusAddressIaid            Unsigned32,
+    vtssDhcp6SnoopingStatusAddressVlanId          VTSSUnsigned16,
+    vtssDhcp6SnoopingStatusAddressLeaseTime       Unsigned32,
+    vtssDhcp6SnoopingStatusAddressDhcpServerIp    InetAddressIPv6
+}
+
+vtssDhcp6SnoopingStatusAddressClientDuidHash OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Client DUID hash value."
+    ::= { vtssDhcp6SnoopingStatusAddressEntry 1 }
+
+vtssDhcp6SnoopingStatusAddressInterfaceIaid OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Interface Identity Association Identifier."
+    ::= { vtssDhcp6SnoopingStatusAddressEntry 2 }
+
+vtssDhcp6SnoopingStatusAddressIpAddress OBJECT-TYPE
+    SYNTAX      InetAddressIPv6
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The assigned IPv6 address."
+    ::= { vtssDhcp6SnoopingStatusAddressEntry 3 }
+
+vtssDhcp6SnoopingStatusAddressIaid OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The interface IAID."
+    ::= { vtssDhcp6SnoopingStatusAddressEntry 4 }
+
+vtssDhcp6SnoopingStatusAddressVlanId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16 (1..4095)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The VLAN id of the VLAN."
+    ::= { vtssDhcp6SnoopingStatusAddressEntry 5 }
+
+vtssDhcp6SnoopingStatusAddressLeaseTime OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The lease time assigned to the address."
+    ::= { vtssDhcp6SnoopingStatusAddressEntry 6 }
+
+vtssDhcp6SnoopingStatusAddressDhcpServerIp OBJECT-TYPE
+    SYNTAX      InetAddressIPv6
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "IP address of the DHCP server that assigns the IP address."
+    ::= { vtssDhcp6SnoopingStatusAddressEntry 7 }
+
+vtssDhcp6SnoopingControl OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMibObjects 4 }
+
+vtssDhcp6SnoopingStatistics OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMibObjects 5 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSDhcp6SnoopingStatisticsInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of port statistics in DHCPv6 Snooping "
+    ::= { vtssDhcp6SnoopingStatistics 1 }
+
+vtssDhcp6SnoopingStatisticsInterfaceEntry OBJECT-TYPE
+    SYNTAX      VTSSDhcp6SnoopingStatisticsInterfaceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry has a set of parameters"
+    INDEX       { vtssDhcp6SnoopingStatisticsInterfaceIfIndex }
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceTable 1 }
+
+VTSSDhcp6SnoopingStatisticsInterfaceEntry ::= SEQUENCE {
+    vtssDhcp6SnoopingStatisticsInterfaceIfIndex           VTSSInterfaceIndex,
+    vtssDhcp6SnoopingStatisticsInterfaceRxSolicit         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxRequest         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxInfoRequest     Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxConfirm         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxRenew           Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxRebind          Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxDecline         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxAdvertise       Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxReply           Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxReconfigure     Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxRelease         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceRxDiscardUntrust  Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxSolicit         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxRequest         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxInfoRequest     Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxConfirm         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxRenew           Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxRebind          Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxDecline         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxAdvertise       Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxReply           Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxReconfigure     Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceTxRelease         Unsigned32,
+    vtssDhcp6SnoopingStatisticsInterfaceClearStats        VTSSUnsigned8
+}
+
+vtssDhcp6SnoopingStatisticsInterfaceIfIndex OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Logical interface number of the physical port."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 1 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxSolicit OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received SOLICIT packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 2 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxRequest OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received REQUEST packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 3 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxInfoRequest OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received INFOREQUEST packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 4 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxConfirm OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received CONFIRM packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 5 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxRenew OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received RENEW packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 6 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxRebind OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received REBIND packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 7 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxDecline OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received DECLINE packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 8 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxAdvertise OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received ADVERTISE packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 9 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxReply OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received REPLY packetsreceived."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 10 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxReconfigure OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received RECONFIGURE packetsreceived."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 11 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxRelease OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received RELEASE packetsreceived."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 12 }
+
+vtssDhcp6SnoopingStatisticsInterfaceRxDiscardUntrust OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of received packets that was discarded as port was
+         untrusted."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 13 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxSolicit OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted SOLICIT packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 102 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxRequest OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted REQUEST packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 103 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxInfoRequest OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted INFOREQUEST packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 104 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxConfirm OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted CONFIRM packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 105 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxRenew OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted RENEW packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 106 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxRebind OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted REBIND packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 107 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxDecline OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted DECLINE packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 108 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxAdvertise OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted ADVERTISE packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 109 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxReply OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted REPLY packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 110 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxReconfigure OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted RECONFIGURE packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 111 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTxRelease OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The number of transmitted RELEASE packets."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 112 }
+
+vtssDhcp6SnoopingStatisticsInterfaceClearStats OBJECT-TYPE
+    SYNTAX      VTSSUnsigned8
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Clear statistics counters for this port."
+    ::= { vtssDhcp6SnoopingStatisticsInterfaceEntry 202 }
+
+vtssDhcp6SnoopingMibConformance OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMib 2 }
+
+vtssDhcp6SnoopingMibCompliances OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMibConformance 1 }
+
+vtssDhcp6SnoopingMibGroups OBJECT IDENTIFIER
+    ::= { vtssDhcp6SnoopingMibConformance 2 }
+
+vtssDhcp6SnoopingConfigGlobalsInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssDhcp6SnoopingConfigGlobalsSnoopingMode,
+                  vtssDhcp6SnoopingConfigGlobalsUnknownNextHeaderMode }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssDhcp6SnoopingMibGroups 1 }
+
+vtssDhcp6SnoopingConfigInterfaceInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssDhcp6SnoopingConfigInterfaceIfIndex,
+                  vtssDhcp6SnoopingConfigInterfaceTrustMode }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssDhcp6SnoopingMibGroups 2 }
+
+vtssDhcp6SnoopingStatusGlobalsInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssDhcp6SnoopingStatusGlobalsLastChangeTs }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssDhcp6SnoopingMibGroups 3 }
+
+vtssDhcp6SnoopingStatusClientTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssDhcp6SnoopingStatusClientClientDuidHash,
+                  vtssDhcp6SnoopingStatusClientClientDuid,
+                  vtssDhcp6SnoopingStatusClientMacAddress,
+                  vtssDhcp6SnoopingStatusClientIfIndex }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssDhcp6SnoopingMibGroups 4 }
+
+vtssDhcp6SnoopingStatusAddressTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssDhcp6SnoopingStatusAddressClientDuidHash,
+                  vtssDhcp6SnoopingStatusAddressInterfaceIaid,
+                  vtssDhcp6SnoopingStatusAddressIpAddress,
+                  vtssDhcp6SnoopingStatusAddressIaid,
+                  vtssDhcp6SnoopingStatusAddressVlanId,
+                  vtssDhcp6SnoopingStatusAddressLeaseTime,
+                  vtssDhcp6SnoopingStatusAddressDhcpServerIp }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssDhcp6SnoopingMibGroups 5 }
+
+vtssDhcp6SnoopingStatisticsInterfaceTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssDhcp6SnoopingStatisticsInterfaceIfIndex,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxSolicit,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxRequest,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxInfoRequest,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxConfirm,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxRenew,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxRebind,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxDecline,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxAdvertise,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxReply,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxReconfigure,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxRelease,
+                  vtssDhcp6SnoopingStatisticsInterfaceRxDiscardUntrust,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxSolicit,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxRequest,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxInfoRequest,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxConfirm,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxRenew,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxRebind,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxDecline,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxAdvertise,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxReply,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxReconfigure,
+                  vtssDhcp6SnoopingStatisticsInterfaceTxRelease,
+                  vtssDhcp6SnoopingStatisticsInterfaceClearStats }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssDhcp6SnoopingMibGroups 6 }
+
+vtssDhcp6SnoopingMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssDhcp6SnoopingConfigGlobalsInfoGroup,
+                       vtssDhcp6SnoopingConfigInterfaceInfoGroup,
+                       vtssDhcp6SnoopingStatusGlobalsInfoGroup,
+                       vtssDhcp6SnoopingStatusClientTableInfoGroup,
+                       vtssDhcp6SnoopingStatusAddressTableInfoGroup,
+                       vtssDhcp6SnoopingStatisticsInterfaceTableInfoGroup }
+
+    ::= { vtssDhcp6SnoopingMibCompliances 1 }
+
+END

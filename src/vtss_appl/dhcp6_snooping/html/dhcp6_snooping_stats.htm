@@ -1,0 +1,256 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+-->
+
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+    <title>DHCPv6 Snooping Statistics</title>
+    <link href="lib/normal.css" rel="stylesheet" type="text/css">
+    <script type="text/javascript" src="lib/mootools-core.js"></script>
+    <script type="text/javascript" src="lib/dynforms.js"></script>
+<!--    <script type="text/javascript" src="lib/validate.js"></script>-->
+    <script type="text/javascript" src="lib/json_minimum.js"></script>
+    <script type="text/javascript" src="lib/HeaderControl.js"></script>
+    <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_dhcp6_snooping_stats.htm";
+
+var timerID;
+var selectedPort = null;
+var pageArgs = searchArgs(window.location.search);
+var pageArgsName = 'port';
+if (pageArgs[pageArgsName]) {
+    selectedPort = pageArgs[pageArgsName];
+}
+
+
+function onPortSelect(sel)
+{
+    selectedPort = sel.options[sel.selectedIndex].value;
+    requestUpdate();
+}
+
+function processUpdate(recv_json, name)
+{
+    // Ignore the process if no data is received
+    if (!recv_json) {
+        alert("processUpdate() failed: Get dynamic data failed.");
+        return;
+    }
+
+    //alert(recv_json.toSource());
+
+    for (var key in recv_json) {
+        if (recv_json.hasOwnProperty(key)) {
+            UpdateId(key, recv_json[key]);
+            //console.log(key + " -> " + recv_json[key]);
+        }
+    }
+
+    document.getElementById("update").style.visibility = "hidden";
+
+    var autorefresh = document.getElementById('autorefresh');
+    if (autorefresh && autorefresh.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = setTimeout('requestUpdate()', settingsRefreshInterval());
+    }
+}
+
+function requestUpdate()
+{
+    document.getElementById("update").style.visibility = "visible";
+    requestJsonDoc("dhcp6Snooping.statistics.interface.get", selectedPort, processUpdate, "counters");
+}
+
+function requestClear()
+{
+    args = {};
+    args["ClearStats"] = 1;
+    json_params = [selectedPort, args];
+    requestJsonDoc("dhcp6Snooping.statistics.interface.set", json_params, null, null);
+    
+    requestUpdate();
+}
+
+function chkRefresh(fld)
+{
+    if (!fld.checked) {
+        if (timerID) {
+            clearTimeout(timerID);
+        }
+        timerID = null;
+    } else {
+        requestUpdate();
+    }
+}
+
+function processInitialUpdate(recv_json, name)
+{
+    // Add port names to port selector
+    select = document.getElementById('portSelectId');
+
+    Object.each(recv_json, function (record) {
+        if (selectedPort === null) {
+            selectedPort = record.key;
+        }
+
+        var opt = document.createElement('option');
+        opt.value = record.key;
+        opt.innerHTML = record.key;
+        select.appendChild(opt);
+    });
+
+    select.value = selectedPort;
+
+    requestUpdate();
+}
+
+function requestInitialUpdate()
+{
+    // Get the interface config list to get all possible port names
+    requestJsonDoc("dhcp6Snooping.config.interface.get", null, processInitialUpdate, "counters");
+}
+
+/* Initialize resores when HTML document is ready */
+window.addEvent('domready', function () {
+    // Create a from with table body for receive/transmit JSON data
+    //myDynamicTable = new DynamicTable("statsTableContent", "display", null, null);
+
+    //selectedPort = SpomUpdatePortSelector("portselect", selectedPort);
+    if (selectedPort === null) {
+        requestInitialUpdate();
+    } else {
+        requestUpdate();
+    }
+});
+
+    </script>
+</head>
+
+<body class="content" style="height: calc(100vh - 30px);">
+    <h1>DHCPv6 Snooping Statistics</h1>
+
+    <div class="refreshbar">
+     <form action="#">
+        <label for="portSelectId">Selected port:</label>
+        <select id="portSelectId" onchange="onPortSelect(this);"></select>
+        <label for="autorefresh">Auto-refresh</label>
+        <input type="checkbox" name="autorefresh" id="autorefresh" onclick="chkRefresh(this);">
+        <input type="button" value="Refresh" onclick="requestUpdate(); this.blur();">
+        <input type="button" value="Clear"   onclick="requestClear();  this.blur();">
+        <img id="update" alt="" src="images/updating.gif">
+     </form>
+    </div>
+
+  <table summary="DHCPv6 Port Statistics" width="60%" class="display">
+    <tbody>
+      <tr class="display_header">
+        <th colspan="2" class="hdrc">Receive Packets</th>
+        <th colspan="2" class="hdrc">Transmit Packets</th>
+      </tr>
+      <tr class="display_even">
+        <td class="displaytext">Rx Solicit</td>
+        <td class="cr" id="RxSolicit">-</td>
+        <td class="displaytext">Tx Solicit</td>
+        <td class="cr" id="TxSolicit">-</td>
+      </tr>
+      <tr class="display_odd">
+        <td class="displaytext">Rx Request</td>
+        <td class="cr" id="RxRequest">-</td>
+        <td class="displaytext">Tx Request</td>
+        <td class="cr" id="TxRequest">-</td>
+      </tr>
+      <tr class="display_even">
+        <td class="displaytext">Rx InfoRequest</td>
+        <td class="cr" id="RxInfoRequest">-</td>
+        <td class="displaytext">Tx InfoRequest</td>
+        <td class="cr" id="TxInfoRequest">-</td>
+      </tr>
+      <tr class="display_odd">
+        <td class="displaytext">Rx Confirm</td>
+        <td class="cr" id="RxConfirm">-</td>
+        <td class="displaytext">Tx Confirm</td>
+        <td class="cr" id="TxConfirm">-</td>
+      </tr>
+      <tr class="display_even">
+        <td class="displaytext">Rx Renew</td>
+        <td class="cr" id="RxRenew">-</td>
+        <td class="displaytext">Tx Renew</td>
+        <td class="cr" id="TxRenew">-</td>
+      </tr>
+      <tr class="display_odd">
+        <td class="displaytext">Rx Rebind</td>
+        <td class="cr" id="RxRebind">-</td>
+        <td class="displaytext">Tx Rebind</td>
+        <td class="cr" id="TxRebind">-</td>
+      </tr>
+      <tr class="display_even">
+        <td class="displaytext">Rx Decline</td>
+        <td class="cr" id="RxDecline">-</td>
+        <td class="displaytext">Tx Decline</td>
+        <td class="cr" id="TxDecline">-</td>
+      </tr>
+      <tr class="display_odd">
+        <td class="displaytext">Rx Advertise</td>
+        <td class="cr" id="RxAdvertise">-</td>
+        <td class="displaytext">Tx Advertise</td>
+        <td class="cr" id="TxAdvertise">-</td>
+      </tr>
+      <tr class="display_even">
+        <td class="displaytext">Rx Reply</td>
+        <td class="cr" id="RxReply">-</td>
+        <td class="displaytext">Tx Reply</td>
+        <td class="cr" id="TxReply">-</td>
+      </tr>
+      <tr class="display_odd">
+        <td class="displaytext">Rx Reconfigure</td>
+        <td class="cr" id="RxReconfigure">-</td>
+        <td class="displaytext">Tx Reconfigure</td>
+        <td class="cr" id="TxReconfigure">-</td>
+      </tr>
+
+      <tr class="display_even">
+        <td class="displaytext">Rx Release</td>
+        <td class="cr" id="RxRelease">-</td>
+        <td class="displaytext">Tx Release</td>
+        <td class="cr" id="TxRelease">-</td>
+      </tr>
+      <tr class="display_odd">
+        <td class="displaytext">Rx DiscardUntrust</td>
+        <td class="cr" id="RxDiscardUntrust">-</td>
+        <td class="displaytext">&nbsp;</td>
+        <td class="cr" >&nbsp;</td>
+      </tr>
+
+    </tbody>
+  </table>
+
+</body>
+</html>

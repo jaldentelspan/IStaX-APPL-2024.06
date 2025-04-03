@@ -1,0 +1,2055 @@
+-- *****************************************************************
+-- IECMRP-MIB:  Microsemi ENT private MIB
+-- ****************************************************************
+
+VTSS-IECMRP-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    NOTIFICATION-GROUP, MODULE-COMPLIANCE, OBJECT-GROUP FROM SNMPv2-CONF
+    NOTIFICATION-TYPE, MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION FROM SNMPv2-TC
+    vtssSwitchMgmt FROM VTSS-SMI
+    Counter64 FROM SNMPv2-SMI
+    Integer32 FROM SNMPv2-SMI
+    Unsigned32 FROM SNMPv2-SMI
+    TruthValue FROM SNMPv2-TC
+    VTSSDisplayString FROM VTSS-TC
+    VTSSInterfaceIndex FROM VTSS-TC
+    VTSSRowEditorState FROM VTSS-TC
+    VTSSUnsigned16 FROM VTSS-TC
+    VTSSUnsigned64 FROM VTSS-TC
+    ;
+
+vtssIecmrpMib MODULE-IDENTITY
+    LAST-UPDATED "202309140000Z"
+    ORGANIZATION
+        "Microsemi Corporation"
+    CONTACT-INFO
+        "Application support: http://www.microchip.com/support"
+    DESCRIPTION
+        "Private MIB for Ethernet Ring Protection Switching, MRP."
+    REVISION    "202309140000Z"
+    DESCRIPTION
+        "Changed
+         vtssIecmrpCapabilitiesInfoGroup::vtssIecmrpCapabilitiesHtTxTestPdus to
+         vtssIecmrpCapabilitiesHwTxTestPdus,"
+    REVISION    "202104010000Z"
+    DESCRIPTION
+        "Initial version"
+    ::= { vtssSwitchMgmt 159 }
+
+
+VTSSIecMrpInMode ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Interconnect mode"
+    SYNTAX      INTEGER { linkCheck(0), ringCheck(1) }
+
+VTSSIecMrpInOUIType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "OUI type"
+    SYNTAX      INTEGER { default(0), siemens(1), custom(2) }
+
+VTSSIecMrpInRole ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Mrp interconnect role."
+    SYNTAX      INTEGER { none(0), mic(1), mim(2) }
+
+VTSSIecMrpOperState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The operational state of an MRP instance."
+    SYNTAX      INTEGER { disabled(0), active(1), internalError(2) }
+
+VTSSIecMrpRecoveryProfile ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Mrp recovery profile."
+    SYNTAX      INTEGER { ms10(0), ms30(1), ms200(2), ms500(3) }
+
+VTSSIecMrpRingState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Ring state."
+    SYNTAX      INTEGER { disabled(0), open(1), closed(2),
+                          undefined(3) }
+
+VTSSIecMrpRole ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The ring role of this instance."
+    SYNTAX      INTEGER { mrc(0), mrm(1), mra(2) }
+
+VTSSIecMrpSfTrigger ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Signal fail can either come from the physical link on a given port or
+         from a Down-MEP."
+    SYNTAX      INTEGER { link(0), mep(1) }
+
+vtssIecmrpMibObjects OBJECT IDENTIFIER
+    ::= { vtssIecmrpMib 1 }
+
+vtssIecmrpCapabilities OBJECT IDENTIFIER
+    ::= { vtssIecmrpMibObjects 1 }
+
+vtssIecmrpCapabilitiesInstCntMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum number of configurable MRP instances"
+    ::= { vtssIecmrpCapabilities 1 }
+
+vtssIecmrpCapabilitiesHwTxTestPdus OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether hardware transmits MRP_Test and MRP_InTest PDUs, in
+         which case they cannot be Tx counted"
+    ::= { vtssIecmrpCapabilities 2 }
+
+vtssIecmrpCapabilitiesFastestRecoveryProfile OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRecoveryProfile
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "This is the fastest recovery profile this switch supports"
+    ::= { vtssIecmrpCapabilities 3 }
+
+vtssIecmrpConfig OBJECT IDENTIFIER
+    ::= { vtssIecmrpMibObjects 2 }
+
+vtssIecmrpConfigTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSIecmrpConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is the ERPS group configuration table."
+    ::= { vtssIecmrpConfig 1 }
+
+vtssIecmrpConfigEntry OBJECT-TYPE
+    SYNTAX      VTSSIecmrpConfigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Each entry in this table represents an IECMRP group."
+    INDEX       { vtssIecmrpConfigGroupIndex }
+    ::= { vtssIecmrpConfigTable 1 }
+
+VTSSIecmrpConfigEntry ::= SEQUENCE {
+    vtssIecmrpConfigGroupIndex            Integer32,
+    vtssIecmrpConfigAdminActive           TruthValue,
+    vtssIecmrpConfigRole                  VTSSIecMrpRole,
+    vtssIecmrpConfigDomainName            VTSSDisplayString,
+    vtssIecmrpConfigDomainId              OCTET STRING,
+    vtssIecmrpConfigOUIType               VTSSIecMrpInOUIType,
+    vtssIecmrpConfigCustomOUI             OCTET STRING,
+    vtssIecmrpConfigRingPort1Interface    VTSSInterfaceIndex,
+    vtssIecmrpConfigRingPort1SfTrigger    VTSSIecMrpSfTrigger,
+    vtssIecmrpConfigRingPort1MEPDomain    VTSSDisplayString,
+    vtssIecmrpConfigRingPort1MEPService   VTSSDisplayString,
+    vtssIecmrpConfigRingPort1MEPId        Unsigned32,
+    vtssIecmrpConfigRingPort2Interface    VTSSInterfaceIndex,
+    vtssIecmrpConfigRingPort2SfTrigger    VTSSIecMrpSfTrigger,
+    vtssIecmrpConfigRingPort2MEPDomain    VTSSDisplayString,
+    vtssIecmrpConfigRingPort2MEPService   VTSSDisplayString,
+    vtssIecmrpConfigRingPort2MEPId        Unsigned32,
+    vtssIecmrpConfigVid                   VTSSUnsigned16,
+    vtssIecmrpConfigRecoveryProfile       VTSSIecMrpRecoveryProfile,
+    vtssIecmrpConfigMrmPrio               VTSSUnsigned16,
+    vtssIecmrpConfigMrmReactOnLinkChange  TruthValue,
+    vtssIecmrpConfigInRole                VTSSIecMrpInRole,
+    vtssIecmrpConfigInMode                VTSSIecMrpInMode,
+    vtssIecmrpConfigInId                  VTSSUnsigned16,
+    vtssIecmrpConfigInName                VTSSDisplayString,
+    vtssIecmrpConfigInPortInterface       VTSSInterfaceIndex,
+    vtssIecmrpConfigInPortSfTrigger       VTSSIecMrpSfTrigger,
+    vtssIecmrpConfigInPortMEPDomain       VTSSDisplayString,
+    vtssIecmrpConfigInPortMEPService      VTSSDisplayString,
+    vtssIecmrpConfigInPortMEPId           Unsigned32,
+    vtssIecmrpConfigInVid                 VTSSUnsigned16,
+    vtssIecmrpConfigInRecoveryProfile     VTSSIecMrpRecoveryProfile,
+    vtssIecmrpConfigAction                VTSSRowEditorState
+}
+
+vtssIecmrpConfigGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IEC_MRP group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the MRP
+         capabilities."
+    ::= { vtssIecmrpConfigEntry 1 }
+
+vtssIecmrpConfigAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The administrative state of this IEC_MRP instance. Set to true to make
+         it function normally and false to make it cease functioning."
+    ::= { vtssIecmrpConfigEntry 2 }
+
+vtssIecmrpConfigRole OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRole
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The ring role of this instance."
+    ::= { vtssIecmrpConfigEntry 3 }
+
+vtssIecmrpConfigDomainName OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..240))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "String used to help identifying the ring."
+    ::= { vtssIecmrpConfigEntry 4 }
+
+vtssIecmrpConfigDomainId OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE(16))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Defines the redundancy domain representing the ring this MRP instance
+         belongs to. A 16 octet value.Encoded as a Universally Unique Identifier
+         (UUID) and goes into the MRP PDUs.Default is all-ones
+         (FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF)"
+    ::= { vtssIecmrpConfigEntry 5 }
+
+vtssIecmrpConfigOUIType OBJECT-TYPE
+    SYNTAX      VTSSIecMrpInOUIType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MRP_Option TLVs inside certain MRP PDU types contain an OUI.
+         
+         This OUI defaults to the three first bytes of the MAC address of this
+         switch, but can be changed to both the Siemens OUI and a custom OUI"
+    ::= { vtssIecmrpConfigEntry 6 }
+
+vtssIecmrpConfigCustomOUI OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE(3))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "OUI used when OUIType == custom"
+    ::= { vtssIecmrpConfigEntry 7 }
+
+vtssIecmrpConfigRingPort1Interface OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the Interface index of ring port.
+         
+         Must always be filled in."
+    ::= { vtssIecmrpConfigEntry 8 }
+
+vtssIecmrpConfigRingPort1SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSIecMrpSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this selects whether Signal Fail (SF) comes from the
+         link state of a given interface, or from a Down-MEP."
+    ::= { vtssIecmrpConfigEntry 9 }
+
+vtssIecmrpConfigRingPort1MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the MEP Domain"
+    ::= { vtssIecmrpConfigEntry 10 }
+
+vtssIecmrpConfigRingPort1MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the MEP Service."
+    ::= { vtssIecmrpConfigEntry 11 }
+
+vtssIecmrpConfigRingPort1MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the MEP ID"
+    ::= { vtssIecmrpConfigEntry 12 }
+
+vtssIecmrpConfigRingPort2Interface OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the Interface index of ring port.
+         
+         Must always be filled in."
+    ::= { vtssIecmrpConfigEntry 13 }
+
+vtssIecmrpConfigRingPort2SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSIecMrpSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this selects whether Signal Fail (SF) comes from the
+         link state of a given interface, or from a Down-MEP."
+    ::= { vtssIecmrpConfigEntry 14 }
+
+vtssIecmrpConfigRingPort2MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the MEP Domain"
+    ::= { vtssIecmrpConfigEntry 15 }
+
+vtssIecmrpConfigRingPort2MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the MEP Service."
+    ::= { vtssIecmrpConfigEntry 16 }
+
+vtssIecmrpConfigRingPort2MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the MEP ID"
+    ::= { vtssIecmrpConfigEntry 17 }
+
+vtssIecmrpConfigVid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID on which MRP PDUs are transmitted and received on the ring
+         ports."
+    ::= { vtssIecmrpConfigEntry 18 }
+
+vtssIecmrpConfigRecoveryProfile OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRecoveryProfile
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Recovery time profile. Selects the recovery time profile in accordance
+         with the standard's Table 59 (MRM) and Table 60 (MRC) on p. 129."
+    ::= { vtssIecmrpConfigEntry 19 }
+
+vtssIecmrpConfigMrmPrio OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Manager Priority.
+         
+         Lower values indicate a higher priority."
+    ::= { vtssIecmrpConfigEntry 20 }
+
+vtssIecmrpConfigMrmReactOnLinkChange OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether the MRM reacts immediately on MRP_LinkChange PDUs or
+         not.Considered false on MRAs."
+    ::= { vtssIecmrpConfigEntry 21 }
+
+vtssIecmrpConfigInRole OBJECT-TYPE
+    SYNTAX      VTSSIecMrpInRole
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The interconnect ring role of this instance.
+         
+         Defaults to 'none', that is, this is not an interconnect node."
+    ::= { vtssIecmrpConfigEntry 22 }
+
+vtssIecmrpConfigInMode OBJECT-TYPE
+    SYNTAX      VTSSIecMrpInMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether the MIM or MIC is in LC- or RC-mode.
+         
+         In LC-mode, link changes are used to figure out interconnection
+         topology.
+         
+         In RC-mode, MRP_InTest PDUs are used to figure out the topology.
+         
+         Default is LC-mode."
+    ::= { vtssIecmrpConfigEntry 23 }
+
+vtssIecmrpConfigInId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The interconnection ID used to identify this interconnection domain.
+         
+         The same ID must be used on all nodes that are part of this
+         interconnection domain."
+    ::= { vtssIecmrpConfigEntry 24 }
+
+vtssIecmrpConfigInName OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..240))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Specifies the name of the interconnection domain.
+         
+         It is only used to help identifying the interconnection nodes."
+    ::= { vtssIecmrpConfigEntry 25 }
+
+vtssIecmrpConfigInPortInterface OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of interconnection port.
+         
+         Must always be filled in."
+    ::= { vtssIecmrpConfigEntry 26 }
+
+vtssIecmrpConfigInPortSfTrigger OBJECT-TYPE
+    SYNTAX      VTSSIecMrpSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Selects whether Signal Fail (SF) comes from the link state of a given
+         interface, or from a Down-MEP."
+    ::= { vtssIecmrpConfigEntry 27 }
+
+vtssIecmrpConfigInPortMEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For interconnection port, this is the MEP Domain."
+    ::= { vtssIecmrpConfigEntry 28 }
+
+vtssIecmrpConfigInPortMEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For interconnection port, this is the MEP Service."
+    ::= { vtssIecmrpConfigEntry 29 }
+
+vtssIecmrpConfigInPortMEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For interconnection port, this is the MEP ID."
+    ::= { vtssIecmrpConfigEntry 30 }
+
+vtssIecmrpConfigInVid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID on which MRP PDUs are transmitted and received on the
+         interconnection port."
+    ::= { vtssIecmrpConfigEntry 31 }
+
+vtssIecmrpConfigInRecoveryProfile OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRecoveryProfile
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interconnection Recovery time profile.
+         
+         Selects the recovery time profile in accordance with the standard's
+         Table 61 (MIM) on p. 129 and Table 62 (MIC) on p. 130."
+    ::= { vtssIecmrpConfigEntry 32 }
+
+vtssIecmrpConfigAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssIecmrpConfigEntry 100 }
+
+vtssIecmrpConfigRowEditor OBJECT IDENTIFIER
+    ::= { vtssIecmrpConfig 2 }
+
+vtssIecmrpConfigRowEditorGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "IEC_MRP group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the MRP
+         capabilities."
+    ::= { vtssIecmrpConfigRowEditor 1 }
+
+vtssIecmrpConfigRowEditorAdminActive OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The administrative state of this IEC_MRP instance. Set to true to make
+         it function normally and false to make it cease functioning."
+    ::= { vtssIecmrpConfigRowEditor 2 }
+
+vtssIecmrpConfigRowEditorRole OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRole
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The ring role of this instance."
+    ::= { vtssIecmrpConfigRowEditor 3 }
+
+vtssIecmrpConfigRowEditorDomainName OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..240))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "String used to help identifying the ring."
+    ::= { vtssIecmrpConfigRowEditor 4 }
+
+vtssIecmrpConfigRowEditorDomainId OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE(16))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Defines the redundancy domain representing the ring this MRP instance
+         belongs to. A 16 octet value.Encoded as a Universally Unique Identifier
+         (UUID) and goes into the MRP PDUs.Default is all-ones
+         (FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF)"
+    ::= { vtssIecmrpConfigRowEditor 5 }
+
+vtssIecmrpConfigRowEditorOUIType OBJECT-TYPE
+    SYNTAX      VTSSIecMrpInOUIType
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "MRP_Option TLVs inside certain MRP PDU types contain an OUI.
+         
+         This OUI defaults to the three first bytes of the MAC address of this
+         switch, but can be changed to both the Siemens OUI and a custom OUI"
+    ::= { vtssIecmrpConfigRowEditor 6 }
+
+vtssIecmrpConfigRowEditorCustomOUI OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE(3))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "OUI used when OUIType == custom"
+    ::= { vtssIecmrpConfigRowEditor 7 }
+
+vtssIecmrpConfigRowEditorRingPort1Interface OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the Interface index of ring port.
+         
+         Must always be filled in."
+    ::= { vtssIecmrpConfigRowEditor 8 }
+
+vtssIecmrpConfigRowEditorRingPort1SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSIecMrpSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this selects whether Signal Fail (SF) comes from the
+         link state of a given interface, or from a Down-MEP."
+    ::= { vtssIecmrpConfigRowEditor 9 }
+
+vtssIecmrpConfigRowEditorRingPort1MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the MEP Domain"
+    ::= { vtssIecmrpConfigRowEditor 10 }
+
+vtssIecmrpConfigRowEditorRingPort1MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the MEP Service."
+    ::= { vtssIecmrpConfigRowEditor 11 }
+
+vtssIecmrpConfigRowEditorRingPort1MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort1, this is the MEP ID"
+    ::= { vtssIecmrpConfigRowEditor 12 }
+
+vtssIecmrpConfigRowEditorRingPort2Interface OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the Interface index of ring port.
+         
+         Must always be filled in."
+    ::= { vtssIecmrpConfigRowEditor 13 }
+
+vtssIecmrpConfigRowEditorRingPort2SfTrigger OBJECT-TYPE
+    SYNTAX      VTSSIecMrpSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this selects whether Signal Fail (SF) comes from the
+         link state of a given interface, or from a Down-MEP."
+    ::= { vtssIecmrpConfigRowEditor 14 }
+
+vtssIecmrpConfigRowEditorRingPort2MEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the MEP Domain"
+    ::= { vtssIecmrpConfigRowEditor 15 }
+
+vtssIecmrpConfigRowEditorRingPort2MEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the MEP Service."
+    ::= { vtssIecmrpConfigRowEditor 16 }
+
+vtssIecmrpConfigRowEditorRingPort2MEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For RingPort2, this is the MEP ID"
+    ::= { vtssIecmrpConfigRowEditor 17 }
+
+vtssIecmrpConfigRowEditorVid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID on which MRP PDUs are transmitted and received on the ring
+         ports."
+    ::= { vtssIecmrpConfigRowEditor 18 }
+
+vtssIecmrpConfigRowEditorRecoveryProfile OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRecoveryProfile
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Recovery time profile. Selects the recovery time profile in accordance
+         with the standard's Table 59 (MRM) and Table 60 (MRC) on p. 129."
+    ::= { vtssIecmrpConfigRowEditor 19 }
+
+vtssIecmrpConfigRowEditorMrmPrio OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Manager Priority.
+         
+         Lower values indicate a higher priority."
+    ::= { vtssIecmrpConfigRowEditor 20 }
+
+vtssIecmrpConfigRowEditorMrmReactOnLinkChange OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Indicates whether the MRM reacts immediately on MRP_LinkChange PDUs or
+         not.Considered false on MRAs."
+    ::= { vtssIecmrpConfigRowEditor 21 }
+
+vtssIecmrpConfigRowEditorInRole OBJECT-TYPE
+    SYNTAX      VTSSIecMrpInRole
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The interconnect ring role of this instance.
+         
+         Defaults to 'none', that is, this is not an interconnect node."
+    ::= { vtssIecmrpConfigRowEditor 22 }
+
+vtssIecmrpConfigRowEditorInMode OBJECT-TYPE
+    SYNTAX      VTSSIecMrpInMode
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Controls whether the MIM or MIC is in LC- or RC-mode.
+         
+         In LC-mode, link changes are used to figure out interconnection
+         topology.
+         
+         In RC-mode, MRP_InTest PDUs are used to figure out the topology.
+         
+         Default is LC-mode."
+    ::= { vtssIecmrpConfigRowEditor 23 }
+
+vtssIecmrpConfigRowEditorInId OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The interconnection ID used to identify this interconnection domain.
+         
+         The same ID must be used on all nodes that are part of this
+         interconnection domain."
+    ::= { vtssIecmrpConfigRowEditor 24 }
+
+vtssIecmrpConfigRowEditorInName OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..240))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Specifies the name of the interconnection domain.
+         
+         It is only used to help identifying the interconnection nodes."
+    ::= { vtssIecmrpConfigRowEditor 25 }
+
+vtssIecmrpConfigRowEditorInPortInterface OBJECT-TYPE
+    SYNTAX      VTSSInterfaceIndex
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interface index of interconnection port.
+         
+         Must always be filled in."
+    ::= { vtssIecmrpConfigRowEditor 26 }
+
+vtssIecmrpConfigRowEditorInPortSfTrigger OBJECT-TYPE
+    SYNTAX      VTSSIecMrpSfTrigger
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Selects whether Signal Fail (SF) comes from the link state of a given
+         interface, or from a Down-MEP."
+    ::= { vtssIecmrpConfigRowEditor 27 }
+
+vtssIecmrpConfigRowEditorInPortMEPDomain OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For interconnection port, this is the MEP Domain."
+    ::= { vtssIecmrpConfigRowEditor 28 }
+
+vtssIecmrpConfigRowEditorInPortMEPService OBJECT-TYPE
+    SYNTAX      VTSSDisplayString (SIZE(0..14))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For interconnection port, this is the MEP Service."
+    ::= { vtssIecmrpConfigRowEditor 29 }
+
+vtssIecmrpConfigRowEditorInPortMEPId OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "For interconnection port, this is the MEP ID."
+    ::= { vtssIecmrpConfigRowEditor 30 }
+
+vtssIecmrpConfigRowEditorInVid OBJECT-TYPE
+    SYNTAX      VTSSUnsigned16
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "The VLAN ID on which MRP PDUs are transmitted and received on the
+         interconnection port."
+    ::= { vtssIecmrpConfigRowEditor 31 }
+
+vtssIecmrpConfigRowEditorInRecoveryProfile OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRecoveryProfile
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Interconnection Recovery time profile.
+         
+         Selects the recovery time profile in accordance with the standard's
+         Table 61 (MIM) on p. 129 and Table 62 (MIC) on p. 130."
+    ::= { vtssIecmrpConfigRowEditor 32 }
+
+vtssIecmrpConfigRowEditorAction OBJECT-TYPE
+    SYNTAX      VTSSRowEditorState
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Action"
+    ::= { vtssIecmrpConfigRowEditor 100 }
+
+vtssIecmrpStatus OBJECT IDENTIFIER
+    ::= { vtssIecmrpMibObjects 3 }
+
+vtssIecmrpStatusTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSIecmrpStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This table contains status per IECMRP group."
+    ::= { vtssIecmrpStatus 1 }
+
+vtssIecmrpStatusEntry OBJECT-TYPE
+    SYNTAX      VTSSIecmrpStatusEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Status."
+    INDEX       { vtssIecmrpStatusGroupIndex }
+    ::= { vtssIecmrpStatusTable 1 }
+
+VTSSIecmrpStatusEntry ::= SEQUENCE {
+    vtssIecmrpStatusGroupIndex                  Integer32,
+    vtssIecmrpStatusOperState                   VTSSIecMrpOperState,
+    vtssIecmrpStatusOperWarnings                VTSSUnsigned64,
+    vtssIecmrpStatusRingState                   VTSSIecMrpRingState,
+    vtssIecmrpStatusOperRole                    VTSSIecMrpRole,
+    vtssIecmrpStatusPort1TxTestCnt              Counter64,
+    vtssIecmrpStatusPort1TxTopologyChangeCnt    Counter64,
+    vtssIecmrpStatusPort1TxLinkDownCnt          Counter64,
+    vtssIecmrpStatusPort1TxLinkUpCnt            Counter64,
+    vtssIecmrpStatusPort1TxTestMgrNAckCnt       Counter64,
+    vtssIecmrpStatusPort1TxTestPropagateCnt     Counter64,
+    vtssIecmrpStatusPort1TxOptionCnt            Counter64,
+    vtssIecmrpStatusPort1TxInTestCnt            Counter64,
+    vtssIecmrpStatusPort1TxInTopologyChangeCnt  Counter64,
+    vtssIecmrpStatusPort1TxInLinkDownCnt        Counter64,
+    vtssIecmrpStatusPort1TxInLinkUpCnt          Counter64,
+    vtssIecmrpStatusPort1TxInLinkStatusPollCnt  Counter64,
+    vtssIecmrpStatusPort1RxTestCnt              Counter64,
+    vtssIecmrpStatusPort1RxTopologyChangeCnt    Counter64,
+    vtssIecmrpStatusPort1RxLinkDownCnt          Counter64,
+    vtssIecmrpStatusPort1RxLinkUpCnt            Counter64,
+    vtssIecmrpStatusPort1RxTestMgrNAckCnt       Counter64,
+    vtssIecmrpStatusPort1RxTestPropagateCnt     Counter64,
+    vtssIecmrpStatusPort1RxOptionCnt            Counter64,
+    vtssIecmrpStatusPort1RxInTestCnt            Counter64,
+    vtssIecmrpStatusPort1RxInTopologyChangeCnt  Counter64,
+    vtssIecmrpStatusPort1RxInLinkDownCnt        Counter64,
+    vtssIecmrpStatusPort1RxInLinkUpCnt          Counter64,
+    vtssIecmrpStatusPort1RxInLinkStatusPollCnt  Counter64,
+    vtssIecmrpStatusPort1RxUnknownCnt           Counter64,
+    vtssIecmrpStatusPort1RxErrCnt               Counter64,
+    vtssIecmrpStatusPort1RxUnhandledCnt         Counter64,
+    vtssIecmrpStatusPort1RxOwnCnt               Counter64,
+    vtssIecmrpStatusPort1SfCnt                  Counter64,
+    vtssIecmrpStatusPort2TxTestCnt              Counter64,
+    vtssIecmrpStatusPort2TxTopologyChangeCnt    Counter64,
+    vtssIecmrpStatusPort2TxLinkDownCnt          Counter64,
+    vtssIecmrpStatusPort2TxLinkUpCnt            Counter64,
+    vtssIecmrpStatusPort2TxTestMgrNAckCnt       Counter64,
+    vtssIecmrpStatusPort2TxTestPropagateCnt     Counter64,
+    vtssIecmrpStatusPort2TxOptionCnt            Counter64,
+    vtssIecmrpStatusPort2TxInTestCnt            Counter64,
+    vtssIecmrpStatusPort2TxInTopologyChangeCnt  Counter64,
+    vtssIecmrpStatusPort2TxInLinkDownCnt        Counter64,
+    vtssIecmrpStatusPort2TxInLinkUpCnt          Counter64,
+    vtssIecmrpStatusPort2TxInLinkStatusPollCnt  Counter64,
+    vtssIecmrpStatusPort2RxTestCnt              Counter64,
+    vtssIecmrpStatusPort2RxTopologyChangeCnt    Counter64,
+    vtssIecmrpStatusPort2RxLinkDownCnt          Counter64,
+    vtssIecmrpStatusPort2RxLinkUpCnt            Counter64,
+    vtssIecmrpStatusPort2RxTestMgrNAckCnt       Counter64,
+    vtssIecmrpStatusPort2RxTestPropagateCnt     Counter64,
+    vtssIecmrpStatusPort2RxOptionCnt            Counter64,
+    vtssIecmrpStatusPort2RxInTestCnt            Counter64,
+    vtssIecmrpStatusPort2RxInTopologyChangeCnt  Counter64,
+    vtssIecmrpStatusPort2RxInLinkDownCnt        Counter64,
+    vtssIecmrpStatusPort2RxInLinkUpCnt          Counter64,
+    vtssIecmrpStatusPort2RxInLinkStatusPollCnt  Counter64,
+    vtssIecmrpStatusPort2RxUnknownCnt           Counter64,
+    vtssIecmrpStatusPort2RxErrCnt               Counter64,
+    vtssIecmrpStatusPort2RxUnhandledCnt         Counter64,
+    vtssIecmrpStatusPort2RxOwnCnt               Counter64,
+    vtssIecmrpStatusPort2SfCnt                  Counter64,
+    vtssIecmrpStatusInTxTestCnt                 Counter64,
+    vtssIecmrpStatusInTxTopologyChangeCnt       Counter64,
+    vtssIecmrpStatusInTxLinkDownCnt             Counter64,
+    vtssIecmrpStatusInTxLinkUpCnt               Counter64,
+    vtssIecmrpStatusInTxTestMgrNAckCnt          Counter64,
+    vtssIecmrpStatusInTxTestPropagateCnt        Counter64,
+    vtssIecmrpStatusInTxOptionCnt               Counter64,
+    vtssIecmrpStatusInTxInTestCnt               Counter64,
+    vtssIecmrpStatusInTxInTopologyChangeCnt     Counter64,
+    vtssIecmrpStatusInTxInLinkDownCnt           Counter64,
+    vtssIecmrpStatusInTxInLinkUpCnt             Counter64,
+    vtssIecmrpStatusInTxInLinkStatusPollCnt     Counter64,
+    vtssIecmrpStatusInRxTestCnt                 Counter64,
+    vtssIecmrpStatusInRxTopologyChangeCnt       Counter64,
+    vtssIecmrpStatusInRxLinkDownCnt             Counter64,
+    vtssIecmrpStatusInRxLinkUpCnt               Counter64,
+    vtssIecmrpStatusInRxTestMgrNAckCnt          Counter64,
+    vtssIecmrpStatusInRxTestPropagateCnt        Counter64,
+    vtssIecmrpStatusInRxOptionCnt               Counter64,
+    vtssIecmrpStatusInRxInTestCnt               Counter64,
+    vtssIecmrpStatusInRxInTopologyChangeCnt     Counter64,
+    vtssIecmrpStatusInRxInLinkDownCnt           Counter64,
+    vtssIecmrpStatusInRxInLinkUpCnt             Counter64,
+    vtssIecmrpStatusInRxInLinkStatusPollCnt     Counter64,
+    vtssIecmrpStatusInRxUnknownCnt              Counter64,
+    vtssIecmrpStatusInRxErrCnt                  Counter64,
+    vtssIecmrpStatusInRxUnhandledCnt            Counter64,
+    vtssIecmrpStatusInRxOwnCnt                  Counter64,
+    vtssIecmrpStatusInSfCnt                     Counter64,
+    vtssIecmrpStatusTransitions                 Counter64,
+    vtssIecmrpStatusMrmMrcTransitions           Counter64,
+    vtssIecmrpStatusFdbFlushCnt                 Counter64,
+    vtssIecmrpStatusRoundTripValid              TruthValue,
+    vtssIecmrpStatusRoundTripMsecMin            Unsigned32,
+    vtssIecmrpStatusRoundTripMsecMax            Unsigned32,
+    vtssIecmrpStatusRoundTripMaxLast            Unsigned32,
+    vtssIecmrpStatusRoundTripLastUpdateSec      Counter64,
+    vtssIecmrpStatusInRingState                 VTSSIecMrpRingState,
+    vtssIecmrpStatusInTransitions               Counter64,
+    vtssIecmrpStatusInRoundTripMsecMin          Unsigned32,
+    vtssIecmrpStatusInRoundTripMsecMax          Unsigned32,
+    vtssIecmrpStatusInRoundTripMaxLast          Unsigned32,
+    vtssIecmrpStatusInRoundTripLastUpdateSec    VTSSUnsigned64
+}
+
+vtssIecmrpStatusGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IEC_MRP group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the MRP
+         capabilities."
+    ::= { vtssIecmrpStatusEntry 1 }
+
+vtssIecmrpStatusOperState OBJECT-TYPE
+    SYNTAX      VTSSIecMrpOperState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The operational state of IEC_MRP instance."
+    ::= { vtssIecmrpStatusEntry 2 }
+
+vtssIecmrpStatusOperWarnings OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The operational warnings of IEC_MRP instance."
+    ::= { vtssIecmrpStatusEntry 3 }
+
+vtssIecmrpStatusRingState OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRingState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Specifies current MRP instance ring state."
+    ::= { vtssIecmrpStatusEntry 4 }
+
+vtssIecmrpStatusOperRole OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRole
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The actual ring role of this instance."
+    ::= { vtssIecmrpStatusEntry 5 }
+
+vtssIecmrpStatusPort1TxTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_Test PDUs"
+    ::= { vtssIecmrpStatusEntry 6 }
+
+vtssIecmrpStatusPort1TxTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_TopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 7 }
+
+vtssIecmrpStatusPort1TxLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_LinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 8 }
+
+vtssIecmrpStatusPort1TxLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_LinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 9 }
+
+vtssIecmrpStatusPort1TxTestMgrNAckCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_TestMgrNAck PDUs"
+    ::= { vtssIecmrpStatusEntry 10 }
+
+vtssIecmrpStatusPort1TxTestPropagateCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_TestPropagate PDUs"
+    ::= { vtssIecmrpStatusEntry 11 }
+
+vtssIecmrpStatusPort1TxOptionCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_Option PDUs"
+    ::= { vtssIecmrpStatusEntry 12 }
+
+vtssIecmrpStatusPort1TxInTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_InTest PDUs"
+    ::= { vtssIecmrpStatusEntry 13 }
+
+vtssIecmrpStatusPort1TxInTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_InTopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 14 }
+
+vtssIecmrpStatusPort1TxInLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_InLinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 15 }
+
+vtssIecmrpStatusPort1TxInLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_InLinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 16 }
+
+vtssIecmrpStatusPort1TxInLinkStatusPollCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of transmitted MRP_InLinkStatusPoll PDUs"
+    ::= { vtssIecmrpStatusEntry 17 }
+
+vtssIecmrpStatusPort1RxTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_Test PDUs"
+    ::= { vtssIecmrpStatusEntry 18 }
+
+vtssIecmrpStatusPort1RxTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_TopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 19 }
+
+vtssIecmrpStatusPort1RxLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_LinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 20 }
+
+vtssIecmrpStatusPort1RxLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_LinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 21 }
+
+vtssIecmrpStatusPort1RxTestMgrNAckCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_TestMgrNAck PDUs"
+    ::= { vtssIecmrpStatusEntry 22 }
+
+vtssIecmrpStatusPort1RxTestPropagateCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_TestPropagate PDUs"
+    ::= { vtssIecmrpStatusEntry 23 }
+
+vtssIecmrpStatusPort1RxOptionCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_Option PDUs"
+    ::= { vtssIecmrpStatusEntry 24 }
+
+vtssIecmrpStatusPort1RxInTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_InTest PDUs"
+    ::= { vtssIecmrpStatusEntry 25 }
+
+vtssIecmrpStatusPort1RxInTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_InTopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 26 }
+
+vtssIecmrpStatusPort1RxInLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_InLinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 27 }
+
+vtssIecmrpStatusPort1RxInLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_InLinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 28 }
+
+vtssIecmrpStatusPort1RxInLinkStatusPollCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_InLinkStatusPoll PDUs"
+    ::= { vtssIecmrpStatusEntry 29 }
+
+vtssIecmrpStatusPort1RxUnknownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP_Unknown PDUs"
+    ::= { vtssIecmrpStatusEntry 30 }
+
+vtssIecmrpStatusPort1RxErrCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received erroneous MRP PDUs"
+    ::= { vtssIecmrpStatusEntry 31 }
+
+vtssIecmrpStatusPort1RxUnhandledCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received unhandled MRP PDUs"
+    ::= { vtssIecmrpStatusEntry 32 }
+
+vtssIecmrpStatusPort1RxOwnCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of received MRP PDUs with our own SMAC"
+    ::= { vtssIecmrpStatusEntry 33 }
+
+vtssIecmrpStatusPort1SfCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port1: Number of local signal fails"
+    ::= { vtssIecmrpStatusEntry 34 }
+
+vtssIecmrpStatusPort2TxTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_Test PDUs"
+    ::= { vtssIecmrpStatusEntry 35 }
+
+vtssIecmrpStatusPort2TxTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_TopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 36 }
+
+vtssIecmrpStatusPort2TxLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_LinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 37 }
+
+vtssIecmrpStatusPort2TxLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_LinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 38 }
+
+vtssIecmrpStatusPort2TxTestMgrNAckCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_TestMgrNAck PDUs"
+    ::= { vtssIecmrpStatusEntry 39 }
+
+vtssIecmrpStatusPort2TxTestPropagateCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_TestPropagate PDUs"
+    ::= { vtssIecmrpStatusEntry 40 }
+
+vtssIecmrpStatusPort2TxOptionCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_Option PDUs"
+    ::= { vtssIecmrpStatusEntry 41 }
+
+vtssIecmrpStatusPort2TxInTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_InTest PDUs"
+    ::= { vtssIecmrpStatusEntry 42 }
+
+vtssIecmrpStatusPort2TxInTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_InTopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 43 }
+
+vtssIecmrpStatusPort2TxInLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_InLinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 44 }
+
+vtssIecmrpStatusPort2TxInLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_InLinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 45 }
+
+vtssIecmrpStatusPort2TxInLinkStatusPollCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of transmitted MRP_InLinkStatusPoll PDUs"
+    ::= { vtssIecmrpStatusEntry 46 }
+
+vtssIecmrpStatusPort2RxTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_Test PDUs"
+    ::= { vtssIecmrpStatusEntry 47 }
+
+vtssIecmrpStatusPort2RxTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_TopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 48 }
+
+vtssIecmrpStatusPort2RxLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_LinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 49 }
+
+vtssIecmrpStatusPort2RxLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_LinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 50 }
+
+vtssIecmrpStatusPort2RxTestMgrNAckCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_TestMgrNAck PDUs"
+    ::= { vtssIecmrpStatusEntry 51 }
+
+vtssIecmrpStatusPort2RxTestPropagateCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_TestPropagate PDUs"
+    ::= { vtssIecmrpStatusEntry 52 }
+
+vtssIecmrpStatusPort2RxOptionCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_Option PDUs"
+    ::= { vtssIecmrpStatusEntry 53 }
+
+vtssIecmrpStatusPort2RxInTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_InTest PDUs"
+    ::= { vtssIecmrpStatusEntry 54 }
+
+vtssIecmrpStatusPort2RxInTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_InTopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 55 }
+
+vtssIecmrpStatusPort2RxInLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_InLinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 56 }
+
+vtssIecmrpStatusPort2RxInLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_InLinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 57 }
+
+vtssIecmrpStatusPort2RxInLinkStatusPollCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_InLinkStatusPoll PDUs"
+    ::= { vtssIecmrpStatusEntry 58 }
+
+vtssIecmrpStatusPort2RxUnknownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP_Unknown PDUs"
+    ::= { vtssIecmrpStatusEntry 59 }
+
+vtssIecmrpStatusPort2RxErrCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received erroneous MRP PDUs"
+    ::= { vtssIecmrpStatusEntry 60 }
+
+vtssIecmrpStatusPort2RxUnhandledCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received unhandled MRP PDUs"
+    ::= { vtssIecmrpStatusEntry 61 }
+
+vtssIecmrpStatusPort2RxOwnCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of received MRP PDUs with our own SMAC"
+    ::= { vtssIecmrpStatusEntry 62 }
+
+vtssIecmrpStatusPort2SfCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Port2: Number of local signal fails"
+    ::= { vtssIecmrpStatusEntry 63 }
+
+vtssIecmrpStatusInTxTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_Test PDUs"
+    ::= { vtssIecmrpStatusEntry 64 }
+
+vtssIecmrpStatusInTxTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_TopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 65 }
+
+vtssIecmrpStatusInTxLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_LinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 66 }
+
+vtssIecmrpStatusInTxLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_LinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 67 }
+
+vtssIecmrpStatusInTxTestMgrNAckCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_TestMgrNAck PDUs"
+    ::= { vtssIecmrpStatusEntry 68 }
+
+vtssIecmrpStatusInTxTestPropagateCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_TestPropagate PDUs"
+    ::= { vtssIecmrpStatusEntry 69 }
+
+vtssIecmrpStatusInTxOptionCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_Option PDUs"
+    ::= { vtssIecmrpStatusEntry 70 }
+
+vtssIecmrpStatusInTxInTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_InTest PDUs"
+    ::= { vtssIecmrpStatusEntry 71 }
+
+vtssIecmrpStatusInTxInTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_InTopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 72 }
+
+vtssIecmrpStatusInTxInLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_InLinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 73 }
+
+vtssIecmrpStatusInTxInLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_InLinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 74 }
+
+vtssIecmrpStatusInTxInLinkStatusPollCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of transmitted MRP_InLinkStatusPoll PDUs"
+    ::= { vtssIecmrpStatusEntry 75 }
+
+vtssIecmrpStatusInRxTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_Test PDUs"
+    ::= { vtssIecmrpStatusEntry 76 }
+
+vtssIecmrpStatusInRxTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_TopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 77 }
+
+vtssIecmrpStatusInRxLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_LinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 78 }
+
+vtssIecmrpStatusInRxLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_LinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 79 }
+
+vtssIecmrpStatusInRxTestMgrNAckCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_TestMgrNAck PDUs"
+    ::= { vtssIecmrpStatusEntry 80 }
+
+vtssIecmrpStatusInRxTestPropagateCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_TestPropagate PDUs"
+    ::= { vtssIecmrpStatusEntry 81 }
+
+vtssIecmrpStatusInRxOptionCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_Option PDUs"
+    ::= { vtssIecmrpStatusEntry 82 }
+
+vtssIecmrpStatusInRxInTestCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_InTest PDUs"
+    ::= { vtssIecmrpStatusEntry 83 }
+
+vtssIecmrpStatusInRxInTopologyChangeCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_InTopologyChange PDUs"
+    ::= { vtssIecmrpStatusEntry 84 }
+
+vtssIecmrpStatusInRxInLinkDownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_InLinkDown PDUs"
+    ::= { vtssIecmrpStatusEntry 85 }
+
+vtssIecmrpStatusInRxInLinkUpCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_InLinkUp PDUs"
+    ::= { vtssIecmrpStatusEntry 86 }
+
+vtssIecmrpStatusInRxInLinkStatusPollCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_InLinkStatusPoll PDUs"
+    ::= { vtssIecmrpStatusEntry 87 }
+
+vtssIecmrpStatusInRxUnknownCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP_Unknown PDUs"
+    ::= { vtssIecmrpStatusEntry 88 }
+
+vtssIecmrpStatusInRxErrCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received erroneous MRP PDUs"
+    ::= { vtssIecmrpStatusEntry 89 }
+
+vtssIecmrpStatusInRxUnhandledCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received unhandled MRP PDUs"
+    ::= { vtssIecmrpStatusEntry 90 }
+
+vtssIecmrpStatusInRxOwnCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of received MRP PDUs with our own SMAC"
+    ::= { vtssIecmrpStatusEntry 91 }
+
+vtssIecmrpStatusInSfCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "In: Number of local signal fails"
+    ::= { vtssIecmrpStatusEntry 92 }
+
+vtssIecmrpStatusTransitions OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of transitions between ring open and ring closed state.
+         
+         Corresponds to the standard's MRP_Transition for ring ports."
+    ::= { vtssIecmrpStatusEntry 93 }
+
+vtssIecmrpStatusMrmMrcTransitions OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of transitions between MRM and MRC when configured role is MRA.
+         
+         Always 0 when configured role is MRM or MRC.
+         
+         No corresponding counter in the standard."
+    ::= { vtssIecmrpStatusEntry 94 }
+
+vtssIecmrpStatusFdbFlushCnt OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of FDB flushes."
+    ::= { vtssIecmrpStatusEntry 95 }
+
+vtssIecmrpStatusRoundTripValid OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "On many platforms, round-trip time cannot be computed, because the
+         transmitted MRP_Test/MRP_InTest PDUs are not timestamped, because they
+         are sent by H/W, which doesn't always have the option of timestamping,
+         so the following timestamp round-trip times are only valid if this
+         parameter is true."
+    ::= { vtssIecmrpStatusEntry 96 }
+
+vtssIecmrpStatusRoundTripMsecMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum round-trip delay in milliseconds of own MRP_Test PDUs."
+    ::= { vtssIecmrpStatusEntry 97 }
+
+vtssIecmrpStatusRoundTripMsecMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum round-trip delay in milliseconds of own MRP_Test PDUs."
+    ::= { vtssIecmrpStatusEntry 98 }
+
+vtssIecmrpStatusRoundTripMaxLast OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Latest round-trip delay in milliseconds of own MRP_Test PDUs."
+    ::= { vtssIecmrpStatusEntry 99 }
+
+vtssIecmrpStatusRoundTripLastUpdateSec OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Time since boot in seconds of last update of this structure.If it's
+         zero, the remaining members of RoundTrip elements are invalid."
+    ::= { vtssIecmrpStatusEntry 100 }
+
+vtssIecmrpStatusInRingState OBJECT-TYPE
+    SYNTAX      VTSSIecMrpRingState
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The interconnection ring state."
+    ::= { vtssIecmrpStatusEntry 101 }
+
+vtssIecmrpStatusInTransitions OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Number of transitions between interconnection toplogy open state and
+         
+         interconnection topology closed state.
+         
+         Corresponds to the standard's MRP_Transition for interconnection ports."
+    ::= { vtssIecmrpStatusEntry 102 }
+
+vtssIecmrpStatusInRoundTripMsecMin OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Minimum round-trip delay in milliseconds of own MRP_InTest PDUs."
+    ::= { vtssIecmrpStatusEntry 103 }
+
+vtssIecmrpStatusInRoundTripMsecMax OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Maximum round-trip delay in milliseconds of own MRP_InTest PDUs."
+    ::= { vtssIecmrpStatusEntry 104 }
+
+vtssIecmrpStatusInRoundTripMaxLast OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Latest round-trip delay in milliseconds of own MRP_InTest PDUs."
+    ::= { vtssIecmrpStatusEntry 105 }
+
+vtssIecmrpStatusInRoundTripLastUpdateSec OBJECT-TYPE
+    SYNTAX      VTSSUnsigned64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Time since boot in seconds of last update of this structure.
+         
+         If it's zero, the remaining members of InRoundTrip elements are
+         invalid."
+    ::= { vtssIecmrpStatusEntry 106 }
+
+vtssIecmrpControl OBJECT IDENTIFIER
+    ::= { vtssIecmrpMibObjects 4 }
+
+vtssIecmrpControlStatisticsClearTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF VTSSIecmrpControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a table of created IECMRP clear commands."
+    ::= { vtssIecmrpControl 2 }
+
+vtssIecmrpControlStatisticsClearEntry OBJECT-TYPE
+    SYNTAX      VTSSIecmrpControlStatisticsClearEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "This is a created IECMRP clear command."
+    INDEX       { vtssIecmrpControlStatisticsClearGroupIndex }
+    ::= { vtssIecmrpControlStatisticsClearTable 1 }
+
+VTSSIecmrpControlStatisticsClearEntry ::= SEQUENCE {
+    vtssIecmrpControlStatisticsClearGroupIndex  Integer32,
+    vtssIecmrpControlStatisticsClearClear       TruthValue
+}
+
+vtssIecmrpControlStatisticsClearGroupIndex OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "IEC_MRP group index number. Valid range is (1..max groups). The maximum
+         group number is platform-specific and can be retrieved from the MRP
+         capabilities."
+    ::= { vtssIecmrpControlStatisticsClearEntry 1 }
+
+vtssIecmrpControlStatisticsClearClear OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Set to TRUE to clear the counters of an MRP instance."
+    ::= { vtssIecmrpControlStatisticsClearEntry 4 }
+
+vtssIecmrpMibConformance OBJECT IDENTIFIER
+    ::= { vtssIecmrpMib 2 }
+
+vtssIecmrpMibCompliances OBJECT IDENTIFIER
+    ::= { vtssIecmrpMibConformance 1 }
+
+vtssIecmrpMibGroups OBJECT IDENTIFIER
+    ::= { vtssIecmrpMibConformance 2 }
+
+vtssIecmrpCapabilitiesInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssIecmrpCapabilitiesInstCntMax,
+                  vtssIecmrpCapabilitiesHwTxTestPdus,
+                  vtssIecmrpCapabilitiesFastestRecoveryProfile }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssIecmrpMibGroups 1 }
+
+vtssIecmrpConfigTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssIecmrpConfigGroupIndex,
+                  vtssIecmrpConfigAdminActive, vtssIecmrpConfigRole,
+                  vtssIecmrpConfigDomainName,
+                  vtssIecmrpConfigDomainId, vtssIecmrpConfigOUIType,
+                  vtssIecmrpConfigCustomOUI,
+                  vtssIecmrpConfigRingPort1Interface,
+                  vtssIecmrpConfigRingPort1SfTrigger,
+                  vtssIecmrpConfigRingPort1MEPDomain,
+                  vtssIecmrpConfigRingPort1MEPService,
+                  vtssIecmrpConfigRingPort1MEPId,
+                  vtssIecmrpConfigRingPort2Interface,
+                  vtssIecmrpConfigRingPort2SfTrigger,
+                  vtssIecmrpConfigRingPort2MEPDomain,
+                  vtssIecmrpConfigRingPort2MEPService,
+                  vtssIecmrpConfigRingPort2MEPId, vtssIecmrpConfigVid,
+                  vtssIecmrpConfigRecoveryProfile,
+                  vtssIecmrpConfigMrmPrio,
+                  vtssIecmrpConfigMrmReactOnLinkChange,
+                  vtssIecmrpConfigInRole, vtssIecmrpConfigInMode,
+                  vtssIecmrpConfigInId, vtssIecmrpConfigInName,
+                  vtssIecmrpConfigInPortInterface,
+                  vtssIecmrpConfigInPortSfTrigger,
+                  vtssIecmrpConfigInPortMEPDomain,
+                  vtssIecmrpConfigInPortMEPService,
+                  vtssIecmrpConfigInPortMEPId, vtssIecmrpConfigInVid,
+                  vtssIecmrpConfigInRecoveryProfile,
+                  vtssIecmrpConfigAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssIecmrpMibGroups 2 }
+
+vtssIecmrpConfigRowEditorInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssIecmrpConfigRowEditorGroupIndex,
+                  vtssIecmrpConfigRowEditorAdminActive,
+                  vtssIecmrpConfigRowEditorRole,
+                  vtssIecmrpConfigRowEditorDomainName,
+                  vtssIecmrpConfigRowEditorDomainId,
+                  vtssIecmrpConfigRowEditorOUIType,
+                  vtssIecmrpConfigRowEditorCustomOUI,
+                  vtssIecmrpConfigRowEditorRingPort1Interface,
+                  vtssIecmrpConfigRowEditorRingPort1SfTrigger,
+                  vtssIecmrpConfigRowEditorRingPort1MEPDomain,
+                  vtssIecmrpConfigRowEditorRingPort1MEPService,
+                  vtssIecmrpConfigRowEditorRingPort1MEPId,
+                  vtssIecmrpConfigRowEditorRingPort2Interface,
+                  vtssIecmrpConfigRowEditorRingPort2SfTrigger,
+                  vtssIecmrpConfigRowEditorRingPort2MEPDomain,
+                  vtssIecmrpConfigRowEditorRingPort2MEPService,
+                  vtssIecmrpConfigRowEditorRingPort2MEPId,
+                  vtssIecmrpConfigRowEditorVid,
+                  vtssIecmrpConfigRowEditorRecoveryProfile,
+                  vtssIecmrpConfigRowEditorMrmPrio,
+                  vtssIecmrpConfigRowEditorMrmReactOnLinkChange,
+                  vtssIecmrpConfigRowEditorInRole,
+                  vtssIecmrpConfigRowEditorInMode,
+                  vtssIecmrpConfigRowEditorInId,
+                  vtssIecmrpConfigRowEditorInName,
+                  vtssIecmrpConfigRowEditorInPortInterface,
+                  vtssIecmrpConfigRowEditorInPortSfTrigger,
+                  vtssIecmrpConfigRowEditorInPortMEPDomain,
+                  vtssIecmrpConfigRowEditorInPortMEPService,
+                  vtssIecmrpConfigRowEditorInPortMEPId,
+                  vtssIecmrpConfigRowEditorInVid,
+                  vtssIecmrpConfigRowEditorInRecoveryProfile,
+                  vtssIecmrpConfigRowEditorAction }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssIecmrpMibGroups 3 }
+
+vtssIecmrpStatusTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssIecmrpStatusGroupIndex,
+                  vtssIecmrpStatusOperState,
+                  vtssIecmrpStatusOperWarnings,
+                  vtssIecmrpStatusRingState, vtssIecmrpStatusOperRole,
+                  vtssIecmrpStatusPort1TxTestCnt,
+                  vtssIecmrpStatusPort1TxTopologyChangeCnt,
+                  vtssIecmrpStatusPort1TxLinkDownCnt,
+                  vtssIecmrpStatusPort1TxLinkUpCnt,
+                  vtssIecmrpStatusPort1TxTestMgrNAckCnt,
+                  vtssIecmrpStatusPort1TxTestPropagateCnt,
+                  vtssIecmrpStatusPort1TxOptionCnt,
+                  vtssIecmrpStatusPort1TxInTestCnt,
+                  vtssIecmrpStatusPort1TxInTopologyChangeCnt,
+                  vtssIecmrpStatusPort1TxInLinkDownCnt,
+                  vtssIecmrpStatusPort1TxInLinkUpCnt,
+                  vtssIecmrpStatusPort1TxInLinkStatusPollCnt,
+                  vtssIecmrpStatusPort1RxTestCnt,
+                  vtssIecmrpStatusPort1RxTopologyChangeCnt,
+                  vtssIecmrpStatusPort1RxLinkDownCnt,
+                  vtssIecmrpStatusPort1RxLinkUpCnt,
+                  vtssIecmrpStatusPort1RxTestMgrNAckCnt,
+                  vtssIecmrpStatusPort1RxTestPropagateCnt,
+                  vtssIecmrpStatusPort1RxOptionCnt,
+                  vtssIecmrpStatusPort1RxInTestCnt,
+                  vtssIecmrpStatusPort1RxInTopologyChangeCnt,
+                  vtssIecmrpStatusPort1RxInLinkDownCnt,
+                  vtssIecmrpStatusPort1RxInLinkUpCnt,
+                  vtssIecmrpStatusPort1RxInLinkStatusPollCnt,
+                  vtssIecmrpStatusPort1RxUnknownCnt,
+                  vtssIecmrpStatusPort1RxErrCnt,
+                  vtssIecmrpStatusPort1RxUnhandledCnt,
+                  vtssIecmrpStatusPort1RxOwnCnt,
+                  vtssIecmrpStatusPort1SfCnt,
+                  vtssIecmrpStatusPort2TxTestCnt,
+                  vtssIecmrpStatusPort2TxTopologyChangeCnt,
+                  vtssIecmrpStatusPort2TxLinkDownCnt,
+                  vtssIecmrpStatusPort2TxLinkUpCnt,
+                  vtssIecmrpStatusPort2TxTestMgrNAckCnt,
+                  vtssIecmrpStatusPort2TxTestPropagateCnt,
+                  vtssIecmrpStatusPort2TxOptionCnt,
+                  vtssIecmrpStatusPort2TxInTestCnt,
+                  vtssIecmrpStatusPort2TxInTopologyChangeCnt,
+                  vtssIecmrpStatusPort2TxInLinkDownCnt,
+                  vtssIecmrpStatusPort2TxInLinkUpCnt,
+                  vtssIecmrpStatusPort2TxInLinkStatusPollCnt,
+                  vtssIecmrpStatusPort2RxTestCnt,
+                  vtssIecmrpStatusPort2RxTopologyChangeCnt,
+                  vtssIecmrpStatusPort2RxLinkDownCnt,
+                  vtssIecmrpStatusPort2RxLinkUpCnt,
+                  vtssIecmrpStatusPort2RxTestMgrNAckCnt,
+                  vtssIecmrpStatusPort2RxTestPropagateCnt,
+                  vtssIecmrpStatusPort2RxOptionCnt,
+                  vtssIecmrpStatusPort2RxInTestCnt,
+                  vtssIecmrpStatusPort2RxInTopologyChangeCnt,
+                  vtssIecmrpStatusPort2RxInLinkDownCnt,
+                  vtssIecmrpStatusPort2RxInLinkUpCnt,
+                  vtssIecmrpStatusPort2RxInLinkStatusPollCnt,
+                  vtssIecmrpStatusPort2RxUnknownCnt,
+                  vtssIecmrpStatusPort2RxErrCnt,
+                  vtssIecmrpStatusPort2RxUnhandledCnt,
+                  vtssIecmrpStatusPort2RxOwnCnt,
+                  vtssIecmrpStatusPort2SfCnt,
+                  vtssIecmrpStatusInTxTestCnt,
+                  vtssIecmrpStatusInTxTopologyChangeCnt,
+                  vtssIecmrpStatusInTxLinkDownCnt,
+                  vtssIecmrpStatusInTxLinkUpCnt,
+                  vtssIecmrpStatusInTxTestMgrNAckCnt,
+                  vtssIecmrpStatusInTxTestPropagateCnt,
+                  vtssIecmrpStatusInTxOptionCnt,
+                  vtssIecmrpStatusInTxInTestCnt,
+                  vtssIecmrpStatusInTxInTopologyChangeCnt,
+                  vtssIecmrpStatusInTxInLinkDownCnt,
+                  vtssIecmrpStatusInTxInLinkUpCnt,
+                  vtssIecmrpStatusInTxInLinkStatusPollCnt,
+                  vtssIecmrpStatusInRxTestCnt,
+                  vtssIecmrpStatusInRxTopologyChangeCnt,
+                  vtssIecmrpStatusInRxLinkDownCnt,
+                  vtssIecmrpStatusInRxLinkUpCnt,
+                  vtssIecmrpStatusInRxTestMgrNAckCnt,
+                  vtssIecmrpStatusInRxTestPropagateCnt,
+                  vtssIecmrpStatusInRxOptionCnt,
+                  vtssIecmrpStatusInRxInTestCnt,
+                  vtssIecmrpStatusInRxInTopologyChangeCnt,
+                  vtssIecmrpStatusInRxInLinkDownCnt,
+                  vtssIecmrpStatusInRxInLinkUpCnt,
+                  vtssIecmrpStatusInRxInLinkStatusPollCnt,
+                  vtssIecmrpStatusInRxUnknownCnt,
+                  vtssIecmrpStatusInRxErrCnt,
+                  vtssIecmrpStatusInRxUnhandledCnt,
+                  vtssIecmrpStatusInRxOwnCnt, vtssIecmrpStatusInSfCnt,
+                  vtssIecmrpStatusTransitions,
+                  vtssIecmrpStatusMrmMrcTransitions,
+                  vtssIecmrpStatusFdbFlushCnt,
+                  vtssIecmrpStatusRoundTripValid,
+                  vtssIecmrpStatusRoundTripMsecMin,
+                  vtssIecmrpStatusRoundTripMsecMax,
+                  vtssIecmrpStatusRoundTripMaxLast,
+                  vtssIecmrpStatusRoundTripLastUpdateSec,
+                  vtssIecmrpStatusInRingState,
+                  vtssIecmrpStatusInTransitions,
+                  vtssIecmrpStatusInRoundTripMsecMin,
+                  vtssIecmrpStatusInRoundTripMsecMax,
+                  vtssIecmrpStatusInRoundTripMaxLast,
+                  vtssIecmrpStatusInRoundTripLastUpdateSec }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssIecmrpMibGroups 4 }
+
+vtssIecmrpControlStatisticsClearTableInfoGroup OBJECT-GROUP
+    OBJECTS     { vtssIecmrpControlStatisticsClearGroupIndex,
+                  vtssIecmrpControlStatisticsClearClear }
+    STATUS      current
+    DESCRIPTION
+        "A collection of objects."
+    ::= { vtssIecmrpMibGroups 5 }
+
+vtssIecmrpMibCompliance MODULE-COMPLIANCE
+    STATUS      current
+    DESCRIPTION
+        "The compliance statement for the implementation."
+
+    MODULE      -- this module
+
+    MANDATORY-GROUPS { vtssIecmrpCapabilitiesInfoGroup,
+                       vtssIecmrpConfigTableInfoGroup,
+                       vtssIecmrpConfigRowEditorInfoGroup,
+                       vtssIecmrpStatusTableInfoGroup,
+                       vtssIecmrpControlStatisticsClearTableInfoGroup }
+
+    ::= { vtssIecmrpMibCompliances 1 }
+
+END

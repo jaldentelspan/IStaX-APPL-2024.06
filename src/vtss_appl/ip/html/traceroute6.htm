@@ -1,0 +1,159 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+    
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>Traceroute (IPv6)</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+  <script type="text/javascript" src="lib/config.js"></script>
+  <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_diagnostics.htm#traceroute6";
+
+function checkForm()
+{
+    // ip_addr must be valid unicast address, excluding 0.0.0.0
+    if (!isValidDomainOrIP("ipv6_addr", "'Hostname or IP Address'", false, 6, null, 1, configIPDNSSupport, false, true)) {
+        return false;
+    }
+    // source ip_addr must be valid unicast address
+    if (!isValidDomainOrIP("src_addr", "'Source IP Address'", false, 6, null, 1, false, false, false)) {
+        return false;
+    }
+    // source VLAN
+    if (src_vid_fld && src_vid_fld.value.length > 0) {
+        if (!isWithinRange("src_vid", configVidMin, configVidMax, "'Source VLAN'", "")) {
+            return false;
+        }
+    }
+    // source VLAN and Address
+    var src_vid_fld = document.getElementById("src_vid");
+    var src_addr_fld = document.getElementById("src_addr");
+    if (src_vid_fld && src_vid_fld.value.length > 0 && src_addr_fld && src_addr_fld.value.length > 0) {
+        // Both source address and source VLAN are specified - only valid if address is link-local
+        if (!isIpv6LocalLinkAddressStr(src_addr_fld.value)) {
+            GiveAlert("Source Address is not link-local address - cannot specify VLAN", src_vid_fld);
+            return false;
+        }
+    }
+    // DSCP
+    if (!isWithinRange("dscp", configTracerouteDscpMin, configTracerouteDscpMax, "'DSCP Value'", " ")) {
+        return false;
+    }
+    // Response Timeout
+    if (!isWithinRange("timeout", configTracerouteTimeoutMin, configTracerouteTimeoutMax, "'Response Timeout'", " ")) {
+        return false;
+    }
+    // Probes
+    if (!isWithinRange("probes", configTracerouteProbesMin, configTracerouteProbesMax, "'Probes Per Hop'", " ")) {
+        return false;
+    }
+    // Max TTL
+    if (!isWithinRange("maxttl", configTracerouteMttlMin, configTracerouteMttlMax, "'Max TTL'", " ")) {
+        return false;
+    }
+
+    return true;
+}
+ </script>
+</head>
+
+<body class="content">
+
+<h1>Traceroute (IPv6)</h1>
+
+<p>Fill in the parameters as needed and press "Start" to initiate the Traceroute session.</p>
+
+<form method="POST" action="/config/traceroute6" onsubmit="return checkForm();">
+
+<table summary="Traceroute (IPv6)" cellspacing="0" border="0">
+ <tr>
+  <td class="hdrl"><label for="ipv6_addr">Hostname or IP Address</label></td>
+  <td class="cl"><input type="text" value="" id="ipv6_addr" name="ipv6_addr" size="40" maxlength="253"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="dscp">DSCP Value</label></td>
+  <td class="cl"><input type="text" value="0" id="dscp" name="dscp" size="40" maxlength="3"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="probes">Number of Probes Per Hop</label></td>
+  <td class="cl"><input type="text" value="3" id="probes" name="probes" size="40" maxlength="2"></td>
+  <td> packets </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="timeout">Response Timeout</label></td>
+  <td class="cl"><input type="text" value="3" id="timeout" name="timeout" size="40" maxlength="5"></td>
+  <td> seconds </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="maxttl">Max TTL Value</label></td>
+  <td class="cl"><input type="text" value="30" id="maxttl" name="maxttl" size="40" maxlength="3"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="src_vid">VID for Source Interface</label></td>
+  <td class="cl"><input type="text" value="" id="src_vid" name="src_vid" size="40" maxlength="64"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="src_addr">IP Address for Source Interface</label></td>
+  <td class="cl"><input type="text" value="" id="src_addr" name="src_addr" size="40" maxlength="64"></td>
+  <td> &nbsp; </td>
+ </tr>
+ <tr>
+  <td class="hdrl"><label for="numeric">Print Numeric Addresses</label></td>
+  <td class="cl"><input type="checkbox" value="" id="numeric" name="numeric"></td>
+  <td> &nbsp; </td>
+ </tr>
+</table>
+
+<p>
+<input type="submit" value="Start">
+</p>
+
+</form>
+
+</body>
+</html>
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->
+

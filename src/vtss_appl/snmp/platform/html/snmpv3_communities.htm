@@ -1,0 +1,334 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>SNMPv3 Community Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_snmpv3_communities.htm";
+
+var ipv6_supported = false;
+var reqObject;
+var entryIdxArray = Array();
+var receiveEntryName = Array();
+var emptyConfigForm = true;
+var originalCnt = 0;
+var newCreateCnt = 0;
+var maxCreateCnt = configSnmpv3CommunitiesMax;
+
+var oVNormal = Array(0, 1);
+
+function isSnmpAdminString(str)
+{
+    var myReg;
+
+    myReg = /^[!-~]{1,}$/;
+
+    return myReg.test(str);
+}
+
+function addEntryIdx()
+{
+    var fld;
+
+    for (var i = 1; i <= maxCreateCnt; i++) {
+        fld = document.getElementById("delEntryIdx_" + i);
+        if (!fld) {
+            entryIdxArray[newCreateCnt++] = i;
+            return i;
+        }
+    }
+    return 0;
+}
+
+function delEntryIdx(id, tr)
+{
+    var values = id.split("_");
+    var idx = parseInt(values[1], 10);
+
+    for (var i = 0; i < newCreateCnt; i++) {
+        if (idx == entryIdxArray[i]) {
+            for (var j = i; j < newCreateCnt; j++) {
+                entryIdxArray[j] = entryIdxArray[j + 1];
+            }
+            break;
+        }
+    }
+
+    newCreateCnt--;
+    document.getElementById("snmpv3Data").removeChild(tr);
+}
+
+function addNewRow()
+{
+    var delCnt = 0;
+    for (var idx = 0; idx < receiveEntryName.length; idx++) {
+        if (document.getElementById("del_" + receiveEntryName[idx]).checked) {
+            delCnt++;
+        }
+    }
+
+    if (originalCnt - delCnt + newCreateCnt >= maxCreateCnt) {
+        alert("The maximum number of entries is " + maxCreateCnt);
+        return;
+    }
+
+    // Search for a new free name for this row.
+    var new_idx = addEntryIdx();
+    if (parseInt(new_idx, 10) === 0) {
+        alert("The maximum number of entries is " + maxCreateCnt);
+        return;
+    }
+
+    // create holder for accumulated tbody elements and text nodes
+    var frag = document.createDocumentFragment();
+    var tr = CreateStyledElement("tr", (originalCnt + new_idx) % 2 ? "config_even" : "config_odd");
+
+    var button = document.createElement('input');
+    button.onclick = function() { delEntryIdx(this.id, tr); };
+    button.id = "delEntryIdx_" + new_idx;
+    button.type = "button";
+    button.value = " Delete ";
+    var td = CreateTd("c");
+    addCell(tr, td, button);
+
+    td = addInputCell(tr, "", "cr", "new_community_" + new_idx, 32);
+    td.setAttribute("maxLength", 32);
+    td = addInputCell(tr, "", "cr", "new_security_" + new_idx, 32);
+    td.setAttribute("maxLength", 32);
+    td = addInputCell(tr, "", "cr", "new_sip_" + new_idx, 15);
+    td.setAttribute("maxLength", 15);
+    td = addInputCell(tr, "", "cr", "new_sip_prefix_" + new_idx, 15);
+    td.setAttribute("maxLength", 15);
+
+    frag.appendChild(tr);       // Add row to fragment
+    var tbody = document.getElementById("snmpv3Data");
+    if (!tbody.appendChild(frag)) { // Add Frag to table body
+      alert("This browser doesn't support dynamic tables.");
+    }
+}
+
+function addRow(index, frag, config)
+{
+    var tr = CreateStyledElement("tr", index % 2 ? "config_odd" : "config_even");
+    var values = config.split("/");
+    originalCnt++;
+    ipv6_supported = values[0];
+    receiveEntryName[index] = unescape(values[1]) + "_" + unescape(values[2]) + "_" + values[3] + "_" + values[4];
+
+    addCheckBoxCell(tr, 0, "c", "del_" + receiveEntryName[index]);
+    addTextCell(tr, unescape(values[1]), "cr");
+    addTextCell(tr, unescape(values[2]), "cr");
+    addTextCell(tr, values[3], "cr");
+    addTextCell(tr, values[4], "cr");
+
+    frag.appendChild(tr);       // Add row to fragment
+}
+
+function checkForm(form)
+{
+    var fld, idx, new_idx;
+
+    if (emptyConfigForm && !newCreateCnt) {
+        document.location.href = "snmpv3_communities.htm";
+        return false;
+    }
+
+    if (newCreateCnt) {
+        for (new_idx = 0; new_idx < newCreateCnt; new_idx++) {
+            //community_name
+            fld = document.getElementById("new_community_" + entryIdxArray[new_idx]);
+            if (fld.value.length < 1 || fld.value.length > 32) {
+                GiveAlert("The length of 'Community' is restricted to 1 - 32", fld);
+                return false;
+            }
+            if (!isSnmpAdminString(fld.value)) {
+                GiveAlert("The 'Community' is restricted to ASCII characters from 33 to 126", fld);
+                return false;
+            }
+
+            //secret
+            fld = document.getElementById("new_security_" + entryIdxArray[new_idx]);
+            if (fld.value.length < 1 || fld.value.length > 32) {
+                GiveAlert("The length of 'Community secret' is restricted to 1 - 32", fld);
+                return false;
+            }
+            if (!isSnmpAdminString(fld.value)) {
+                GiveAlert("The 'Community secret' is restricted to ASCII characters from 33 to 126", fld);
+                return false;
+            }
+
+            //sip
+            fld = document.getElementById("new_sip_" + entryIdxArray[new_idx]);
+            if (fld.value.indexOf(".") >= 0) {
+                // IPv4
+                if (!isIpStr("new_sip_" + entryIdxArray[new_idx], false, "'Source IP'", 0)) {
+                    return false;
+                } else if (document.getElementById("new_sip_" + entryIdxArray[new_idx]).value == "255.255.255.255") {
+                    alert("The value of 'Source IP' is not allowed to be 255.255.255.255");
+                    return false;
+                }
+                //sip_prefix
+                if (!isWithinRange("new_sip_prefix_" + entryIdxArray[new_idx], 0, 32, "'Source Prefix'")) {
+                    return false;
+                }
+            } else if (!(ipv6_supported === 0) && fld.indexOf(":") >= 0) {
+                // IPv6
+                if (!isIpv6Str("new_sip_" + entryIdxArray[new_idx], "'Source IP'", 3, 0)) {
+                    return false;
+                }
+                //sip_prefix
+                if (!isWithinRange("new_sip_prefix_" + entryIdxArray[new_idx], 0, 128, "'Source Prefix'")) {
+                    return false;
+                }
+            } else {
+                // Other
+                if (fld.value.length > 0) {
+                    GiveAlert("The 'Source IP' is not a valid IP address and the field was not left empty", fld);
+                    return false;
+                }
+                //sip_prefix
+                if (document.getElementById("new_sip_prefix_" + entryIdxArray[new_idx]).value.length > 0) {
+                    GiveAlert("The 'Source Prefix' is not left empty while 'Source IP' is empty", fld);
+                    return false;
+                }
+            }
+
+            //check if repeated community
+            var new_community = document.getElementById("new_community_" + entryIdxArray[new_idx]);
+            var new_sip = document.getElementById("new_sip_" + entryIdxArray[new_idx]);
+            var new_sip_prefix = document.getElementById("new_sip_prefix_" + entryIdxArray[new_idx]);
+            for (idx = 0; idx < receiveEntryName.length; idx++) {
+                if (document.getElementById("del_" + receiveEntryName[idx]).checked) {
+                    continue;
+                }
+                if (new_community.value + "_" + new_sip.value + "_" + new_sip_prefix.value == 
+                    receiveEntryName[idx]) {
+                    GiveAlert("The entry '" + new_community.value + "', '" + new_sip.value +"', '" +
+                    new_sip_prefix.value + "' already exists", new_community);
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;                // Feed the chickens and go home
+}
+
+function processUpdate(req, ref)
+{
+    if (reqObject != req) {
+        reqObject = req;
+    }
+    if (req.responseText) {
+        var snmpv3Config = req.responseText.split("|");
+        //if (1) {
+        //var snmpv3Config = req.split("|");
+
+        snmpv3Config[0] = snmpv3Config[0].replace(/^\n/, "");
+        // create holder for accumulated tbody elements and text nodes
+        var frag = document.createDocumentFragment();
+        for (var i = 0; i < snmpv3Config.length; i++) {
+            if (snmpv3Config[i]) {
+                addRow(i, frag, snmpv3Config[i]);
+                emptyConfigForm = false;
+            }
+        }
+        var tbody = document.getElementById(ref);
+        clearChildNodes(tbody);
+        newCreateCnt = 0;
+        if (!tbody.appendChild(frag)) { // Add Frag to table body
+            alert("This browser doesn't support dynamic tables.");
+        }
+    }
+}
+
+function requestUpdate()
+{
+    //Format: <ipv6_supported>/<community_name>/<secret>/<sip>/<sip_prefix>,...
+    //var req="1/public/RO/192.168.1.1/255.255.255.0|private/RW/192.168.1.1/255.255.255.0";
+    //processUpdate(req, "snmpv3Data");
+    loadXMLDoc("/config/snmpv3_communities", processUpdate, "snmpv3Data");
+}
+
+function resetForm()
+{
+    processUpdate(reqObject, "snmpv3Data");
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<h1>SNMPv3 Community Configuration</h1>
+
+<form name="snmpv3ConfigForm" method="POST" action="/config/snmpv3_communities" onsubmit="return checkForm(this);">
+
+<table summary="SNMPv3 Community Configuration" cellspacing="0" class="config">
+ <thead>
+  <tr class="config_header">
+   <th>Delete</th>
+   <th>Community name</th>
+   <th>Community secret</th>
+   <th>Source IP</th>
+   <th>Source Prefix</th>
+  </tr>
+ </thead>
+  <tbody id="snmpv3Data"></tbody>
+</table>
+
+<p>
+  <input type="button" id="addNewEntry" value="Add New Entry" onclick="addNewRow();">&nbsp;&nbsp;&nbsp;&nbsp;
+  <input type="submit" value="Save">
+  <input type="button" value="Reset" onclick="resetForm();">
+  <!-- Avoid both checkedbox are none checked -->
+  <input type="hidden" name="dummy">
+</p>
+
+</form>
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->

@@ -1,0 +1,2367 @@
+# Copyright (c) 2006-2024 Microsemi Corporation "Microsemi". All Rights Reserved.
+#
+# Unpublished rights reserved under the copyright laws of the United States of
+# America, other countries and international treaties. Permission to use, copy,
+# store and modify, the software and its source code is granted but only in
+# connection with products utilizing the Microsemi switch and PHY products.
+# Permission is also granted for you to integrate into other products, disclose,
+# transmit and distribute the software only in an absolute machine readable
+# format (e.g. HEX file) and only in or with products utilizing the Microsemi
+# switch and PHY products.  The source code of the software may not be
+# disclosed, transmitted or distributed without the prior written permission of
+# Microsemi.
+#
+# This copyright notice must appear in any copy, modification, disclosure,
+# transmission or distribution of the software.  Microsemi retains all
+# ownership, copyright, trade secret and proprietary rights in the software and
+# its source code, including all modifications thereto.
+#
+# THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+# WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+# ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+# NON-INFRINGEMENT.
+
+MODULE_IF_FLAG =
+
+INCLUDE_BEGIN
+#include "icli_porting_util.h"      /* For icli_port_list_info_txt()                      */
+#include "icfg_api.h"               /* For vtss_icfg_XXX()                                */
+#include <vtss/appl/frer.hxx>       /* For vtss_appl_frer_XXX()                           */
+#include "frer_api.h"               /* For frer_util_XXX()                                */
+#include "misc_api.h"               /* For iport2uport()                                  */
+#include "stream_api.h"             /* For stream_collection_util_stream_id_list_to_str() */
+#include "vtss_common_iterator.hxx" /* For vtss_appl_ifindex_port_configurable()          */
+#include "vtss_icli_session.h"      /* For vtss_icli_session_mode_para_get()              */
+INCLUDE_END
+
+FUNCTION_BEGIN
+
+// Need to include FRER's trace here, because ICLI defines its own that I don't
+// want to use.
+#undef VTSS_TRACE_MODULE_ID
+#include "frer_trace.h"
+
+// Convert from mesa_rc to icli_rc_t. Return only if result is ICLI_RC_ERROR,
+// because ICLI's auto-generated code returns ICLI_RC_OK as its last statement
+// in every function. If we always returned (no matter RC code), we would get
+// "unreachable code" compilation warnings :(
+#define FRER_PRINT_RC(expr) {mesa_rc __rc__; if ((__rc__ = (expr)) != VTSS_RC_OK) {ICLI_PRINTF("%% %s\n", error_txt(__rc__)); return ICLI_RC_ERROR;}}
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// FRER_ICFG_conf_print()
+/******************************************************************************/
+static mesa_rc FRER_ICFG_conf_print(const vtss_icfg_query_request_t *req, vtss_icfg_query_result_t *result)
+{
+    uint32_t                                inst;
+    vtss_icfg_conf_print_t                  conf_print;
+    vtss_appl_frer_conf_t                   conf, default_conf;
+    vtss_appl_frer_latent_error_detection_t &led_conf         = conf.rcvy_latent_error_detection;
+    vtss_appl_frer_latent_error_detection_t &led_default_conf = default_conf.rcvy_latent_error_detection;
+    char                                    buf[1000];
+    bool                                    show, show_hist, show_diff, show_period, show_paths, show_reset;
+
+    // Format:
+    // tsn frer <1-max>
+    //  mode {generation | recovery}              /* Two modes supported. Other functions (like Relay System C in Figure C-4 of 802.1CB-2017 must be done through VLAN configuration). */
+    //  [no] ingress stream-id-list <a~b>         /* Fixed size, e.g. 8. Each stream also gives the ingress ports */
+    //  [no] ingress stream-collection-id <uint>  /* Stream collection. Streams in the collection also gives the ingress ports */
+    //  [no] ingress outer-tag pop                /* Controls whether to pop an outer VLAN tag in generator mode */
+    //  [no] frer-vlan <vlan_id>                  /* no => VLAN ID 1 */
+    //  [no] egress interface <port_type_list>    /* List of egress ports. no => unable to activate instance */
+    //  [no] recovery algorithm {match | vector [history-length <2-32>]}  /* Select algorithm (default is vector), and control length of the history (default is 2) */
+    //  [no] recovery reset-timeout <uint>        /* Number of msecs before reset of recover algorithm */
+    //  [no] recovery take-no-sequence            /* Accept frames without R-Tag. Bending the standard: Also used in match algorithm. Default is the no-form, meaning that non-R-tagged frames are discarded */
+    //  [no] recovery individual                  /* Indicates whether individual recovery is enabled or not. This also gives additional counter sets */
+    //  [no] recovery terminate                   /* Remove R-Tag on egress. no => Keep R-Tag on egress. */
+    //  [no] recovery latent-error-detection [difference <uint>] [period <uint>] [paths <uint>] [reset-period <uint>]
+    //  admin-state {disable | enable}            /* Enables or disables this FRER instance */
+
+    if (req->cmd_mode != ICLI_CMD_MODE_TSN_FRER) {
+        T_EG(FRER_TRACE_GRP_ICLI, "Invalid cmd_mode (%d). Expected %d", req->cmd_mode, ICLI_CMD_MODE_TSN_FRER);
+        return VTSS_RC_OK;
+    }
+
+    vtss_icfg_conf_print_init(&conf_print, req, result);
+    conf_print.print_no_arguments = false;
+
+    inst = req->instance_id.generic_u32;
+
+    VTSS_RC(vtss_appl_frer_conf_default_get(&default_conf));
+    VTSS_RC(vtss_appl_frer_conf_get(inst, &conf));
+
+    // mode {generation | recovery}
+    // We always print the mode for clarity to the user, but we do, however,
+    // support the no-form in ICLI commands.
+    // We don't use the no-form when conf_print.force_no_keyword == false, which
+    // it is now.
+    conf_print.is_default = false;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "mode", "%s", frer_util_mode_to_str(conf.mode)));
+
+    // [no] ingress stream-id-list <a~b>
+    // First convert to a string.
+    (void)stream_collection_util_stream_id_list_to_str(conf.stream_ids, ARRSZ(conf.stream_ids), buf);
+
+    // If resulting string is empty, no streams are defined (yet)
+    if (buf[0] == '\0') {
+        if (req->all_defaults) {
+            VTSS_RC(vtss_icfg_printf(result, " no ingress stream-id-list\n"));
+        }
+    } else {
+        VTSS_RC(vtss_icfg_printf(result, " ingress stream-id-list %s\n", buf));
+    }
+
+    // [no] ingress stream-collection-id
+    if (conf.stream_collection_id == VTSS_APPL_STREAM_COLLECTION_ID_NONE) {
+        if (req->all_defaults) {
+            VTSS_RC(vtss_icfg_printf(result, " no ingress stream-collection-id\n"));
+        }
+    } else {
+        VTSS_RC(vtss_icfg_printf(result, " ingress stream-collection-id %u\n", conf.stream_collection_id));
+    }
+
+    // [no] ingress outer-tag pop
+    conf_print.is_default = conf.outer_tag_pop == default_conf.outer_tag_pop;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "ingress outer-tag pop", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    // [no] frer-vlan <vlan_id>
+    // We cannot generate the no-form, because we want the user to know what
+    // VLAN she is running if using all-defaults.
+    conf_print.is_default = conf.frer_vlan == default_conf.frer_vlan;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "frer-vlan", "%u", conf.frer_vlan));
+
+    // [no] egress interface <port_type_list>
+    // First convert to a string (buf should be large enough to hold at most
+    // VTSS_APPL_FRER_EGRESS_PORT_CNT_MAX long port interface names).
+    (void)icli_port_list_info_txt(VTSS_ISID_START, conf.egress_ports, buf, FALSE);
+
+    // If resulting string is empty, no egress ports are defined (yet)
+    if (buf[0] == '\0') {
+        if (req->all_defaults) {
+            VTSS_RC(vtss_icfg_printf(result, " no egress interface\n"));
+        }
+    } else {
+        VTSS_RC(vtss_icfg_printf(result, " egress interface %s\n", buf));
+    }
+
+    // [no] recovery algorithm {match | vector [history-length <2-32>]}
+    //
+    // We cannot synthesize the no-form, because we want to really show the user
+    // what the default is if requested to with all-default. We do, however,
+    // support the no-form in ICLI commands.
+    //
+    // Figure out whether to show this command and possibly the history-length.
+    show = show_hist = req->all_defaults;
+    if (conf.rcvy_algorithm != default_conf.rcvy_algorithm) {
+        show = true;
+    }
+
+    if (conf.rcvy_algorithm == MESA_FRER_RECOVERY_ALG_VECTOR) {
+        if (conf.rcvy_history_len != default_conf.rcvy_history_len) {
+            show      = true;
+            show_hist = true;
+        }
+    }
+
+    if (show) {
+        VTSS_RC(vtss_icfg_printf(result, " recovery algorithm %s", frer_util_rcvy_alg_to_str(conf.rcvy_algorithm)));
+
+        if (conf.rcvy_algorithm == MESA_FRER_RECOVERY_ALG_VECTOR && show_hist) {
+            VTSS_RC(vtss_icfg_printf(result, " history-length %u\n", conf.rcvy_history_len));
+        } else {
+             VTSS_RC(vtss_icfg_printf(result, "\n"));
+        }
+    }
+
+    // [no] recovery reset-timeout <uint>
+    // We cannot synthesize the no-form, because we want to really show the user
+    // what the default is (if requested with all-defaults). We do, however
+    // support the no-form in ICLI commands.
+    conf_print.is_default = conf.rcvy_reset_timeout_ms == default_conf.rcvy_reset_timeout_ms;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "recovery reset-timeout", "%u", conf.rcvy_reset_timeout_ms));
+
+    // [no] recovery take-no-sequence
+    conf_print.is_default = conf.rcvy_take_no_sequence == default_conf.rcvy_take_no_sequence;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "recovery take-no-sequence", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    //  [no] recovery individual
+    conf_print.is_default = conf.rcvy_individual == default_conf.rcvy_individual;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "recovery individual", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    // [no] recovery terminate
+    conf_print.is_default = conf.rcvy_terminate == default_conf.rcvy_terminate;
+    conf_print.force_no_keyword = true;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "recovery terminate", "%s", ""));
+    conf_print.force_no_keyword = false;
+
+    // [no] recovery latent-error-detection [difference <uint>] [paths <uint>] [period <uint>] [reset-period <uint>]
+    show = show_diff = show_paths = show_period = show_reset = req->all_defaults;
+    if (led_conf.enable != led_default_conf.enable) {
+        show = true;
+    }
+
+    if (led_conf.enable) {
+        if (led_conf.difference != led_default_conf.difference) {
+            show_diff = true;
+        }
+
+        if (led_conf.period_ms != led_default_conf.period_ms) {
+            show_period = true;
+        }
+
+        if (led_conf.paths != led_default_conf.paths) {
+            show_paths = true;
+        }
+
+        if (led_conf.reset_period_ms != led_default_conf.reset_period_ms) {
+            show_reset = true;
+        }
+    }
+
+    if (show) {
+        VTSS_RC(vtss_icfg_printf(result, " %srecovery latent-error-detection", led_conf.enable ? "" : "no "));
+
+        if (led_conf.enable) {
+            if (show_diff) {
+                VTSS_RC(vtss_icfg_printf(result, " difference %u", led_conf.difference));
+            }
+
+            if (show_period) {
+                VTSS_RC(vtss_icfg_printf(result, " period %u", led_conf.period_ms));
+            }
+
+            if (show_paths) {
+                VTSS_RC(vtss_icfg_printf(result, " paths %u", led_conf.paths));
+            }
+
+            if (show_reset) {
+                VTSS_RC(vtss_icfg_printf(result, " reset-period %u", led_conf.reset_period_ms));
+            }
+        }
+
+        VTSS_RC(vtss_icfg_printf(result, "\n"));
+    }
+
+    //  admin-state {disable | enable}
+    conf_print.is_default = conf.admin_active == default_conf.admin_active;
+    VTSS_RC(vtss_icfg_conf_print(&conf_print, "admin-state", "%s", conf.admin_active ? "enable" : "disable"));
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+#ifdef VTSS_SW_OPTION_ICFG
+/******************************************************************************/
+// frer_icfg_init()
+/******************************************************************************/
+mesa_rc frer_icfg_init(void)
+{
+    // Put it under the TSN suite, that is, "show running-config feature tsn"
+    VTSS_RC(vtss_icfg_query_register(VTSS_ICFG_TSN_FRER_CONF, "tsn", FRER_ICFG_conf_print));
+
+    return VTSS_RC_OK;
+}
+#endif // VTSS_SW_OPTION_ICFG
+
+/******************************************************************************/
+// FRER_ICLI_frer_supported()
+/******************************************************************************/
+static BOOL FRER_ICLI_frer_supported(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    if (ask == ICLI_ASK_PRESENT) {
+        runtime->present = vtss_appl_frer_supported();
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_do_instance_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_do_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime, bool include_existing)
+{
+    vtss_appl_frer_capabilities_t cap;
+    uint32_t                      prev_inst, inst, cnt;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        cap.inst_cnt_max = 64;
+    }
+
+    // Add the default range first.
+    cnt = 0;
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.inst_cnt_max;
+    runtime->range.u.ur.cnt = ++cnt;
+
+    if (!include_existing) {
+        return TRUE;
+    }
+
+    prev_inst = 0;
+    while (vtss_appl_frer_itr(&prev_inst, &inst) == VTSS_RC_OK) {
+        prev_inst = inst;
+        runtime->range.u.ur.range[cnt].min = inst;
+        runtime->range.u.ur.range[cnt].max = inst;
+        runtime->range.u.ur.cnt = ++cnt;
+
+        if (cnt >= ARRSZ(runtime->range.u.ur.range)) {
+            // CLI's array can't hold more entries.
+            break;
+        }
+    }
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_instance_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return FRER_ICLI_do_instance_range(session_id, ask, runtime, false);
+}
+
+/******************************************************************************/
+// FRER_ICLI_existing_instance_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_existing_instance_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    return FRER_ICLI_do_instance_range(session_id, ask, runtime, true);
+}
+
+/******************************************************************************/
+// FRER_ICLI_stream_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_stream_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(FRER_TRACE_GRP_ICLI, "vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        cap.stream_id_max = 127;
+    }
+
+    // Syntax for a range_list is to add one element and give that element
+    // the boundaries.
+    runtime->range.type              = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt          = 1;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.stream_id_max;
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_stream_collection_id_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_stream_collection_id_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_EG(FRER_TRACE_GRP_ICLI, "vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        cap.stream_collection_id_max = 63;
+    }
+
+    // Syntax for a range_list is to add one element and give that element
+    // the boundaries.
+    runtime->range.type              = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt          = 1;
+    runtime->range.u.ur.range[0].min = 1;
+    runtime->range.u.ur.range[0].max = cap.stream_collection_id_max;
+
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_rcvy_history_len_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_rcvy_history_len_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = cap.rcvy_history_len_min;
+    runtime->range.u.ur.range[0].max = cap.rcvy_history_len_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_rcvy_reset_timeout_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_rcvy_reset_timeout_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = cap.rcvy_reset_timeout_ms_min;
+    runtime->range.u.ur.range[0].max = cap.rcvy_reset_timeout_ms_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_rcvy_latent_error_diff_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_rcvy_latent_error_diff_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = cap.rcvy_latent_error_difference_min;
+    runtime->range.u.ur.range[0].max = cap.rcvy_latent_error_difference_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_rcvy_latent_error_period_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_rcvy_latent_error_period_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = cap.rcvy_latent_error_period_ms_min;
+    runtime->range.u.ur.range[0].max = cap.rcvy_latent_error_period_ms_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_rcvy_latent_error_paths_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_rcvy_latent_error_paths_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = cap.rcvy_latent_error_paths_min;
+    runtime->range.u.ur.range[0].max = cap.rcvy_latent_error_paths_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_rcvy_latent_reset_period_range()
+/******************************************************************************/
+static BOOL FRER_ICLI_rcvy_latent_reset_period_range(u32 session_id, icli_runtime_ask_t ask, icli_runtime_t *runtime)
+{
+    vtss_appl_frer_capabilities_t cap;
+    mesa_rc                       rc;
+
+    if (ask != ICLI_ASK_RANGE) {
+        return FALSE;
+    }
+
+    if ((rc = vtss_appl_frer_capabilities_get(&cap)) != VTSS_RC_OK) {
+        T_E("vtss_appl_frer_capabilities_get() failed: %s", error_txt(rc));
+        return FALSE;
+    }
+
+    runtime->range.type = ICLI_RANGE_TYPE_UNSIGNED;
+    runtime->range.u.ur.cnt = 1;
+    runtime->range.u.ur.range[0].min = cap.rcvy_latent_reset_period_ms_min;
+    runtime->range.u.ur.range[0].max = cap.rcvy_latent_reset_period_ms_max;
+    return TRUE;
+}
+
+/******************************************************************************/
+// FRER_ICLI_show_frer_status()
+/******************************************************************************/
+static void FRER_ICLI_show_frer_status(u32 session_id, uint32_t inst, vtss_appl_frer_conf_t &conf, vtss_appl_frer_status_t &status, bool first_print, bool has_details)
+{
+    vtss_appl_frer_latent_error_detection_t &led_conf = conf.rcvy_latent_error_detection;
+    vtss_appl_frer_oper_warnings_t          one_warning, mask;
+    char                                    buf[1000];
+    int                                     i;
+    const int                               width = 29;
+
+    if (has_details) {
+        if (!first_print) {
+            ICLI_PRINTF("\n--------------------------------------------------------------------------------------\n");
+        }
+        ICLI_PRINTF("%-*s %u\n", width, "Instance:",          inst);
+        ICLI_PRINTF("%-*s %s\n", width, "Operational state:", frer_util_oper_state_to_str(status.oper_state));
+
+        if (conf.admin_active) {
+            ICLI_PRINTF("%-*s %s\n", width, "Mode:",               frer_util_mode_to_str(conf.mode, true));
+            if (conf.stream_collection_id != VTSS_APPL_STREAM_ID_NONE) {
+                ICLI_PRINTF("%-*s %u\n", width, "Ingress Stream Collection ID:", conf.stream_collection_id);
+            } else {
+                ICLI_PRINTF("%-*s %s\n", width, "Ingress Stream IDs:", stream_collection_util_stream_id_list_to_str(conf.stream_ids, ARRSZ(conf.stream_ids), buf));
+            }
+
+            ICLI_PRINTF("%-*s %u\n", width, "FRER VLAN:",          conf.frer_vlan);
+            ICLI_PRINTF("%-*s %s\n", width, "Egress interfaces:",  icli_port_list_info_txt(VTSS_ISID_START, conf.egress_ports, buf, FALSE));
+
+            if (conf.mode == VTSS_APPL_FRER_MODE_RECOVERY) {
+                if (conf.rcvy_algorithm == MESA_FRER_RECOVERY_ALG_VECTOR) {
+                    sprintf(buf, " (with history-length %u)", conf.rcvy_history_len);
+                } else {
+                    buf[0] = '\0';
+                }
+                ICLI_PRINTF("%-*s %s%s\n",  width, "Recovery algorithm:",     frer_util_rcvy_alg_to_str(conf.rcvy_algorithm, true), buf);
+                ICLI_PRINTF("%-*s %u ms\n", width, "Reset timeout:",          conf.rcvy_reset_timeout_ms);
+                ICLI_PRINTF("%-*s %s\n",    width, "Take-no-sequence:",       frer_util_yes_no_str(conf.rcvy_take_no_sequence));
+                ICLI_PRINTF("%-*s %s\n",    width, "Terminating FRER:",       frer_util_yes_no_str(conf.rcvy_terminate));
+
+                if (led_conf.enable) {
+                    sprintf(buf, " (with difference %u packets, period %u ms, paths = %u, and reset period %u ms)", led_conf.difference, led_conf.period_ms, led_conf.paths, led_conf.reset_period_ms);
+                } else {
+                    buf[0] = '\0';
+                }
+
+                ICLI_PRINTF("%-*s %s%s\n", width, "Latent error detection:", frer_util_ena_dis_str(led_conf.enable), buf);
+                ICLI_PRINTF("%-*s %s\n",   width, "Latent errors:",          led_conf.enable ? frer_util_yes_no_str(status.notif_status.latent_error) : "Check disabled");
+            }
+
+            // One line per operational warning.
+            strcpy(buf, "Operational warnings:");
+            if (status.oper_warnings) {
+                // Loop through all flags with a mask of running ones, so that we
+                // don't need to worry about someone adding new flags.
+                for (i = 0; i < 8 * sizeof(status.oper_warnings); i++) {
+                    mask = (vtss_appl_frer_oper_warnings_t)VTSS_BIT(i);
+                    one_warning = status.oper_warnings & mask;
+
+                    if (one_warning) {
+                        ICLI_PRINTF("%-*s %s\n", width, buf, frer_util_oper_warning_to_str(one_warning));
+                        buf[0] = '\0';
+                    }
+                }
+            } else {
+                ICLI_PRINTF("%-*s %s\n", width, buf, frer_util_oper_warning_to_str(status.oper_warnings));
+            }
+        }
+    } else {
+        if (first_print) {
+            ICLI_PRINTF("Inst Operational State Mode       Latent Errors\n");
+            ICLI_PRINTF("---- ----------------- ---------- --------------\n");
+        }
+
+        ICLI_PRINTF("%4u %-17s %-10s", inst, frer_util_oper_state_to_str(status.oper_state, status.oper_warnings), frer_util_mode_to_str(conf.mode, true));
+
+        if (status.oper_state != VTSS_APPL_FRER_OPER_STATE_ACTIVE || conf.mode != VTSS_APPL_FRER_MODE_RECOVERY) {
+            ICLI_PRINTF("\n");
+            return;
+        }
+
+        ICLI_PRINTF(" %s\n", led_conf.enable ? frer_util_yes_no_str(status.notif_status.latent_error) : "Check disabled");
+    }
+}
+
+/******************************************************************************/
+// FRER_ICLI_show_frer_statistics_overview()
+/******************************************************************************/
+static void FRER_ICLI_show_frer_statistics_overview(u32 session_id, uint32_t inst, mesa_port_no_t egress_port_no, vtss_appl_frer_conf_t &conf, vtss_appl_frer_status_t &status, vtss_appl_frer_statistics_t &s, bool first_print, bool first_print_for_inst)
+{
+    char inst_buf[10], oper_buf[20], mode_buf[20], port_buf[40];
+
+    // Output on the following form (only compound counters are printed):
+    //
+    // Inst Oper. State    Mode       Egress I/F Resets       Passed       Discarded
+    //---- -------------- ---------- ---------- ------------ ------------ ------------
+    //  10 Active         Recovery   10G 1/10             10         2301         2301
+    //                               10G 1/11             10         2301         2301
+    //  12 Disabled       Recovery   Gi 1/6
+    //  17 Acticv         Generation                       1           12
+
+    if (first_print) {
+        ICLI_PRINTF("Inst Oper. State    Mode       Egress I/F Resets       Passed       Discarded\n");
+        ICLI_PRINTF("---- -------------- ---------- ---------- ------------ ------------ ------------\n");
+    }
+
+    if (first_print_for_inst) {
+        sprintf(inst_buf, "%u", inst);
+        sprintf(oper_buf, "%s", frer_util_oper_state_to_str(status.oper_state));
+        sprintf(mode_buf, "%s", frer_util_mode_to_str(conf.mode, true));
+    } else {
+        // Don't print inst and mode for subsequent lines for the same instance
+        inst_buf[0] = '\0';
+        oper_buf[0] = '\0';
+        mode_buf[0] = '\0';
+    }
+
+    if (conf.mode == VTSS_APPL_FRER_MODE_GENERATION || egress_port_no == VTSS_PORT_NO_NONE) {
+        // Either we are in generation mode, which doesn't have per egress-port
+        // counters, or we are in recovery mode, but no egress ports have been
+        // configured yet, so don't print it.
+        port_buf[0] = '\0';
+    } else {
+        (void)icli_port_info_txt_short(VTSS_ISID_START, iport2uport(egress_port_no), port_buf);
+    }
+
+    ICLI_PRINTF("%4s %-14s %-10s %-10s ", inst_buf, oper_buf, mode_buf, port_buf);
+
+    if (status.oper_state == VTSS_APPL_FRER_OPER_STATE_ACTIVE) {
+        if (conf.mode == VTSS_APPL_FRER_MODE_GENERATION) {
+            ICLI_PRINTF(VPRI64Fu("12") " " VPRI64Fu("12") "\n", s.gen_resets, s.gen_matches);
+        } else if (egress_port_no == VTSS_PORT_NO_NONE) {
+            ICLI_PRINTF("\n");
+        } else {
+            ICLI_PRINTF(VPRI64Fu("12") " " VPRI64Fu("12") " " VPRI64Fu("12") "\n", s.rcvy_resets, s.rcvy_passed_packets, s.rcvy_discarded_packets);
+        }
+    } else {
+        // Don't print counters for inactive instances
+        ICLI_PRINTF("\n");
+    }
+}
+
+/******************************************************************************/
+// FRER_ICLI_show_frer_statistics_details()
+// Gets invoked once per egress interface per instance.
+// s[] is an array of statistics. s[0] contains generation mode counters and
+// compound counters. s[1]..s[max] contain individual counters.
+/******************************************************************************/
+static void FRER_ICLI_show_frer_statistics_details(u32 session_id, uint32_t inst, mesa_port_no_t egress_port_no, vtss_appl_frer_conf_t &conf, vtss_appl_frer_status_t &status, vtss_appl_frer_statistics_t s[], bool first_print, bool first_print_for_inst)
+{
+    char      port_buf[40];
+    const int width = 20;
+    int       stream_idx, stream_cnt;
+
+    if (first_print_for_inst) {
+        if (!first_print) {
+            ICLI_PRINTF("\n--------------------------------------------------------------------------------------\n");
+        }
+
+        ICLI_PRINTF("%-*s %u\n", width, "Instance:",          inst);
+        ICLI_PRINTF("%-*s %s\n", width, "Operational state:", frer_util_oper_state_to_str(status.oper_state));
+        ICLI_PRINTF("%-*s %s\n", width, "Mode:",              frer_util_mode_to_str(conf.mode, true));
+    }
+
+    if (status.oper_state != VTSS_APPL_FRER_OPER_STATE_ACTIVE) {
+        // Only show counters if the instance is active.
+        return;
+    }
+
+    if (conf.mode == VTSS_APPL_FRER_MODE_GENERATION) {
+        ICLI_PRINTF("%-*s " VPRI64u "\n", width, "Resets:",  s[0].gen_resets);
+        ICLI_PRINTF("%-*s " VPRI64u "\n", width, "Matches:", s[0].gen_matches);
+        return;
+    }
+
+    ICLI_PRINTF("\n%-*s %s\n", width, "Egress interface:", icli_port_info_txt(VTSS_ISID_START, iport2uport(egress_port_no), port_buf));
+
+    stream_cnt = 0;
+    if (conf.rcvy_individual) {
+        // Print a heading with Compound and ingress Stream IDs.
+        ICLI_PRINTF("%-*s %-12s", width, "Ingress Stream IDs:", "Compound");
+
+        for (stream_idx = 0; stream_idx < ARRSZ(conf.stream_ids); stream_idx++) {
+            if (conf.stream_ids[stream_idx] == VTSS_APPL_STREAM_ID_NONE) {
+                break;
+            }
+
+            ICLI_PRINTF(" %12u", conf.stream_ids[stream_idx]);
+            stream_cnt++;
+        }
+
+        ICLI_PRINTF("\n");
+
+        // Print ---- ---- ---
+        ICLI_PRINTF("%-*s", width, "");
+
+        // Also print "-----" for the compound counters
+        for (stream_idx = 0; stream_idx <= stream_cnt; stream_idx++) {
+            ICLI_PRINTF(" ------------");
+        }
+
+        ICLI_PRINTF("\n");
+    }
+
+#define PR_CTRS(_printed_name_, _ctr_)                                                                     \
+    ICLI_PRINTF("%-*s", width, _printed_name_);                                                            \
+    for (stream_idx = 0; stream_idx <= stream_cnt; stream_idx++) {                                         \
+        /* Left align if not individual counters, or it looks silly. */                                    \
+        ICLI_PRINTF(conf.rcvy_individual ? " " VPRI64Fu("12") : " " VPRI64Fu("-12"), s[stream_idx]._ctr_); \
+    }                                                                                                      \
+                                                                                                           \
+    ICLI_PRINTF("\n");
+
+    PR_CTRS("Passed:",              rcvy_passed_packets);
+    PR_CTRS("Discarded:",           rcvy_discarded_packets);
+    PR_CTRS("Out-of-order:",        rcvy_out_of_order_packets);
+    PR_CTRS("Rogue:",               rcvy_rogue_packets);
+    PR_CTRS("Lost:",                rcvy_lost_packets);
+    PR_CTRS("Tagless:",             rcvy_tagless_packets);
+    PR_CTRS("Resets:",              rcvy_resets);
+    PR_CTRS("Latent error resets:", rcvy_latent_error_resets);
+
+#undef PR_CTRS
+}
+
+/******************************************************************************/
+// FRER_ICLI_show_frer_statistics()
+/******************************************************************************/
+static icli_rc_t FRER_ICLI_show_frer_statistics(u32 session_id, uint32_t inst, vtss_appl_frer_conf_t &conf, vtss_appl_frer_status_t &status, bool first_print, bool has_details)
+{
+    uint32_t                    inst_itr = inst;
+    vtss_appl_frer_statistics_t *s_ptr, s[ARRSZ(conf.stream_ids) + 1] = {}; // One additional for compound counters, which is put at index 0.
+    vtss_ifindex_elm_t          ife;
+    vtss_ifindex_t              prev_ifindex = VTSS_IFINDEX_NONE, ifindex;
+    vtss_appl_stream_id_t       stream_id = 0;
+    mesa_port_no_t              port_no = VTSS_PORT_NO_NONE;
+    int                         stream_id_cnt = 0;
+    bool                        first_ifindex = true, first_print_for_inst;
+
+    first_print_for_inst = true;
+
+    // Print a line even if the instance is not operationally active.
+    while (status.oper_state != VTSS_APPL_FRER_OPER_STATE_ACTIVE || vtss_appl_frer_statistics_itr(&inst_itr, &inst_itr, first_ifindex ? nullptr : &prev_ifindex, &ifindex, &stream_id, &stream_id) == VTSS_RC_OK) {
+        T_IG(FRER_TRACE_GRP_ICLI, "inst = %u, ifindex = %s, stream_id = %d", inst_itr, ifindex, stream_id);
+
+        if (inst_itr != inst) {
+            // Gotten into next instance. Nothing more to print for this one.
+            return ICLI_RC_OK;
+        }
+
+        first_ifindex = false;
+
+        if (status.oper_state == VTSS_APPL_FRER_OPER_STATE_ACTIVE) {
+            // Egress interface. Only relevant in recovery mode.
+            if (ifindex == VTSS_IFINDEX_NONE) {
+                port_no = VTSS_PORT_NO_NONE;
+            } else {
+                // Here, we are indeed in recovery mode, because generation mode
+                // doesn't have statistics per egress interface.
+                if (prev_ifindex != ifindex) {
+                    // First time we see this ifindex. Decode it.
+                    if (vtss_ifindex_decompose(ifindex, &ife) != VTSS_RC_OK || ife.iftype != VTSS_IFINDEX_TYPE_PORT) {
+                        ICLI_PRINTF("%% Unable to decompose ifindex = 0x%x to a port number\n", VTSS_IFINDEX_PRINTF_ARG(ifindex));
+                        continue;
+                    }
+
+                    port_no = ife.ordinal;
+                    stream_id_cnt = 0;
+                }
+            }
+
+            prev_ifindex = ifindex;
+
+            // If we get individual counters, use the s[stream_id_cnt + 1] to
+            // obtain the counters.
+            if (stream_id != VTSS_APPL_STREAM_ID_NONE) {
+                // Individual counters.
+
+                // We only print those if asking for details.
+                if (!has_details) {
+                    continue;
+                }
+
+                if (stream_id_cnt >= ARRSZ(conf.stream_ids)) {
+                    T_EG(FRER_TRACE_GRP_ICLI, "Internal error: Got more than %u individual counter sets for inst = %u, port = %u", ARRSZ(conf.stream_ids), inst_itr, port_no);
+                    continue;
+                }
+
+                // Store them in s[1]..s[max]
+                s_ptr = &s[stream_id_cnt + 1];
+                stream_id_cnt++;
+            } else {
+                // Store generation and compound recovery counters in s[0]
+                s_ptr = &s[0];
+            }
+
+            // Do get the statistics
+            FRER_PRINT_RC(vtss_appl_frer_statistics_get(inst_itr, ifindex, stream_id, s_ptr));
+
+            if (stream_id != VTSS_APPL_STREAM_ID_NONE) {
+                // Wait with printing the counters until we have all of them for
+                // this instance. The iterator returns stream_id ==
+                // VTSS_APPL_STREAM_ID_NONE as the last entry for this egress
+                // port number.
+                continue;
+            }
+        }
+
+        if (has_details) {
+            FRER_ICLI_show_frer_statistics_details( session_id, inst_itr, port_no, conf, status, s, first_print, first_print_for_inst);
+        } else {
+            FRER_ICLI_show_frer_statistics_overview(session_id, inst_itr, port_no, conf, status, s[0], first_print, first_print_for_inst);
+        }
+
+        first_print          = false;
+        first_print_for_inst = false;
+
+        if (status.oper_state != VTSS_APPL_FRER_OPER_STATE_ACTIVE) {
+           break;
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// FRER_ICLI_show_frer()
+/******************************************************************************/
+static icli_rc_t FRER_ICLI_show_frer(u32 session_id, icli_range_t *inst_list, bool has_statistics, bool has_details)
+{
+    vtss_appl_frer_conf_t   conf;
+    vtss_appl_frer_status_t status;
+    uint32_t                prev_inst, inst, i;
+    bool                    first = true, first_print = true, show;
+    icli_rc_t               icli_rc;
+    mesa_rc                 rc;
+
+    while (vtss_appl_frer_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first     = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            show = false;
+            for (i = 0; i < inst_list->u.ur.cnt; i++) {
+                if (inst >= inst_list->u.ur.range[i].min && inst <= inst_list->u.ur.range[i].max) {
+                    show = true;
+                    break;
+                }
+            }
+        } else {
+            show = true;
+        }
+
+        if (!show) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_frer_conf_get(inst, &conf)) != VTSS_RC_OK) {
+            T_EG(FRER_TRACE_GRP_ICLI, "vtss_appl_frer_conf_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if ((rc = vtss_appl_frer_status_get(inst, &status)) != VTSS_RC_OK) {
+            T_EG(FRER_TRACE_GRP_ICLI, "vtss_appl_frer_status_get() failed: %s", error_txt(rc));
+            continue;
+        }
+
+        if (has_statistics) {
+            if ((icli_rc = FRER_ICLI_show_frer_statistics(session_id, inst, conf, status, first_print, has_details)) != ICLI_RC_OK) {
+                return icli_rc;
+            }
+        } else {
+            FRER_ICLI_show_frer_status(session_id, inst, conf, status, first_print, has_details);
+        }
+
+        first_print = false;
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// FRER_ICLI_statistics_clear())
+/******************************************************************************/
+static icli_rc_t FRER_ICLI_statistics_clear(u32 session_id, icli_range_t *inst_list)
+{
+    uint32_t prev_inst, inst, i;
+    bool     first = true, clear;
+    mesa_rc  rc;
+
+    while (vtss_appl_frer_itr(first ? nullptr : &prev_inst, &inst) == VTSS_RC_OK) {
+        first     = false;
+        prev_inst = inst;
+
+        // Figure out whether the user has specified this particular instance.
+        if (inst_list != nullptr) {
+            clear = false;
+            for (i = 0; i < inst_list->u.ur.cnt; i++) {
+                if (inst >= inst_list->u.ur.range[i].min && inst <= inst_list->u.ur.range[i].max) {
+                    clear = true;
+                    break;
+                }
+            }
+        } else {
+            clear = true;
+        }
+
+        if (!clear) {
+            continue;
+        }
+
+        if ((rc = vtss_appl_frer_statistics_clear(inst)) != VTSS_RC_OK) {
+            T_EG(FRER_TRACE_GRP_ICLI, "vtss_appl_frer_statistics_clear() failed: %s", error_txt(rc));
+            continue;
+        }
+    }
+
+    return ICLI_RC_OK;
+}
+
+/******************************************************************************/
+// FRER_ICLI_show_capabilities()
+/******************************************************************************/
+static icli_rc_t FRER_ICLI_show_capabilities(u32 session_id)
+{
+    vtss_appl_frer_capabilities_t cap;
+    const int                     cap_width = 39;
+
+    FRER_PRINT_RC(vtss_appl_frer_capabilities_get(&cap));
+
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Instance count:",                    cap.inst_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery Member   Stream count:",    cap.rcvy_mstream_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery Compound Stream count:",    cap.rcvy_cstream_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Min. Recovery Reset Timeout (ms):",       cap.rcvy_reset_timeout_ms_min);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery Reset Timeout (ms):",       cap.rcvy_reset_timeout_ms_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Min. Recovery History Length:",           cap.rcvy_history_len_min);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery History Length:",           cap.rcvy_history_len_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Min. Recovery Latent Error Diff:",        cap.rcvy_latent_error_difference_min);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery Latent Error Diff:",        cap.rcvy_latent_error_difference_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Min. Recovery Latent Error Period (ms):", cap.rcvy_latent_error_period_ms_min);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery Latent Error Period (ms):", cap.rcvy_latent_error_period_ms_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Min. Recovery Latent Error Paths:",       cap.rcvy_latent_error_paths_min);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery Latent Error Paths:",       cap.rcvy_latent_error_paths_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Min. Recovery Latent Reset Period (ms):", cap.rcvy_latent_reset_period_ms_min);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Recovery Latent Reset Period (ms):", cap.rcvy_latent_reset_period_ms_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Egress Port Count:",                 cap.egress_port_cnt_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Stream ID:",                         cap.stream_id_max);
+    ICLI_PRINTF("%-*s %u\n", cap_width, "Max. Stream Collection ID:",              cap.stream_collection_id_max);
+
+    return ICLI_RC_OK;
+}
+
+FUNCTION_END
+
+HELP_TSN      = Time-Sensitive Networking
+HELP_FRER     = Frame Replication and Elimination for Reliability (802.1CB)
+HELP_RECOVERY = Set a recovery mode parameter
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = mode {generation | recovery}
+DOC_CMD_DESC    = Configure mode of operation of this FRER instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = mode generation
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! mode
+CMD_VAR =
+RUNTIME =
+HELP    = Choose this FRER instance's mode of operation (generation or recovery)
+
+! generation
+CMD_VAR = has_generation
+RUNTIME =
+HELP    = FRER instance generates R-Tags
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = FRER instance operates in recovery mode
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.mode = has_generation ? VTSS_APPL_FRER_MODE_GENERATION : VTSS_APPL_FRER_MODE_RECOVERY;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = no mode
+HELP_FRER_NO_MODE = Default this FRER instance's mode of operation
+DOC_CMD_DESC    = ##HELP_FRER_NO_MODE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_NO_MODE
+DOC_CMD_EXAMPLE = no mode
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! mode
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_MODE
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_default_get(&default_conf));
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.mode = default_conf.mode;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+! The 100-200 is just a place holder. We override it dynamically in order to
+! get unsigned ranges.
+COMMAND = ingress stream-id-list <100~200>
+
+DOC_CMD_DESC    = Select the ingress streams that should map to this FRER instance.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =  ingress stream-id-list 12,17-19
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! ingress
+CMD_VAR =
+RUNTIME =
+HELP    = Configure ingress parameters
+
+! stream-id-list
+CMD_VAR =
+RUNTIME =
+HELP    = Select the ingress streams that should map to this FRER instance. If more than one is needed in generator mode, use stream-collections
+
+! range-list
+CMD_VAR = stream_list
+RUNTIME = FRER_ICLI_stream_range
+HELP    = List of stream IDs. This indirectly gives the ingress ports
+
+VARIABLE_BEGIN
+    vtss_appl_frer_capabilities_t cap;
+    vtss_appl_frer_conf_t         conf;
+    int                           i, j, k, cnt;
+    bool                          already_added;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    FRER_PRINT_RC(vtss_appl_frer_capabilities_get(&cap));
+
+    // Clear current stream IDs
+    for (i = 0; i < ARRSZ(conf.stream_ids); i++) {
+        conf.stream_ids[i] = VTSS_APPL_STREAM_ID_NONE;
+    }
+
+    // Populate new
+    cnt = 0;
+    for (i = 0; i < stream_list->cnt; i++) {
+        for (j = stream_list->range[i].min; j <= stream_list->range[i].max; j++) {
+            // Loop through the already added to see if we should skip them.
+            // This allows user to write e.g. 1,3,4,3
+            already_added = false;
+            for (k = 0; k < cnt; k++) {
+                if (conf.stream_ids[k] == j) {
+                    already_added = true;
+                    break;
+                }
+            }
+
+            if (already_added) {
+                break;
+            }
+
+            if (cnt >= cap.egress_port_cnt_max) {
+                ICLI_PRINTF("%% At most %u streams can be specified\n", cap.egress_port_cnt_max);
+                return ICLI_RC_ERROR;
+            }
+
+            conf.stream_ids[cnt++] = j;
+        }
+    }
+
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND = no ingress stream-id-list
+
+HELP_FRER_NO_STREAM_ID_LIST = Clear the list of ingress stream IDs
+DOC_CMD_DESC    = ##HELP_FRER_NO_STREAM_ID_LIST
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_NO_STREAM_ID_LIST
+DOC_CMD_EXAMPLE = no ingress stream-id-list
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! ingress
+CMD_VAR =
+RUNTIME =
+HELP    = Configure ingress
+
+! stream-id-list
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_STREAM_ID_LIST
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+    int                   i;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+
+    // Clear current stream IDs
+    for (i = 0; i < ARRSZ(conf.stream_ids); i++) {
+        conf.stream_ids[i] = VTSS_APPL_STREAM_ID_NONE;
+    }
+
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND = ingress stream-collection-id <uint>
+
+DOC_CMD_DESC    = Select the ingress streams collection that should map to this FRER instance.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE =  ingress stream-collection-id 17
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! ingress
+CMD_VAR =
+RUNTIME =
+HELP    = Configure ingress parameters
+
+! stream-collection-id
+CMD_VAR =
+RUNTIME =
+HELP    = Select the ingress streams collection that should map to this FRER instance. This cannot be used in indivudal recovery mode
+
+! <uint>
+CMD_VAR = stream_collection_id
+RUNTIME = FRER_ICLI_stream_collection_id_range
+HELP    = ID of stream collection to map to this FRER instance. This indirectly gives the ingress ports
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.stream_collection_id = stream_collection_id;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+COMMAND = no ingress stream-collection-id
+
+HELP_FRER_NO_STREAM_COLL_ID = Unset the stream collection ID
+DOC_CMD_DESC    = ##HELP_FRER_NO_STREAM_COLL_ID
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_NO_STREAM_COLL_ID
+DOC_CMD_EXAMPLE = no ingress stream-collection-id
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! ingress
+CMD_VAR =
+RUNTIME =
+HELP    = Configure ingress
+
+! stream-collection-id
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_STREAM_COLL_ID
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.stream_collection_id = VTSS_APPL_STREAM_COLLECTION_ID_NONE;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = ingress outer-tag pop
+
+DOC_CMD_DESC    = Configure whether to pop a possible outer tag from frames hitting this instance. Only used in generation mode
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = ingress outer-tag pop
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! ingress
+CMD_VAR =
+RUNTIME =
+HELP    = Configure ingress
+
+! outer-tag
+CMD_VAR =
+RUNTIME =
+HELP    = In generator mode, control whether to leave the ingressing frame's outer VLAN tag (if any) beneath the R-tag when the frames egress
+
+! pop
+CMD_VAR =
+RUNTIME =
+HELP    = Strip a possible outer VLAN tag from the ingressing frame before presenting it on egress
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.outer_tag_pop = true;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.outer_tag_pop = false;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = frer-vlan <vlan_id>
+
+DOC_CMD_DESC    = Select the VLAN ID that ingress flows get classified to.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = frer-vlan 10
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! frer-vlan
+CMD_VAR =
+RUNTIME =
+HELP    = Select the VLAN ID that ingress flows get classified to
+
+! <vlan_id>
+CMD_VAR = vid
+RUNTIME =
+HELP    = The FRER VLAN ID
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.frer_vlan = vid;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+
+IF_FLAG =
+
+COMMAND = no frer-vlan
+
+HELP_FRER_NO_FRER_VLAN = Default the VLAN ID that ingress frames get classified to
+DOC_CMD_DESC    = ##HELP_FRER_NO_FRER_VLAN
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_NO_FRER_VLAN
+DOC_CMD_EXAMPLE = no frer-vlan
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! frer-vlan
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_FRER_VLAN
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_default_get(&default_conf));
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.frer_vlan = default_conf.frer_vlan;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+
+COMMAND = egress interface <port_type_list>
+
+DOC_CMD_DESC    = Select the egress ports that this FRER instance will hit.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = egress interface gi 1/2-3
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! egress
+CMD_VAR =
+RUNTIME =
+HELP    = Select egress ports that this FRER instance will hit
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = Select egress ports that this FRER instance will hit
+
+! <port_type_list>
+CMD_VAR = port_list
+RUNTIME =
+HELP    = List of ports
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+    port_iter_t           pit;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+
+    conf.egress_ports.clear_all();
+
+    (void)icli_port_iter_init(&pit, VTSS_ISID_START, PORT_ITER_FLAGS_NORMAL);
+    while (icli_port_iter_getnext(&pit, port_list)) {
+        conf.egress_ports.set(pit.iport);
+    }
+
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+
+COMMAND = no egress interface
+
+HELP_FRER_NO_EGRESS_INTERFACE = Unset the egress interfaces of this FRER instance
+DOC_CMD_DESC    = ##HELP_FRER_NO_EGRESS_INTERFACE
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_NO_EGRESS_INTERFACE
+DOC_CMD_EXAMPLE = no egress interface
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! egress
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_EGRESS_INTERFACE
+
+! interface
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_EGRESS_INTERFACE
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_default_get(&default_conf));
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.egress_ports = default_conf.egress_ports;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+
+COMMAND = recovery algorithm {match | vector [history-length <uint>]}
+
+DOC_CMD_DESC    = Configure recovery algorithm
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = recovery algorithm vector history-length 17
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! algorithm
+CMD_VAR =
+RUNTIME =
+HELP    = Choose which recovery algorithm to run
+
+! match
+CMD_VAR = has_match
+RUNTIME =
+HELP    = Run match recovery algorithm (802.1CB, clause 7.4.3.5)
+
+! vector
+CMD_VAR =
+RUNTIME =
+HELP    = Run vector recovery algorithm (802.1CB, clause 7.4.3.4)
+
+! history-length
+CMD_VAR = has_history_len
+RUNTIME =
+HELP    = Select the vector algorithm's history length
+
+! <uint>
+CMD_VAR = history_len
+RUNTIME = FRER_ICLI_rcvy_history_len_range
+HELP    = The vector algorithm's history length
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_algorithm = has_match ? MESA_FRER_RECOVERY_ALG_MATCH : MESA_FRER_RECOVERY_ALG_VECTOR;
+
+    if (has_history_len) {
+        conf.rcvy_history_len = history_len;
+    }
+
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+
+COMMAND = no recovery algorithm
+
+HELP_FRER_NO_RECOVERY_ALGORITHM = Default the recovery algorithm
+DOC_CMD_DESC    = ##HELP_FRER_NO_RECOVERY_ALGORITHM
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_NO_RECOVERY_ALGORITHM
+DOC_CMD_EXAMPLE = no recovery algorithm
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! algorithm
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_RECOVERY_ALGORITHM
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_default_get(&default_conf));
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_algorithm   = default_conf.rcvy_algorithm;
+    conf.rcvy_history_len = default_conf.rcvy_history_len;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = recovery reset-timeout <uint>
+
+DOC_CMD_DESC    = Configure recovery function's reset-timeout in milliseconds
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = recovery reset-timeout 1000
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! reset-timeout
+CMD_VAR =
+RUNTIME =
+HELP    = Configure recovery function's reset timeout
+
+! <uint>
+CMD_VAR = reset_timeout
+RUNTIME = FRER_ICLI_rcvy_reset_timeout_range
+HELP    = Reset timeout measured in milliseconds
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_reset_timeout_ms = reset_timeout;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no recovery reset-timeout
+
+HELP_FRER_NO_RCVY_RESET_TIMEOUT = Default the recovery function's reset timeout
+DOC_CMD_DESC    = ##HELP_FRER_NO_RCVY_RESET_TIMEOUT
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_NO_RCVY_RESET_TIMEOUT
+DOC_CMD_EXAMPLE = no recovery reset-timeout
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! reset-timeout
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_NO_RCVY_RESET_TIMEOUT
+
+! <uint>
+CMD_VAR = reset_timeout
+RUNTIME = FRER_ICLI_rcvy_reset_timeout_range
+HELP    = Reset timeout measured in milliseconds
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf, default_conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_default_get(&default_conf));
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_reset_timeout_ms = default_conf.rcvy_reset_timeout_ms;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = recovery take-no-sequence
+
+DOC_CMD_DESC    = Configure whether recovery function accepts non-R-tagged frames
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = recovery take-no-sequence
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! take-no-sequence
+CMD_VAR =
+RUNTIME =
+HELP    = In the no-form, the recovery function discards frames that are not R-tagged
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_take_no_sequence = true;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_take_no_sequence = false;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = recovery individual
+
+DOC_CMD_DESC    = Configure whether individual recovery is enabled or not.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = recovery individual
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! individual
+CMD_VAR =
+RUNTIME =
+HELP    = When individual recovery is enabled, each member stream runs the recovery function before presenting it to the compound recovery function
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_individual = true;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_individual = false;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = recovery terminate
+
+DOC_CMD_DESC    = Configure whether R-Tags are to be stripped by this FRER instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = recovery terminate
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! terminate
+CMD_VAR =
+RUNTIME =
+HELP    = This option allows to strip an R-Tag from a frame before presenting it on egress
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_terminate = true;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.rcvy_terminate = false;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+    //  [no] recovery latent-error-detection [difference <uint>] [period <uint>] [reset-period <uint>]
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = recovery latent-error-detection [difference <uint>] [period <uint>] [paths <uint>] [reset-period <uint>]
+
+DOC_CMD_DESC    = Enable or disable the recovery latent error detection function.
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = recovery latent-error-detection
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! recovery
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_RECOVERY
+
+! latent-error-detection
+CMD_VAR =
+RUNTIME =
+HELP    = Enable recovery's latent error detection function (disable with no-form)
+
+! difference
+CMD_VAR = has_diff
+RUNTIME =
+HELP    = Set the maximum allowed difference between discarded packets and passed packets before triggering the detection of a latent error
+
+! <uint>
+CMD_VAR = diff
+RUNTIME = FRER_ICLI_rcvy_latent_error_diff_range
+HELP    = Choose the maximum difference measured in number of packets
+
+! period
+CMD_VAR = has_period
+RUNTIME =
+HELP    = Set the period with which the latent error test function runs
+
+! <uint>
+CMD_VAR = period
+RUNTIME = FRER_ICLI_rcvy_latent_error_period_range
+HELP    = Choose the latent error test function period measured in milliseconds
+
+! paths
+CMD_VAR = has_paths
+RUNTIME =
+HELP    = Set the number of member streams (ingress paths) that the latent error test function operates on
+
+! <uint>
+CMD_VAR = paths
+RUNTIME = FRER_ICLI_rcvy_latent_error_paths_range
+HELP    = Choose the number of member streams (ingress paths) that the latent error test function must operate on
+
+! reset-period
+CMD_VAR = has_reset_period
+RUNTIME =
+HELP    = Set the period between running the latent error reset function
+
+! <uint>
+CMD_VAR = reset_period
+RUNTIME = FRER_ICLI_rcvy_latent_reset_period_range
+HELP    = Choose the latent error reset function period measured in milliseconds
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t                   conf;
+    vtss_appl_frer_latent_error_detection_t &led_conf = conf.rcvy_latent_error_detection;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    led_conf.enable = true;
+
+    if (has_diff) {
+        led_conf.difference = diff;
+    }
+
+    if (has_period) {
+        led_conf.period_ms = period;
+    }
+
+    if (has_paths) {
+        led_conf.paths = paths;
+    }
+
+    if (has_reset_period) {
+        led_conf.reset_period_ms = reset_period;
+    }
+
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+
+NO_FORM_VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf, default_conf;
+    vtss_appl_frer_latent_error_detection_t &led_conf         = conf.rcvy_latent_error_detection;
+    vtss_appl_frer_latent_error_detection_t &led_default_conf = default_conf.rcvy_latent_error_detection;
+NO_FORM_VARIABLE_END
+
+NO_FORM_CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_default_get(&default_conf));
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    led_conf = led_default_conf;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+NO_FORM_CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = admin-state {enable | disable}
+DOC_CMD_DESC    = Enable or disable a FRER instance
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   =
+DOC_CMD_EXAMPLE = admin-state enable
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_TSN_FRER
+MODE_VAR = inst
+
+! admin-state
+CMD_VAR =
+RUNTIME =
+HELP    = Enable or disable a FRER instance
+
+! enable
+CMD_VAR = has_enable
+RUNTIME =
+HELP    = Enable this FRER instance
+
+CMD_VAR =
+RUNTIME =
+HELP    = Disable this FRER instance
+
+VARIABLE_BEGIN
+    vtss_appl_frer_conf_t conf;
+VARIABLE_END
+
+CODE_BEGIN
+    FRER_PRINT_RC(vtss_appl_frer_conf_get(inst, &conf));
+    conf.admin_active = has_enable;
+    FRER_PRINT_RC(vtss_appl_frer_conf_set(inst, &conf));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+COMMAND = no tsn frer {<uint> | all}
+
+DOC_CMD_DESC    = Delete a particular or all FRER instances
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = Used to delete a FRER instance
+DOC_CMD_EXAMPLE = no tsn frer 1
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  =
+
+CMD_MODE = ICLI_CMD_MODE_GLOBAL_CONFIG
+MODE_VAR =
+
+! no
+CMD_VAR =
+RUNTIME =
+HELP    = ##ICLI_HELP_NO
+
+! tsn
+CMD_VAR =
+RUNTIME = FRER_ICLI_frer_supported
+HELP    = ##HELP_TSN
+
+! frer
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = FRER_ICLI_existing_instance_range
+HELP    = Delete a particular FRER instance
+
+! all
+CMD_VAR = has_all
+RUNTIME =
+HELP    = Delete all FRER instances
+
+VARIABLE_BEGIN
+    uint32_t next_inst;
+VARIABLE_END
+
+CODE_BEGIN
+    if (has_all) {
+        while (vtss_appl_frer_itr(&inst, &next_inst) == VTSS_RC_OK) {
+            // Delete this FRER instance
+            inst = next_inst;
+            FRER_PRINT_RC(vtss_appl_frer_conf_del(inst));
+        }
+    } else {
+       // Delete this FRER instance
+       FRER_PRINT_RC(vtss_appl_frer_conf_del(inst));
+    }
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = show tsn frer [<range_list>] [statistics] [details]
+HELP_SHOW_FRER = Show the state or counters of one or more FRER instances
+
+DOC_CMD_DESC    = ##HELP_SHOW_FRER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_SHOW_FRER
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = show_frer
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! show
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_SHOW_FRER
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+
+! frer
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = FRER_ICLI_instance_range
+HELP    = List of FRER instances to show
+
+! statistics
+CMD_VAR = has_statistics
+RUNTIME =
+HELP    = Show statistics
+
+! details
+CMD_VAR = has_details
+RUNTIME =
+HELP    = Show detailed status or statistics
+
+CODE_BEGIN
+    ICLI_RC(FRER_ICLI_show_frer(session_id, inst_list, has_statistics, has_details));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = clear tsn frer [<range_list>] statistics
+HELP_CLEAR_FRER = Clear the counters of one or more FRER instances
+
+DOC_CMD_DESC    = ##HELP_CLEAR_FRER
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_CLEAR_FRER
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME = clear_frer
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+PROPERTY  = ICLI_CMD_PROP_GREP
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! clear
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_CLEAR_FRER
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+
+! frer
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER
+
+! <range_list>
+CMD_VAR = inst_list
+RUNTIME = FRER_ICLI_instance_range
+HELP    = The range of FRER instances to clear statistics for
+
+! statistics
+CMD_VAR =
+RUNTIME =
+HELP    = Clear counters
+
+CODE_BEGIN
+    ICLI_RC(FRER_ICLI_statistics_clear(session_id, inst_list));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+COMMAND = tsn frer <uint> reset [latent-error]
+
+HELP_FRER_RESET = If latent-error is not specified: In generation mode, this resets the sequence counter. In recovery mode, this resets all recovery algorithms for this FRER instance
+DOC_CMD_DESC    = ##HELP_FRER_RESET
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_RESET
+DOC_CMD_EXAMPLE =
+
+FUNC_NAME =
+FUNC_REUSE =
+
+PRIVILEGE = ICLI_PRIVILEGE_15
+
+CMD_MODE = ICLI_CMD_MODE_EXEC
+MODE_VAR =
+
+! tsn
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_TSN
+
+! frer
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER
+
+! <uint>
+CMD_VAR = inst
+RUNTIME = FRER_ICLI_existing_instance_range
+HELP    = FRER instance number
+
+! reset
+CMD_VAR =
+RUNTIME =
+HELP    = ##HELP_FRER_RESET
+
+!latent-error
+CMD_VAR = has_latent_error
+RUNTIME =
+HELP    = This resets a possible (sticky) latent error signal in recovery mode with latent-error-detection enabled
+
+VARIABLE_BEGIN
+    vtss_appl_frer_control_t ctrl;
+VARIABLE_END
+
+CODE_BEGIN
+    vtss_clear(ctrl);
+
+    if (has_latent_error) {
+        ctrl.latent_error_clear = true;
+    } else {
+        ctrl.reset = true;
+    }
+
+    FRER_PRINT_RC(vtss_appl_frer_control_set(inst, &ctrl));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_FRER_SHOW_CAPABILITIES = Show FRER capabilities
+COMMAND         = debug show tsn frer capabilities
+DOC_CMD_DESC    = ##HELP_FRER_SHOW_CAPABILITIES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_SHOW_CAPABILITIES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+
+! debug
+HELP    = ##ICLI_HELP_DEBUG
+CMD_VAR =
+RUNTIME =
+
+! show
+HELP    = ##ICLI_HELP_SHOW
+CMD_VAR =
+RUNTIME =
+
+! tsn
+HELP    = ##HELP_TSN
+CMD_VAR =
+RUNTIME =
+
+! frer
+HELP    = ##HELP_FRER
+CMD_VAR =
+RUNTIME =
+
+! capabilities
+HELP    = ##HELP_FRER_SHOW_CAPABILITIES
+CMD_VAR =
+RUNTIME =
+
+CODE_BEGIN
+    ICLI_RC(FRER_ICLI_show_capabilities(session_id));
+CODE_END
+CMD_END
+
+!==============================================================================
+CMD_BEGIN
+IF_FLAG =
+HELP_FRER_DEBUG_RULES = Show current FRER-installed rules
+COMMAND         = debug show tsn frer rules
+DOC_CMD_DESC    = ##HELP_FRER_DEBUG_RULES
+DOC_CMD_DEFAULT =
+DOC_CMD_USAGE   = ##HELP_FRER_DEBUG_RULES
+DOC_CMD_EXAMPLE =
+PRIVILEGE       = ICLI_PRIVILEGE_15
+PROPERTY        = ICLI_CMD_PROP_GREP
+CMD_MODE        = ICLI_CMD_MODE_EXEC
+CMD_VAR         =
+CMD_VAR         =
+CMD_VAR         =
+RUNTIME         =
+RUNTIME         =
+RUNTIME         =
+HELP            = ##ICLI_HELP_DEBUG
+HELP            = ##ICLI_HELP_SHOW
+HELP            = ##HELP_FRER
+HELP            = ##HELP_FRER_DEBUG_RULES
+
+CODE_BEGIN
+    void frer_rules_debug_dump(u32 session_id, frer_icli_pr_t pr);
+    frer_rules_debug_dump(session_id, icli_session_printf);
+CODE_END
+CMD_END
+

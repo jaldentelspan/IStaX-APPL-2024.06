@@ -1,0 +1,257 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!--
+
+ Copyright (c) 2006-2022 Microsemi Corporation "Microsemi". All Rights Reserved.
+
+ Unpublished rights reserved under the copyright laws of the United States of
+ America, other countries and international treaties. Permission to use, copy,
+ store and modify, the software and its source code is granted but only in
+ connection with products utilizing the Microsemi switch and PHY products.
+ Permission is also granted for you to integrate into other products, disclose,
+ transmit and distribute the software only in an absolute machine readable
+ format (e.g. HEX file) and only in or with products utilizing the Microsemi
+ switch and PHY products.  The source code of the software may not be
+ disclosed, transmitted or distributed without the prior written permission of
+ Microsemi.
+
+ This copyright notice must appear in any copy, modification, disclosure,
+ transmission or distribution of the software.  Microsemi retains all
+ ownership, copyright, trade secret and proprietary rights in the software and
+ its source code, including all modifications thereto.
+
+ THIS SOFTWARE HAS BEEN PROVIDED "AS IS". MICROSEMI HEREBY DISCLAIMS ALL
+ WARRANTIES OF ANY KIND WITH RESPECT TO THE SOFTWARE, WHETHER SUCH WARRANTIES
+ ARE EXPRESS, IMPLIED, STATUTORY OR OTHERWISE INCLUDING, WITHOUT LIMITATION,
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR USE OR PURPOSE AND
+ NON-INFRINGEMENT.
+
+-->
+<html>
+<head>
+ <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+ <title>User Configuration</title>
+ <link href="lib/normal.css" rel="stylesheet" type="text/css">
+ <script type="text/javascript" src="lib/config.js"></script>
+ <script type="text/javascript" src="lib/ajax.js"></script>
+ <script type="text/javascript" src="lib/dynforms.js"></script>
+ <script type="text/javascript" src="lib/validate.js"></script>
+ <script type="text/javascript">
+
+// Help page magic
+var help_page = "/help/help_user_config.htm";
+
+var reqObject;
+var miscPrivLevel = 15;
+var oVPrivLevel = genArrayInt(0, 15);
+var selectedUser = -1;
+var pageArgs = searchArgs(window.location.search);
+var pageArgsName = 'user';
+if (pageArgs[pageArgsName]) {
+    selectedUser = parseInt(pageArgs[pageArgsName], 10);
+}
+var reservedUserName = configDefaultUserNameNullStr ? "" : "admin";
+
+function changePassword()
+{
+    if (document.getElementById("password_update").value == 1) {
+        document.getElementById("new_pwd").style.display = "";
+        document.getElementById("new_pwd_again").style.display = "";
+    } else {
+        document.getElementById("new_pwd").style.display = "none";
+        document.getElementById("new_pwd_again").style.display = "none";
+    }
+}
+
+function processUpdate(req, ref)
+{
+    if (reqObject != req) {
+        reqObject = req;
+    }
+    var cfg = req.responseText.split(",");
+    UpdateIdValue('user', cfg[0]);
+    if (parseInt(cfg[0], 10) != -1) {
+        document.getElementById("new_pwd").className = "config_even";
+        document.getElementById("new_pwd_again").className = "config_odd";
+        document.getElementById("priv_lvl").className = "config_even";
+
+        document.getElementById("change_pwd").style.display = "";
+    } else {
+        document.getElementById("new_pwd").className = "config_odd";
+        document.getElementById("new_pwd_again").className = "config_even";
+        document.getElementById("priv_lvl").className = "config_odd";
+
+        document.getElementById("new_pwd").style.display = "";
+        document.getElementById("new_pwd_again").style.display = "";
+        UpdateIdValue('password_update', 1);
+    }
+    UpdateIdValue('username', unescape(cfg[1]));
+    if (selectedUser != -1 && document.getElementById('username').value == reservedUserName) {
+        document.getElementById("delete_button").style.visibility = "hidden";
+        document.getElementById('username').readOnly = "true";
+    }
+    if (parseInt(cfg[2], 10) >= 0) {
+        document.getElementById("priv_lvl").style.display = "";
+        UpdateIdSelect('priv_level', oVPrivLevel, oVPrivLevel, parseInt(cfg[2], 10));
+        if (selectedUser != -1 && document.getElementById('username').value == reservedUserName) {
+            document.getElementById("priv_level").disabled = true;
+        }
+    }
+    if (cfg[3]) {
+        miscPrivLevel = parseInt(cfg[3], 10);
+    }
+}
+
+function requestUpdate()
+{
+    var fld;
+    //Format: [user_idx],[user_name],[priv_level],[misc_priv_level]
+    if (selectedUser == -1) {
+        document.getElementById('op').innerHTML = "Add";
+        document.getElementById("delete_button").style.visibility = "hidden";
+        loadXMLDoc("/config/user_config", processUpdate);
+    } else {
+        document.getElementById('username').readOnly = "true";
+        loadXMLDoc("/config/user_config?user="+selectedUser, processUpdate);
+    }
+    fld = document.getElementById('username');
+    fld.maxLength = configUsernameMaxLen;
+    fld.size = configUsernameMaxLen;
+    fld = document.getElementById('password1');
+    fld.maxLength = configPasswordMaxLen;
+    fld.size = configPasswordMaxLen;
+    fld = document.getElementById('password2');
+    fld.maxLength = configPasswordMaxLen;
+    fld.size = configPasswordMaxLen;
+}
+
+function DeleteCfg(form)
+{
+    if (selectedUser >= 0 && confirm("Delete User?")) {
+        addHiddenParam(form, "delete", "1");
+        form.submit();
+    }
+}
+
+function checkForm(form)
+{
+    var illegalChars = /\W/;
+
+    var elem = document.getElementById("username");
+    var pw1 = document.getElementById("password1");
+    var pw2 = document.getElementById("password2");
+    if (elem && (elem.value.length || (configDefaultUserNameNullStr && elem.value.length === 0))) {
+        if (elem.value.toLowerCase() == reservedUserName) {
+            if (selectedUser == -1) {
+                if (configDefaultUserNameNullStr) {
+                     alert("Blank username is not allowed.");
+                } else {
+                    alert("Username '" + reservedUserName + "' is not allowed.");
+                }
+                return false;
+            }
+
+            if (document.getElementById("priv_level").value < miscPrivLevel) {
+                alert("Warning! The privilege level of group 'Maintenance' is " + miscPrivLevel + ".\n Change to lower privilege level will lock you out.");
+                return false;
+            }
+        }
+
+        // allow only letters, numbers, and underscores
+        if (illegalChars.test(elem.value)) {
+            return GiveAlert("The User Name contains illegal characters\nPlease use letters, numbers and underscores", elem);
+        }
+    } else {
+        return GiveAlert("Please specify a User Name", elem);
+    }
+
+    if (pw1.value != pw2.value) {
+        return GiveAlert("Passwords do not match", pw1);
+    }
+
+    return true;
+}
+
+ </script>
+</head>
+
+<body class="content" onload="requestUpdate();">
+
+<form name="useredit" method="POST" onsubmit="return checkForm();" action="/config/user_config">
+
+<h1><span id="op">Edit</span> User</h1>
+
+<table summary="User Configuration" class="config">
+ <tr class="display_header"><th colspan="2">User Settings</th></tr>
+ <tr class="config_even">
+  <td class="param_label"><label for="username">User Name</label></td>
+  <td><input type="text" id="username" name="username" maxlength="31" size="31"></td>
+ </tr>
+ <tr class="config_odd" id="change_pwd" style="display:none;">
+  <td class="param_label"><label for="password_update">Change Password</label></td>
+  <td>
+    <select name="password_update" id="password_update" style="width: 16em;" onchange="changePassword();">
+     <option value="0">No</option>
+     <option value="1">Yes</option>
+    </select>  
+</td>
+ </tr>
+ <tr class="config_even" id="new_pwd" style="display:none;">
+  <td class="param_label"><label for="password1">Password</label></td>
+  <td><input type="password" id="password1" name="password1" maxlength="31" size="31"></td>
+ </tr>
+ <tr class="config_odd" id="new_pwd_again" style="display:none;">
+  <td class="param_label"><label for="password2">Password (again)</label></td>
+  <td><input type="password" id="password2" name="password2" maxlength="31" size="31"></td>
+ </tr>
+ <tr class="config_even" id="priv_lvl" style="display:none;">
+  <td class="param_label"><label for="priv_level">Privilege Level</label></td>
+   <td>
+    <select name="priv_level" id="priv_level" style="width: 16em;">
+     <option value="0">0</option>
+     <option value="1">1</option>
+     <option value="2">2</option>
+     <option value="3">3</option>
+     <option value="4">4</option>
+     <option value="5">5</option>
+     <option value="6">6</option>
+     <option value="7">7</option>
+     <option value="8">8</option>
+     <option value="9">9</option>
+     <option value="10">10</option>
+     <option value="11">11</option>
+     <option value="12">12</option>
+     <option value="13">13</option>
+     <option value="14">14</option>
+     <option value="15">15</option>
+    </select>
+   </td>
+ </tr>
+</table>
+
+<p>
+ <input type="submit" value="Save">
+ <input type="button" value="Reset" onclick="processUpdate(reqObject);">
+ <input type="button" value="Cancel" onclick="document.location.href='users.htm';">
+</p>
+
+<p id="delete_button">
+ <input type="button" value="Delete User" onclick="DeleteCfg(this.form);">
+</p>
+
+ <input type="hidden" name="user" id="user">
+ <input type="hidden" name="changed" id="encrypted" value="0">
+
+</form>
+
+</body>
+</html>
+
+
+<!--
+    local variables:
+    mode: java
+    c-basic-offset: 4
+    tab-width: 8
+    c-comment-only-line-offset: 0
+    end:
+-->
