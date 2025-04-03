@@ -1,1 +1,1 @@
-configs/bringup_multi.mk
+configs/istax_multi.mk
