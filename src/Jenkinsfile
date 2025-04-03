@@ -1,0 +1,186 @@
+/*
+ Microchip is aware that some terminology used in this technical document is
+ antiquated and inappropriate. As a result of the complex nature of software
+ where seemingly simple changes have unpredictable, and often far-reaching
+ negative results on the software's functionality (requiring extensive retesting
+ and revalidation) we are unable to make the desired changes in all legacy
+ systems without compromising our product or our clients' products.
+*/
+
+// Job name in jenkins must match the org. name in github!
+def ORG = env.JOB_NAME.split("[/]")[0]
+
+if (ORG == "webstax2-linstax") {
+    ORG = "sw"
+}
+properties([
+        [$class: 'BuildDiscarderProperty', strategy: [$class: 'LogRotator', artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '5', numToKeepStr: '3']],
+//        [$class: 'GithubProjectProperty', projectUrlStr: 'https://bitbucket.microchip.com/projects/UNGE/repos/sw-webstax'],
+//        [$class: 'ThrottleJobProperty', categories: [], limitOneJobWithMatchingParams: false, maxConcurrentPerNode: 0, maxConcurrentTotal: 1, paramsToUseForLimit: '', throttleEnabled: true, throttleOption: 'project']
+        ])
+
+def tag_name = "x"
+def isRelease = env.BRANCH_NAME.matches(/(.+-(soak|rel|snapshot))|(.+\.snapshot)/)
+def isSnapshot = env.BRANCH_NAME.matches(/(.+-snapshot)|(.+\.snapshot)/)
+
+def getConfig(tag) {
+    def matcher = readFile('build/release/release.yaml') =~ "${tag}: APPL-(.+)"
+    matcher ? matcher[0][1] : null
+}
+
+node('blademaster') {
+
+    stage("SCM Checkout") {
+        checkout([
+            $class: 'GitSCM',
+            branches: scm.branches,
+            doGenerateSubmoduleConfigurations: scm.doGenerateSubmoduleConfigurations,
+            extensions: scm.extensions + [[$class: 'CloneOption', noTags: false, reference: '/gitref/webstax2.git', shallow: false]],
+            submoduleCfg: [],
+            userRemoteConfigs: scm.userRemoteConfigs
+        ])
+        sh "git reset --hard; git clean -ffdx"
+    }
+
+    currentBuild.result = 'SUCCESS' // updated by catchError if needed
+    stage("Set GitHub pending") {
+        step([$class: 'GitHubSetCommitStatusBuilder', statusMessage: [content: 'Build in progress']])
+    }
+
+    String release_flags = ''
+    if (isSnapshot) {
+        // During development, we don't run the RS1014 check, because the
+        // features listed in the RS1014 Excel sheet are under development, and
+        // therefore it will most likely fail.
+        release_flags = '--no-rs1014'
+    }
+
+    if (isRelease) {
+        stage("Release build") {
+            catchError {
+                sh "cd build/release; ./webstax_release.rb -v debug ${release_flags}"
+            }
+        }
+
+        stage("Aggregate artifacts") {
+            tag_name = getConfig("friendly_name_cur")
+            echo "Tagname is: ${tag_name}"
+
+            catchError {
+                sh "./build/release/aggr/conf.rb ${release_flags}"
+            }
+            archive 'build/obj/results/**/*'
+            archive 'build/release/aggr/*'
+            archive 'build/obj/aggr/webstax-release-packet/*, build/obj/aggr/webstax-release-packet/**/*'
+            archive 'build/obj/aggr/input/frr/*'
+            archive 'build/release/release.yaml'
+            publishHTML([ allowMissing: false,
+                          alwaysLinkToLastBuild: false,
+                          keepAll: true,
+                          reportDir: 'build/obj/aggr/webstax-release-packet',
+                          reportFiles: 'status.html',
+                          reportName: 'Build Target Overview'])
+        }
+
+    } else {
+        stage("Compile and analysis") {
+            catchError {
+                sh "cd build/tools/chk_scripts && ./run_chks.rb --skip-doxy-chk --skip-rs1014-chk"
+            }
+        }
+
+        stage("Archiving results") {
+            catchError {
+                archive 'build/obj/results/**/*'
+                publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: true, reportDir: 'build/obj/results/reports', reportFiles: 'code_static_chks_results.html', reportName: 'Build Target Overview'])
+            }
+        }
+    }
+
+    stage("Send mails") {
+        // Prevent this step from making the whole thing fail by encapsulating
+        // it in a 'try' with an empty 'catch'
+        try {
+            step([$class: 'Mailer', notifyEveryUnstableBuild: true,
+                  recipients: emailextrecipients([[$class: 'CulpritsRecipientProvider'],
+                                                  [$class: 'RequesterRecipientProvider']])])
+        } catch (Exception ex) {
+        }
+    }
+
+    stage("Set GitHub Status") {
+        step([
+            $class: 'GitHubCommitStatusSetter',
+            errorHandlers: [[$class: 'ShallowAnyErrorHandler']],
+            statusResultSource: [
+                $class: 'ConditionalStatusResultSource',
+                results: [
+                    [$class: 'BetterThanOrEqualBuildResult', result: 'SUCCESS', state: 'SUCCESS', message: currentBuild.description],
+                    [$class: 'BetterThanOrEqualBuildResult', result: 'FAILURE', state: 'FAILURE', message: currentBuild.description],
+                    [$class: 'AnyBuildResult', state: 'FAILURE', message: 'Loophole']
+                ]
+            ]
+        ])
+    }
+
+}
+
+if (ORG == "sw" && isRelease && (currentBuild.result == 'SUCCESS' || currentBuild.result == null)) {
+    stage("Deploy input") {
+        timeout(time:5, unit:'DAYS') {
+            DPATH = input message: "Deploy to release directory?",
+                    id: "Deploy",
+                    parameters: [string(defaultValue: "${tag_name}",
+                                 description: 'The version number to deploy under',
+                                 name: 'VERSION_TAG')]
+        }
+    }
+
+    node('master') {
+        stage("Deploy") {
+            unarchive mapping: ['build/obj/aggr/webstax-release-packet/' : '.']
+            unarchive mapping: ['build/release/aggr/' : '.']
+            unarchive mapping: ['build/obj/aggr/input/frr/' : '.']
+
+            // For some reason, the unarchive forgets about file modes, so make
+            // rvm_wrap.sh executable
+            sh "chmod +x ./build/release/aggr/rvm_wrap.sh ./build/release/aggr/mscc-ent-open-source-upload.rb"
+
+            def reltype
+            if (isSnapshot) {
+                reltype = "Snapshots"
+            } else {
+                reltype = "Releases"
+            }
+            def relpath = "/import/dk_software/${reltype}/WebStaX2/04_xx/${DPATH}"
+            def relsvr  = "jenkinsg@soft00"
+
+            // scp to change credentials to "jenkinsg" (network destination path)
+            sh "ssh ${relsvr} mkdir -p ${relpath}"
+            sh "scp -r ./build/obj/aggr/webstax-release-packet/* ${relsvr}:${relpath}"
+
+            // Remove SDK and toolchain (cannot do that in conf.rb, because it
+            // must be present there in order to upload to Amazon.
+            sh "ssh ${relsvr} rm -f ${relpath}/mscc-brsdk-*"
+            sh "ssh ${relsvr} rm -f ${relpath}/mscc-toolchain-*"
+
+            manager.addInfoBadge("Deployed as ${DPATH}")
+
+            // BSP Amazon S3 upload
+            sh "./build/release/aggr/rvm_wrap.sh ./build/release/aggr/mscc-ent-open-source-upload.rb ./build/obj/aggr/webstax-release-packet/mscc-brsdk-*"
+
+            // Toolchain Amazon S3 upload
+            sh "./build/release/aggr/rvm_wrap.sh ./build/release/aggr/mscc-ent-open-source-upload.rb -d toolchain ./build/obj/aggr/webstax-release-packet/mscc-toolchain-*"
+
+            // RedBoot Amazon S3 upload
+            sh "./build/release/aggr/rvm_wrap.sh ./build/release/aggr/mscc-ent-open-source-upload.rb -d redboot ./build/obj/aggr/webstax-release-packet/SMBStaX*/redboot/mscc-redboot-*"
+
+            // FRR Amazon S3 upload
+            sh "./build/release/aggr/rvm_wrap.sh ./build/release/aggr/mscc-ent-open-source-upload.rb -d frr ./build/obj/aggr/input/frr/frr-*"
+
+            manager.addInfoBadge("BSP Uploaded to Amazon S3")
+            sh "rm -rf build"
+        }
+    }
+}
+
