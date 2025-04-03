@@ -1,0 +1,138 @@
+:sectnums:
+:toc: macro
+= PTP Calibration Configuration Guide
+
+include::Microsemi.adoc[]
+
+== Introduction
+
+This configuration guide provides information on how to make Port-to-port and 1PPS calibrations to improve
+timing by adjusting the ingress/egress latencies.
+
+== Feature Description
+
+=== Persistence of Calibration Results
+
+The results from performing the calibrations described below are saved to the flash so that they
+are persistent even if the device is power-cycled or rebooted.
+
+=== Persistence to reload-defaults
+
+The results from performing the calibrations described below are persistent also across a
+reload-defaults.
+
+If a reload-defaults shall reset the calibration to built-in defaults, this should be specified as a parameter
+to reload-defaults i.e:
+
+    reload-defaults reset-calib
+
+=== Automatic Adjustment of Timestamp Plane Reference
+
+The CLI features a command that measures the difference T2-T1 for a PTP port in loopback mode and then automatically
+adjusts the egress and ingress latencies of the port so that T2 and T1 become equal.
+
+The calibration performed by this command is for the mode only in which the port is actually configured to run.
+To make a calibration for all modes supported by the port, the command will have to be repeated for each mode.
+
+The syntax for the command is:
+
+    ptp cal t-plane <port_to_cal> <ext/int>
+
+The option 'ext' specifies that an external loopback is being used. When the 'int' option is used, the port shall be
+configured for internal loopback.
+
+Note: For systems that has a large linkup-to-linkup latency variation (uncompensated serial-to-parallel barrel shifter
+position) the calibration takes down the link multiple times to ensure that the calibration is done to the middle
+value (not mean value).
+
+=== Port-to-port calibration
+
+The CLI features a command for calibrating a PTP port with respect to another PTP port (reference port) of the same
+switch.
+
+The calibration performed by this command is for the mode only in which the port is actually configured to run.
+To make a calibration for all modes supported by the port, the command will have to be repeated for each mode.
+
+The syntax for the command is:
+
+    ptp cal p2p <reference_port> <port_to_cal> <cable_latency>
+
+The PTP slave instance associated with the port being calibrated should run in probe mode so that no adjustments are being
+made to the PTP time. The calibration procedure will measure the differences T2-T1 and T4-T3 and considering also the
+cable latency make the following adjustments:
+
+1) Adjust ingress latency for port with T2-T1-cable_latency
+    
+2) Adjust egress latency for port with T4-T3-cable_latency
+
+Note: For systems that has a large linkup-to-linkup latency variation (uncompensated serial-to-parallel barrel shifter
+position) the calibration takes down the link multiple times to ensure that the calibration is done to the middle
+value (not mean value).
+
+=== Calibration to External Reference using 1PPS
+
+The CLI features a command for calibrating a PTP port with respect to an external reference by means of the 1PPS signal.
+
+The calibration performed by this command is for the mode only in which the port is actually configured to run.
+To make a calibration for all modes supported by the port, the command will have to be repeated for each mode.
+
+The syntax for the command is:
+
+    ptp cal port <port_to_cal> <cable_latency> start [synce]
+
+The synce option makes the port under calibration lock its clock frequency to the reference using SyncE.
+
+As part of the calibration procedure, the PTP slave instance associated with the port under calibration will lock its
+phase to the reference. Once the PTP slave is fully locked and stabilized, the calibration will measure the mean path
+delay and make the following adjustments:
+
+1) Ingress latency = Ingress latency + (MeanPathDelay - cable_latency)/2
+
+2) Egress latency = Egress latency + (MeanPathDelay - cable_latency)/2
+
+Note: Following a successful calibration, the mean path delay shall be equal to the cable latency.
+
+Note: For systems that has a large linkup-to-linkup latency variation (uncompensated serial-to-parallel barrel shifter
+position) the calibration takes down the link multiple times to ensure that the calibration is done to the middle
+value (not mean value).
+
+=== Calibration of 1PPS skew
+
+The 'ptp cal port' command (above) calibrates a PTP port to an external reference using 1PPS. This calibration does however
+not take into account the output delay of the 1PPS signal for the port under calibration.
+
+In order to make the 1PPS output of the device under calibration coincide with the 1PPS of the reference, the calibration
+needs to compensated for the 1PPS skew.
+
+The CLI features a command for adjusting the port calibration for the 1PPS output skew.
+
+The calibration performed by this command is for the mode only in which the port is actually configured to run.
+To make a calibration for all modes supported by the port, the command will have to be repeated for each mode.
+
+The syntax for the command is:
+
+    ptp cal port <port_to_cal> <cable_latency> offset <skew>
+
+Note: For systems that has a large linkup-to-linkup latency variation (uncompensated serial-to-parallel barrel shifter
+position) the calibration takes down the link multiple times to ensure that the calibration is done to the middle
+value (not mean value).
+
+=== 1PPS Input Calibration
+
+The CLI features a command for adjusting the port calibration for the 1PPS input delay.
+
+The syntax for the command is:
+
+    ptp cal 1pps <cable_latency>
+
+Before issuing the command, the 1PPS output should be connected to the 1PPS input using a cable with a known delay.
+The cable shall be as short as possible.
+
+The command will enable the 1PPS output and sample the LTC time on the 1PPS input. The sampled LTC time reflects a delay 
+is composed as follows: 1PPS output buffer delay + 1PPS input delay + Cable latency
+
+The 1PPS output buffer delay is typically in the range of 1 ns. The 1PPS input delay should be calculated and saved for
+later use when PTP is using the 1PPS input.
+
+
+_End of Document._

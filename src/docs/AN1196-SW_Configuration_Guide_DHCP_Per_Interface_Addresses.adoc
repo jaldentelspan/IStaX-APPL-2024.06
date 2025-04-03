@@ -1,0 +1,231 @@
+= AN1196 Software Configuration Guide - DHCP Pool Per-Interface Addresses
+Martin Eskildsen, martin.eskildsen@microsemi.com
+:sectnums:
+:toc: macro
+:icons: font
+:svg_or_png: svg
+
+include::Microsemi.adoc[]
+
+== Introduction
+
+This document briefly describes CLI-based usage of DHCP pool per-interface
+addresses, also known as _reserved addresses_.
+
+== Feature Description
+
+This feature aims to provide an ability to configure a DHCP pool such that there is a 1:1 mapping between an Ethernet port interface and
+the IP address offered on exactly that port interface.
+
+A primary use-case is when a switch device has only one directly attach client per port, for some subset of ports. In that case it can be convenient
+to lock the IP address of the device attached to each port, as this simplifies client device replacement in a production environment:
+Assume, say, a sensor of some kind is attached to interface `Fa 1/4`, and the sensor malfunctions. The service technician will simply disconnect
+the failing device, replace it and connect the new device -- which will then via DHCP receive exactly the same IP configuration as the
+failed device. It is then, of course, up to a network management system to perform additional configuration of the new device if it
+needs it, but at least the network management system doesn't have to somehow search the network for the replacement device IP.
+
+NOTE: Except where explicitly noted, all mentions of an interface are in relation to a specific pool. It is valid for the same
+physical interface to be included in multiple pools that service different VLAN interfaces. Configuration consistency in
+that case is the responsibility of the system administrator.
+
+=== Example
+
+* Assume VLAN interface 42 with IP 10.42.0.1/16
+* Assume ports `Fa 1/1-4` are members of VLAN 42
+* Assume we create a DHCP pool for that network, 10.42.0.0/16
+* Then we want to be able to say:
+** A DHCP `DISCOVER/REQUEST` arriving on ` Fa 1/1` shall receive IP 10.42.1.100/16
+** And on `Fa 1/2` it shall receive 10.42.55.3/16
+
+But then what about `Fa 1/3` and `Fa 1/4`? It depends on whether the pool is configured to only hand out reserved addresses or not. If it is, only the two
+addresses for `Fa 1/1` and `Fa 1/2` are available -- and `Fa 1/3` and `Fa 1/4` won’t service DHCP clients.
+
+On the other hand, if the pool isn't locked to reserved addresses, then `Fa 1/3` and `Fa 1/4` will hand out non-reserved addresses
+from the remaining free addresses of the configured pool network, 10.42.0.0/16. The set of remaining address is:
+
+* The IP network (10.42.0.0/16), minus:
+** The VLAN interface address, e.g. 10.42.0.1
+** The set of per-interface addresses, 10.42.1.100 and 10.42.55.3
+** Any excluded address ranges
+** (And any already active DHCP client addresses)
+
+The relevant parts of the configuration would look similar to this:
+----
+# show running-config
+
+! Globally enable the DHCP server function
+ip dhcp server
+
+! Create the VLAN and VLAN interface that will be serving DHCP
+vlan 42
+
+interface vlan 42
+ ip address 10.42.0.1 255.255.0.0
+ ip dhcp server
+
+! (Port VLAN membership setup omitted)
+
+! Create the pool
+ip dhcp pool my_pool
+ network 10.42.0.0 255.255.0.0
+ broadcast 10.42.255.255
+ lease 1 0 0
+
+ ! Specify per-interface addresses for Fa 1/1 and Fa 1/2:
+ address 10.42.1.100 interface FastEthernet 1/1
+ address 10.42.55.3 interface FastEthernet 1/2
+
+ ! Only hand out per-interface addresses:
+ !   reserved-only
+ ! Or hand out both per-interface addresses and normal dynamic addresses
+ !   no reserved-only
+----
+
+<<<
+
+== Reserved-Only vs. Not Reserved-Only
+The above configuration can be illustrated as follows. The DHCP Server Switch has numerous interfaces with clients attached.
+One of those clients is a simple layer 2 ethernet switch with three attached clients. The two first interfaces on the DHCP
+Server Switch hand out the per-interface addresses, and the remaining interfaces hand out available addresses from the pool.
+
+NOTE: The Layer 2 Switch is assumed to have a static IP.
+
+.Pool With Per-Interface Addresses, Not Reserved-Only
+image::AN1196-SW_Configuration_Guide_DHCP_Per_Interface_Addresses/example-1.{svg_or_png}[]
+
+If, however, the pool is placed in reserved-only mode, only the two clients attached to Fa 1/1 and Fa 1/2 will be offered
+addresses:
+
+----
+Switch# configure terminal
+Switch(config)# ip dhcp pool my_pool
+Switch(config-dhcp-pool)# reserved-only
+Switch(config-dhcp-pool)# end
+----
+
+.Pool With Per-Interface Addresses, Reserved-Only
+image::AN1196-SW_Configuration_Guide_DHCP_Per_Interface_Addresses/example-2.{svg_or_png}[]
+<<<
+This would also apply if the layer 2 switch was attached to e.g. Fa 1/1: Only one of its clients would be offered the per-interface
+address:
+
+.Pool With Per-Interface Addresses, Switch on Per-Interface Port
+image::AN1196-SW_Configuration_Guide_DHCP_Per_Interface_Addresses/example-4.{svg_or_png}[]
+
+If the pool isn't reserved-only, the same situation applies to the L2 Switch clients: Only one of them will be offered an address,
+whereas the clients directly connected to the DHCP Server Switch on interfaces without a per-interface address will all be offered
+addresses from the pool.
+
+.Pool With Per-Interface Addresses, Not Reserved-Only
+image::AN1196-SW_Configuration_Guide_DHCP_Per_Interface_Addresses/example-3.{svg_or_png}[]
+
+WARNING: In this case the three clients attached to the Layer 2 switch will compete for the sole available address offered by Fa 1/1 on the
+DHCP Server Switch. It is generally non-deterministic which device "wins", so this configuration should be avoided.
+
+<<<
+
+== Configuration
+Per-interface addresses are available for DHCP pools of type 'network' only. They do not make sense for host pools, as those
+only have one address to offer anyway.
+
+The following four configuration commands are available in the DHCP pool configuration sub-mode:
+
+.Per-Interface Address Configuration Commands
+[options="header"]
+|==================================================================================================================================
+|Command                                             | Description
+|`address <ipv4_address> interface <interface_name>` | Create/modify a per-interface address entry.
+|`no address <ipv4_address>`                         | Delete a per-interface address entry.
+|`reserved-only`                                     | Only offer per-interface addresses.
+|`no reserved-only`                                  | Offer both per-interface addresses and normal dynamic addresses from the pool.
+|==================================================================================================================================
+
+The following rules apply:
+
+* An interface can have only one per-interface address
+* All per-interface addresses must be unique
+* An interface with a per-interface address will only offer that one address to clients
+* A per-interface address must belong to the pool network
+
+NOTE: The above rules are per pool. A particular physical port can be member of
+different VLANs and different pools, and offer different per-interface addresses in each pool.
+
+WARNING: Changing per-interface address configuration for an existing pool may invalidate existing bindings.
+
+The rules governing binding expiry are:
+
+* `reserved-only` => `no reserved-only`: Keep bindings, the pool of available addresses simply grows
+* `no reserved-only` => `reserved-only`: Clear all bindings
+* Add or Change per-interface address: Clear all bindings; it could be an already-in-use IP, or an interface with other, active, bindings
+* Delete per-interface address: Clear binding for that address only
+* Link-down on an interface with a per-interface address: Clear the binding. This ensures that the directly connected client device
+  replacement scenario works: When the failed device is removed, link-down ensues. When the replacement device powers up and
+  link-up ensues, this device will obtain the per-interface address.
+
+WARNING: Adding a reserved entry on an interface that has multiple existing clients implies
+that the existing clients won’t be able to renew their bindings; they must compete for the
+single available address on the interface. This will ultimately leave all but one client without DHCP-served IP.
+
+<<<
+
+== Monitoring
+Per-interface addresses introduce no new monitoring commands, but merely extends the output from certain DHCP pool monitoring commands.
+
+.Per-Interface Address Monitoring Commands
+[options="header"]
+|==================================================================================================================================
+|Command                                             | Description
+|`show ip dhcp pool [<pool_name>]`                   | Display per-pool information. All pools are listed if the `pool_name` is omitted.
+|`show ip dhcp server binding [...]`                 | Display binding information. Several filters are available, for filtering on state and/or type.
+|==================================================================================================================================
+
+Examples:
+----
+Switch# show ip dhcp pool
+
+Pool Name: my_pool
+----------------------------------------------
+  Type is network
+  IP is 10.42.0.0
+  Subnet mask is 255.255.0.0
+  Subnet broadcast address is 10.42.255.255
+  Lease time is 1 days 0 hours 0 minutes
+  Default router is -
+  Domain name is -
+  DNS server is -
+  NTP server is -
+  Netbios name server is -
+  Netbios node type is -
+  Netbios scope identifier is -
+  NIS domain name is -
+  NIS server is -
+  Vendor class information is -
+  Client identifer is -
+  Hardware address is -
+  Client name is -
+  Is restricted to reserved addresses:
+    10.42.1.100 on interface FastEthernet 1/1
+    10.42.55.3 on interface FastEthernet 1/2
+----
+
+As can be seen, the per-interface addresses are listed at the end of the output.
+
+----
+Switch# show ip dhcp server binding
+
+IP: 10.42.1.100
+----------------------------------------------
+  State is committed
+  Binding type is automatic
+  Pool name is my_pool
+  Server ID is 10.42.0.1
+  VLAN ID is 42
+  Subnet mask is 255.255.0.0
+  Client identifier is type of MAC address that is ..:..:..:..:..:..
+  Hardware address is ..:..:..:..:..:..
+  Lease time is 1 days 0 hours 0 minutes 0 seconds
+  Expiration is 12 hours 39 minutes 8 seconds
+----
+
+The above output shows that the IP is currently committed to a client.
+

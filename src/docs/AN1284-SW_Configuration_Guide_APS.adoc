@@ -1,0 +1,276 @@
+:sectnums:
+:toc:
+
+= APS Configuration Guide
+
+== Introduction
+
+This document explains how to setup Automatic Protection Switching (APS)
+features. This module implements the APS protocol and linear protection
+switching mechanisms for point-to-point VLAN-based ETH SNC in Ethernet transport
+networks.
+
+Automatic Protection Switching is defined by the ITU G.8031 standard.
+
+=== ITU G.8031
+Protection switching is a fully allocated survivability mechanism. It is fully
+allocated in the sense that the route and bandwidth of the protection entity is
+reserved for a selected working entity.
+
+ITU-T Rec. G.8031 specifies linear 1+1 protection switching architecture and
+linear 1:1 protection switching architecture. The linear 1+1 protection
+switching architecture operates with either unidirectional or bidirectional
+switching. The linear 1:1 protection switching architecture operates with
+bidirectional switching.
+
+==== 1+1 Protection
+In the linear 1+1 protection switching architecture, a protection transport
+entity is dedicated to each working transport entity. The normal traffic is
+copied and fed to both working and protection transport entities with a
+permanent bridge at the source of the protected domain. The traffic on working
+and protection transport entities is transmitted simultaneously to the sink of
+the protected domain, where a selection between the working and protection
+transport entities is made based on some predetermined criteria, such as server
+defect indication.
+Although selection is made only at the sink of the protected domain in linear
+1+1 protection switching architecture, bidirectional 1+1 protection switching
+needs APS coordination protocol so that selectors for both direction selects the
+same entity. On the other hand, unidirectional 1+1 protection switching does not
+need APS coordination protocol.
+
+==== 1:1 Protection
+In the linear 1:1 protection switching architecture, the protection transport
+entity is dedicated to the working transport entity. However, the normal traffic
+is transported either on the working transport entity or on the protection
+transport entity using a selector bridge at the source of the protected domain.
+The selector at the sink of the protected domain selects the entity which
+carries the normal traffic. Since source and sink need to be coordinated to
+ensure that the selector bridge at the source and the selector at the sink
+select the same entity, APS coordination protocol is necessary.
+
+=== APS Protocols
+APS information is carried within the APS PDU which is one of a suite of
+Ethernet OAM PDUs. OAM PDU formats for each type of Ethernet OAM operation are
+defined in ITU-T Rec. Y.1731.
+
+== Configuration
+In the normal case, an APS configuration requires CFM MEP instances to be
+instantiated in both ends of a protected flow.
+
+An example of an APS configuration is shown below, with the associated CFM
+configuration:
+
+[source, log]
+----
+# show running-config feature cfm all-defaults
+Building configuration...
+cfm sender-id-tlv disable
+cfm port-status-tlv disable
+cfm interface-status-tlv disable
+cfm organization-specific-tlv disable
+!
+cfm domain MyDomain
+ format none
+ level 3
+ sender-id-tlv chassis-management
+ port-status-tlv enable
+ interface-status-tlv enable
+ organization-specific-tlv defer
+ service MyService
+  format icc "ICC000MEG0000"
+  type port
+  continuity-check interval 1s
+  sender-id-tlv defer
+  port-status-tlv defer
+  interface-status-tlv defer
+  organization-specific-tlv defer
+  mep 201
+   direction down
+   interface GigabitEthernet 1/2
+   vlan 100
+   pcp 0
+   no smac
+   remote mep 200
+   continuity-check
+   alarm-level 2
+   alarm-time-present 2500
+   alarm-time-absent 10000
+   admin-state enable
+   exit
+  mep 301
+   direction down
+   interface GigabitEthernet 1/3
+   vlan 100
+   pcp 6
+   no smac
+   remote mep 300
+   continuity-check
+   alarm-level 1
+   alarm-time-present 2500
+   alarm-time-absent 10000
+   admin-state enable
+   exit
+!
+
+# show running-config feature aps all-defaults
+Building configuration...
+aps 10
+ working-mep domain MyDomain service MyService mep-id 201
+ protect-mep domain MyDomain service MyService mep-id 301
+ mode 1-for-1
+ no revertive
+ wait-to-restore 300
+ hold-off-time 0
+ admin-state disable
+
+----
+
+=== Configuration of parameters
+The syntax for APS global level CLI configuration command is:
+[source, log]
+----
+aps <inst>
+----
+Where:
+----
+inst                    APS instance number
+----
+The syntax for APS level CLI configuration command is:
+[source, log]
+----
+admin-state { enable | disable }
+hold-off-time <hold_off>
+mode { 1-for-1 | bidirectional-1-plus-1 | unidirectional-1-plus-1 [ tx-aps ] }
+no hold-off-time <hold_off>
+no protect-mep
+no revertive
+no wait-to-restore <wtr>
+no working-mep
+protect-mep domain <md_name> service <ma_name> mep-id <mepid>
+revertive
+wait-to-restore <wtr>
+working-mep domain <md_name> service <ma_name> mep-id <mepid>
+----
+Where:
+----
+admin-state             Enable or disable this APS instance
+hold-off-time           When a new (or more severe) defect occurs, the hold-off
+                        timer will be started and the event will be reported
+                        after the timer expires.
+mode                    Specify the APS' architecture and direction
+no                      Negate a command or set its defaults
+protect-mep             Specify which MEP provides signal-fail for the protect
+                        port. The domain parameters <md_name> service <ma_name>
+                        mep-id <mepid> refer to the Domain, Service and MEP
+                        defined as part the CFM module. The specified MEP must be
+                        a port MEP.
+revertive               Traffic switches back to the working port after the
+                        wait-to-restore timer has expired after the defect
+                        conditions causing a switch have cleared.
+wait-to-restore         Only used in revertive mode. Indicates the number of
+                        seconds after a defect has cleared until operation is
+                        switched back to the working port.
+working-mep             Specify which MEP provides signal-fail for the working
+                        port. The domain parameters <md_name> service <ma_name>
+                        mep-id <mepid> refer to the Domain, Service and MEP
+                        defined as part the CFM module. The specified MEP must
+                        be a port MEP.
+1-for-1                 1:1, that is, source determines which port traffic goes
+                        into.
+bidirectional-1-plus-1  Bidirectional 1+1, that is, traffic goes into both
+                        ports, and sink selects based on local defects and APS
+                        PDUs received from the far end.
+unidirectional-1-plus-1 Unidirectional 1+1, that is, traffic goes into both
+                        ports, and sink selects exclusively based on local
+                        defects.
+tx-aps                  Transmit APS PDUs even in unidirectional 1+1. Reception
+                        of APS PDUs in this mode are only used for informational
+                        purposes.
+----
+An example is shown below:
+----
+(config)# aps 10
+(config-aps)# working-mep domain MyDomain service MyService mep-id 201
+(config-aps)# protect-mep domain MyDomain service MyService mep-id 301
+(config-aps)# mode unidirectional-1-plus-1 tx-aps
+(config-aps)# revertive
+(config-aps)# wait-to-restore 200
+(config-aps)# hold-off-time 500
+(config-aps)# admin-state enable
+----
+=== Using control commands
+The syntax for APS level CLI command is:
+[source, log]
+----
+aps <inst> clear
+aps <inst> exercise
+aps <inst> freeze
+aps <inst> lockout
+aps <inst> switch { force | manual { protect-to-working | working-to-protect } }
+#
+----
+Where:
+----
+clear              Clear a switchover, exercise request and a WTR condition
+exercise           Exercise the APS instance. Use 'aps <inst> clear' to
+                   clear the request.
+freeze             Freezes the state of the APS instance. While in this mode,
+                   additional near-end commands, condition changes, and received
+                   APS information are ignored. Use 'no aps <inst> freeze' to
+                   get out of this mode.
+lockout            Lockout APS instance of protection. Use 'aps <inst> clear' to
+                   clear the request.
+switch             Request a switchover from the working path to the protection
+                   path or vice versa. Use 'aps <inst> clear' to clear the
+                   request.
+force              Causes a switchover to protect if no lockout is in effect.
+manual             Causes a switchover if the signal is good and no lockout is
+                   in effect.
+protect-to-working Causes a manual signal switchover from the protection path to
+                   the  working path if the protection path signal has not
+                   failed.
+working-to-protect Causes a manual signal switchover from the working path to
+                   the protection path whether or not the working path signal is
+                   active or not.
+
+----
+Example:
+----
+# aps 10 switch manual protect-to-working
+----
+
+=== Show Status
+
+The syntax of the show aps CLI command is:
+[source, log]
+----
+show aps [ <range_list> ] [ statistics ]
+----
+Where:
+----
+<range_list>    A list of APS instance ranges.
+statistics      Show APS PDU statistics.
+----
+Example:
+----
+# show aps 1,10,20-30
+Failure of Protocol defect abbreviations:
+C: dFOP-CM, Configuration Mismatch (received APS PDU on working interface within last 17.5 seconds).
+P: dFOP-PM, Provisioning Mismatch (far and near ends are not using the same mode; bidir only)
+N: dFOP-NR, No Response (far end hasn't agreed on 'Requested Signal' within 50 ms; bidir only)
+T: dFOP-TO, Time Out (near end hasn't received a valid APS PDU within last 17.5 seconds; bidir only)
+
+                                          Working   Protect   Tx APS    Rx APS
+Inst Operational State Protection State   MEP State MEP State R/S   R B R/S   R B Dfcts Command
+---- ----------------- ------------------ --------- --------- --------- --------- ----- -----------------
+   1 Administratively disabled
+  10 Active            Signal Fail (P)    SF        SF        SF-P  0 0 NR    0 0  ---T Forced switch
+#
+#
+# show aps 1,10 statistics
+Inst Rx Valid     Rx Invalid   Tx
+---- ------------ ------------ ------------
+   1            0            0            0
+  10            0            0          251
+#
+

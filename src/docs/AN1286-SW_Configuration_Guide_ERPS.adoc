@@ -1,0 +1,403 @@
+:sectnums:
+:imagesdir: ./AN1286-SW_Configuration_Guide_ERPS
+:toc:
+
+= ERPS Configuration Guide
+
+
+== Introduction
+
+This document explains how to setup Ethernet Ring Protection Switching (ERPS)
+features. Ethernet Ring Protection Switching is defined by the ITU G.8032 standard.
+This implementation conforms to ITUT-G.8032(V1) and ITUT-G.8032(V2).
+
+The ITU G.8032 standard defines the automatic protection switching (APS) protocol and protection switching mechanisms for Ethernet layer network (ETH) ring topologies.
+The protection protocol defined in ITU G.8032 enables protected point-to-point, point-to-multipoint and multipoint-to-multipoint connectivity within a ring or interconnected rings, called "multi-ring/ladder network" topology.
+The ETH ring maps to the physical layer ring structure.
+
+Each Ethernet ring node is connected to adjacent Ethernet ring nodes participating in the same Ethernet ring, using two independent links. 
+A ring link is bounded by two adjacent Ethernet ring nodes and a port for a ring link is called a ring port.
+The minimum number of Ethernet ring nodes in an Ethernet ring is two.
+
+Loop avoidance in an Ethernet ring is achieved by guaranteeing that, at any time, traffic may flow on all but one of the ring links. 
+This particular link is called the ring protection link (RPL) and under normal conditions this ring link is blocked, i.e., not used for service traffic.
+One designated Ethernet ring node, the RPL owner node, is responsible for blocking traffic at one end of the RPL.
+Under an Ethernet ring failure condition, the RPL owner node is responsible for unblocking its end of the RPL,
+unless the RPL has failed, allowing the RPL to be used for traffic. The other Ethernet ring node adjacent to the RPL,
+the RPL neighbour node, may also participate in blocking or unblocking its end of the RPL.
+
+The following conditions of the Ethernet ring are supported:
+
+* Signal fail (SF) – When an SF condition is detected on a ring link and it is determined to be a "stable" failure, Ethernet ring nodes adjacent to the failed ring link initiate the protection switching mechanism.
+* No request (NR) – The condition when no local protection switching requests are active.
+
+The following administrative commands are supported:
+
+* Forced switch (FS) – This command forces a block on the ring port where the command is issued.
+* Manual switch (MS) – In the absence of a failure or FS, this command forces a block on the ring port where the command is issued.
+* Clear – The Clear command, at the Ethernet ring node, is used for the following operations.
+** Clearing an active local administrative command (e.g., FS or MS).
+** Triggering reversion before the wait to restore (WTR) or wait to block (WTB) timer expires in the case of revertive operation.
+** Triggering reversion in the case of non-revertive operation.
+
+
+Revertive and non-revertive switching.
+
+* In revertive operation, after the condition(s) causing a switch has/have cleared, the traffic channel is restored to the working transport entity, i.e., blocked on the RPL. If a defect is cleared, the traffic channel reverts after the expiry of a WTR timer, which is used to avoid toggling protection states in the case of intermittent defects.
+* In non-revertive operation, the traffic channel continues to use the RPL, if it has not failed, after a switch condition has cleared.
+
+Protection switching shall be performed when:
+
+* SF is declared on one of the ring links and the detected SF condition has a higher priority than any other local request or far-end request
+* the received R-APS message requests to switch and it has a higher priority than any other local request
+* initiated by operator control (e.g., FS, MS) if it has a higher priority than any other local request or far-end request.
+
+=== ERPS Protocols
+ERPS information is carried within the R-APS PDU which is one of a suite of
+Ethernet OAM PDUs. OAM PDU formats for each type of Ethernet OAM operation are
+defined in ITU-T Rec. Y.1731.
+
+== Configuration
+In the normal case, an ERPS configuration requires CFM MEP instances to be
+instantiated in both ends of a protected flow. However, if the ring nodes are 
+connected back-to-back, that is, without going through another network of
+switches, you may rely on the physical link directly without using a CFM MEP
+for signal fail. In that case use "sf-trigger link".
+
+An example of an ERPS configuration is shown below, with the associated CFM
+configuration:
+
+=== Configuration of parameters
+The syntax for ERPS global level CLI configuration command is:
+[source, log]
+----
+erps <inst>
+----
+Where:
+----
+inst              ERPS instance number.
+----
+The syntax for ERPS level CLI configuration command is:
+[source, log]
+----
+admin-state { enable | disable }
+control-vlan <vid> [ pcp <pcp> ]
+guard-time <guard_time>
+hold-off-time <hold_off>
+level <level>
+no guard-time <guard_time>
+no hold-off-time <hold_off>
+no node-id
+no port0 smac
+no port1 smac
+no protected-vlans
+no revertive
+no rpl
+no wait-to-restore <wtr>
+node-id <node_id>
+port0 interface <port_type> <port>
+port0 sf-trigger { link | { mep domain <md_name> service <ma_name> mep-id <mepid> } }
+port0 smac <mac>
+port1 interface <port_type> <port>
+port1 sf-trigger { link | { mep domain <md_name> service <ma_name> mep-id <mepid> } }
+port1 smac <mac>
+protected-vlans <vlan_list>
+revertive
+ring-id <ring_id>
+ring-type { major | sub-ring [ virtual-channel ] | interconnected-sub-ring { connected-ring <connected_ring_inst> [ virtual-channel ] [ propagate-topology-change ] } }
+rpl { owner | neighbor } { port0 | port1 }
+version { v1 | v2 }
+wait-to-restore <wtr>
+----
+Where:
+----
+admin-state       Enable or disable this ERPS instance
+control-vlan      Set the ERPS instance's control VLAN and PCP used in R-APS PDUs 
+                  transmitted on both ring ports (if applicable).
+guard-time        The guard timer is used to prevent ring nodes from acting upon
+                  outdated R-APS PDUs upon topology changes.
+hold-off-time     When a new (or more severe) defect occurs, the hold-off timer
+                  will be started and the event will be reported after the timer
+                  expires. Hold-off timer value measured in milliseconds.
+                  Must be in multiples of 100 ms. Default value 0.
+level             Set the MD/MEG level used in R-APS PDUs. Default is 7.
+no                Negate a command or set its defaults.
+node-id           Controls the Node ID used inside the R-APS PDUs to uniquely
+                  identify this node (switch). Defaults to using the switch's.
+port0             Set configuration for ring port0 (East).
+port1             Set configuration for ring port1 (West).
+interface         Assign an interface to ring port.
+sf-trigger        Choose whether the port's interface link state or a MEP installed 
+                  on port's interface is used as signal-fail trigger.
+link              The port's interface link state is used as signal-fail trigger
+mep               A MEP installed on the port is used as signal-fail trigger.
+protected-vlans   Set the list of VLANs protected by this ERPS instance.
+revertive         Set this instance to be revertive, that is, restore to default
+                  after the wait-to-restore timer has expired.
+ring-id           Controls the Ring ID, which is used in the last byte of the 
+                  DMAC of R-APS PDUs. Ring IDs of received R-APS PDUs must match
+                  the configured Ring ID.
+ring-type         Controls whether this is a major ring or a sub-ring. Only major
+                  rings are supported if using G.8032v1.
+major             Make this a major ring, which always has two ring ports.
+sub-ring          Make this a non-interconnected sub-ring, which has two ring ports.
+virtual-channel   Configure this interconnected sub-ring with a R-APS virtual channel, 
+                  that is, R-APS PDUs are transmitted on the connected ring that this 
+                  sub-ring connects to.
+interconnected-sub-ring Make this an interconnected sub-ring, which has only 
+                  one ring port (port0), but connects to a major ring.
+connected-ring    An interconnected sub-ring points to another ring with two ring ports
+                  (that is, that other ring cannot itself be an interconnected sub-ring),
+                  which receives flush notifications and may carry R-APS PDUs for the sub-ring.
+connected_ring_inst The ERPS instance number of the connected ring that this interconnected
+                  sub-ring connects to.
+propagate-topology-change If a topology-change occurs on this interconnected sub-ring,
+                  the connected ring also flushes its FDB. If this keyword is specified,
+                  the connected ring will also send Flush R-APS Event PDU onto its 
+                  ring ports.
+rpl               Controls whether this node holds the Ring Protection Link (RPL),
+                  and what role it has in that case. Use the no-form if this node
+                  doesn't hold the RPL.
+neighbor          This node is RPL neighbor.
+owner             This node is RPL owner.
+version           Specify whether to use G.8032v1 or G.8032v2 of the R-APS protocol.
+wait-to-restore   Only used in revertive mode. Indicates the number of seconds
+                  after a defect has cleared until operation is switched back to
+                  the normal condition. Valid range [1-720]. Measured in seconds. 
+                  Default value 300.
+
+----
+An example is shown below:
+----
+(config)# erps 10
+(config-erps)#
+----
+=== Using control commands
+The syntax for ERPS level CLI command is:
+[source, log]
+----
+erps <inst> clear
+erps <inst> switch { force | manual } { port0-to-port1 | port1-to-port0 }
+----
+Where:
+----
+inst              ERPS instance number.
+clear             Clear a switchover (FS or MS) request and a WTB/WTR condition 
+                  and force reversion even if not revertive.
+switch            Request a switchover from port0 to port1 or vice versa.
+                  Use 'erps <inst> clear' to clear the request.
+force             Causes a forced switchover.
+manual            Causes a switchover if the signal is good and no forced
+                  switch is in effect.
+port0-to-port1    Blocks port0 and unblocks port1.
+port1-to-port0    Blocks port1 and unblocks port0.
+
+----
+Example:
+----
+# erps 10 switch manual port0-to-port1
+----
+
+=== Show status and statistics
+
+The syntax of the show erps CLI command is:
+[source, log]
+----
+show erps [ <inst_list> ] [ statistics ] [ details ]
+
+----
+Where:
+----
+<inst_list>     List of ERPS instances to show
+statistics      Show statistics
+details         Provide more details
+----
+
+Example show statistics:
+----
+# show erps statistics details
+Instance: 1
+Flushes:  16
+
+Counter        | Port0          | Port1
+---------------|----------------|----------------
+Rx R-APS NR    |             73 |             62
+Rx R-APS NR-RB |              0 |              0
+Rx R-APS SF    |              0 |              0
+Rx R-APS FS    |              0 |              0
+Rx R-APS MS    |              0 |              0
+Rx R-APS Event |              0 |              0
+Rx Drop Guard  |              1 |              0
+Rx Drop Error  |              0 |              0
+Rx Own Node ID |              0 |              0
+Rx FOP-PM      |              0 |              0
+Local SF       |              0 |              2
+Tx R-APS NR    |             63 |             63
+Tx R-APS NR-RB |             81 |             81
+Tx R-APS SF    |             11 |             10
+Tx R-APS FS    |              0 |              0
+Tx R-APS MS    |              0 |              0
+Tx R-APS Event |              0 |              0
+#
+----
+Example show status:
+----
+# # show erps details
+-----------------------------------------------------------------------------------------
+Instance:                 1
+Operational state:        Active
+Operational warning:      None
+Node state:               Idle
+Ring type:                Major
+Ring ID:                  1
+Level:                    7
+Control VLAN:             7
+Protected VLANs:          1,2
+RPL role:                 Owner on port1
+Connected ring instance:  N/A
+Virtual channel:          N/A
+Revertive:                Yes
+Command:                  None
+FOP-TO:                   No
+                             | Tx                | Port0 Rx          | Port1 Rx
+-----------------------------|-------------------|-------------------|-------------------
+Interface                    | -                 | Gi 1/1            | Gi 1/2
+Blocked                      | -                 | No                | Yes
+SF                           | -                 | No                | No
+FOP-PM                       | -                 | No                | No
+Last R-APS change (secs ago) | 342               | 346               | 346
+Version                      | 1 (G.8032v2)      | 1 (G.8032v2)      | 1 (G.8032v2)
+R-APS PDU                    | NR, RB, DNF       | NR                | NR
+R-APS BPR                    | port1             | port1             | port1
+Node ID                      | 00-01-c1-1c-aa-10 | 02-00-c1-9b-af-69 | 02-00-c1-9b-af-69
+Source MAC                   | Varies            | 02-00-c1-9b-af-6a | 02-00-c1-9b-af-6b
+-----------------------------------------------------------------------------------------
+----
+
+
+=== Configure three switch ring example
+A simple three switch network is constructed to demonstrate how the ERPS features can be configured. The network is shown below.
+
+image::./erps_3.png[aa]
+
+The following commands will disable STP and LLDP, enable C-Port on Port 1 and 2 on all 3 switches.
+[source, log]
+----
+#Configure port 1
+interface GigabitEthernet 1/1
+ #set C-Port
+ switchport hybrid port-type c-port 
+ switchport mode hybrid
+ #disable LLDP 
+ no lldp receive
+ no lldp transmit
+ #disable Spanning Tree Protocol
+ no spanning-tree
+!
+#Configure port 2
+interface GigabitEthernet 1/2
+ #set C-Port
+ switchport hybrid port-type c-port 
+ switchport mode hybrid 
+ #disable LLDP
+ no lldp receive
+ no lldp transmit
+ #disable Spanning Tree Protocol
+ no spanning-tree
+----
+
+The 3 individual switches are now configured like this:
+
+Configure CFM and ERPS on Switch 1
+----
+cfm domain MyDomain
+ format none
+ service MyService
+  format icc "ICC000MEG0000"
+  mep 1
+   interface GigabitEthernet 1/1
+   vlan 3001
+   remote mep 5
+   continuity-check
+   admin-state enable
+   exit
+  mep 2
+   interface GigabitEthernet 1/2
+   vlan 3001
+   remote mep 3
+   continuity-check
+   admin-state enable
+   exit
+!
+!
+erps 1
+ rpl owner port1
+ port0 interface GigabitEthernet 1/1
+ port1 interface GigabitEthernet 1/2
+ port0 sf-trigger mep domain MyDomain service MyService mep-id 1
+ port1 sf-trigger mep domain MyDomain service MyService mep-id 2
+ control-vlan 7 pcp 7
+ protected-vlans 1,2
+ admin-state enable
+----
+Configure CFM and ERPS on Switch 2
+----
+cfm domain MyDomain
+ format none
+ service MyService
+  format icc "ICC000MEG0000"
+  mep 3
+   interface GigabitEthernet 1/1
+   vlan 3001
+   remote mep 2
+   continuity-check
+   admin-state enable
+   exit
+  mep 4
+   interface GigabitEthernet 1/2
+   vlan 3001
+   remote mep 6
+   continuity-check
+   admin-state enable
+   exit
+!
+erps 1
+ rpl neighbor port0
+ port0 interface GigabitEthernet 1/1
+ port1 interface GigabitEthernet 1/2
+ port0 sf-trigger mep domain MyDomain service MyService mep-id 3
+ port1 sf-trigger mep domain MyDomain service MyService mep-id 4
+ control-vlan 7 pcp 7
+ protected-vlans 1,2
+ admin-state enable
+----
+Configure CFM and ERPS on Switch 3
+----
+cfm domain MyDomain
+ format none
+ service MyService
+  format icc "ICC000MEG0000"
+  mep 5
+   interface GigabitEthernet 1/1
+   vlan 3001
+   remote mep 1
+   continuity-check
+   admin-state enable
+   exit
+  mep 6
+   interface GigabitEthernet 1/2
+   vlan 3001
+   remote mep 4
+   continuity-check
+   admin-state enable
+   exit
+!
+erps 1
+ port0 interface GigabitEthernet 1/1
+ port1 interface GigabitEthernet 1/2
+ port0 sf-trigger mep domain MyDomain service MyService mep-id 5
+ port1 sf-trigger mep domain MyDomain service MyService mep-id 6
+ control-vlan 7 pcp 7
+ protected-vlans 1,2
+ admin-state enable
+----

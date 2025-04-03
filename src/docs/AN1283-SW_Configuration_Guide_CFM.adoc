@@ -1,0 +1,350 @@
+:sectnums:
+:imagesdir: ./AN1283-SW_Configuration_Guide_CFM
+:toc:
+
+
+= CFM Configuration Guide
+
+== Introduction
+
+This document explains how to setup Connectivity Fault Management (CFM) features.
+
+Connectivity Fault Management is defined by the IEEE 802.1ag standard. It defines protocols and practices for OAM (Operations, Administration, and Maintenance) for paths through 802.1 bridges and local area networks (LANs). IEEE 802.1ag is largely identical with ITU-T Recommendation Y.1731, which additionally addresses performance monitoring.
+
+
+=== IEEE 802.1ag
+Defines maintenance domains, their constituent maintenance points, and the managed objects required to create and administer them
+Defines the relationship between maintenance domains and the services offered by VLAN-aware bridges and provider bridges
+Describes the protocols and procedures used by maintenance points to maintain and diagnose connectivity faults within a maintenance domain;
+
+=== Definitions
+Maintenance Domain (MD)::
+Maintenance Domains are management space on a network. MDs are configured with Names and Levels, where the eight levels range from 0 to 7. A hierarchical relationship exists between domains based on levels. The larger the domain, the higher the level value. Recommended values of levels are as follows:
+Customer Domain: Largest (e.g., 7)
+Provider Domain: In between (e.g., 3)
+Operator Domain: Smallest (e.g., 1)
+
+Maintenance Association (MA)::
+Defined as a "set of MEPs, all of which are configured with the same MAID (Maintenance Association Identifier) and MD Level, each of which is configured with a MEPID unique within that MAID and MD Level, and all of which are configured with the complete list of MEPIDs."
+
+Maintenance association End Point (MEP)::
+Points at the edge of the domain, define the boundary for the domain. A MEP sends and receives CFM frames through the relay function, drops all CFM frames of its level or lower that come from the wire side.
+
+Maintenance domain Intermediate Point (MIP)::
+Points internal to a domain, not at the boundary. CFM frames received from MEPs and other MIPs are cataloged and forwarded, all CFM frames at a lower level are stopped and dropped. MIPs are passive points, respond only when triggered by CFM trace route and loop-back messages.
+
+=== CFM Protocols
+IEEE 802.1ag Ethernet CFM (Connectivity Fault Management) protocols comprise three protocols. They are:
+
+Continuity Check Protocol (CCP)::
+The Continuity Check Message (CCM) provides a means to detect connectivity failures in an MA. CCMs are multicast messages. CCMs are confined to a domain (MD). These messages are unidirectional and do not solicit a response. Each MEP transmits a periodic multicast Continuity Check Message inward towards the other MEPs.
+Link Trace (LT)::
+Link Trace messages otherwise known as Mac Trace Route are Multicast frames that a MEP transmits to track the path (hop-by-hop) to a destination MEP which is similar in concept to User Datagram Protocol (UDP) Trace Route. Each receiving MEP sends a Trace Route Reply directly to the Originating MEP, and regenerates the Trace Route Message.
+Loop-back (LB)::
+Loop-back messages otherwise known as MAC ping are Unicast frames that a MEP transmits, they are similar in concept to an Internet Control Message Protocol (ICMP) Echo (Ping) messages, sending Loopback to successive MIPs can determine the location of a fault. Sending a high volume of Loopback Messages can test bandwidth, reliability, or jitter of a service, which is similar to flood ping. A MEP can send a Loopback to any MEP or MIP in the service. Unlike CCMs, Loop back messages are administratively initiated and stopped.
+
+
+=== Implementation limitations
+The current implementation does not support Maintenance domain Intermediate Point (MIP), Up-MEP, Link Trace (LT), and Loop-back (LB).
+
+
+== Configuration
+
+
+image::./CFM.png[aa]
+
+An example of a full stack CFM configuration is shown below:
+
+[source, log]
+----
+# show running-config feature cfm all-defaults
+Building configuration...
+cfm sender-id-tlv disable
+cfm port-status-tlv disable
+cfm interface-status-tlv disable
+cfm organization-specific-tlv disable
+!
+cfm domain MyDomain
+ format none
+ level 3
+ sender-id-tlv chassis-management
+ port-status-tlv enable
+ interface-status-tlv enable
+ organization-specific-tlv defer
+ service MyService
+  format icc "ICC000MEG0000"
+  type port
+  continuity-check interval 100ms
+  sender-id-tlv disable
+  port-status-tlv defer
+  interface-status-tlv defer
+  organization-specific-tlv defer
+  mep 301
+   direction down
+   interface GigabitEthernet 1/2
+   vlan 100
+   pcp 6
+   no smac
+   remote mep 300
+   continuity-check
+   alarm-level 1
+   alarm-time-present 2500
+   alarm-time-absent 10000
+   admin-state disable
+!
+end
+----
+
+=== Configuration of global parameters
+The syntax for cfm global level cli command is:
+[source, log]
+----
+cfm interface-status-tlv { disable | enable }
+cfm organization-specific-tlv { disable | enable oui <oui> subtype <subtype> value <value> }
+cfm port-status-tlv { disable | enable }
+cfm sender-id-tlv { disable | chassis | management | chassis-management }
+----
+Where:
+----
+interface-status-tlv       Include or exclude Interface Status TLV in CCM PDUs (may be overridden
+                           in domain and service).
+organization-specific-tlv  Include or exclude Organization-Specific TLV in PDUs (may be 
+                           overridden in domain and service).
+oui                        The OUI on form XX-XX-XX.
+subtype                    Subtype value (0-255).
+value                      A double quoted string with length 1-63 .
+port-status-tlv            Include or exclude Port Status TLV in CCM PDUs (may be overridden in 
+                           domain and service).
+sender-id-tlv              Default Sender ID TLV format to be used in PDUs (may be overridden in 
+                           domain and service).
+chassis                    Enable Sender ID TLV and send Chassis ID (MAC Address).
+chassis-management         Enable Sender ID TLV and send both Chassis ID (MAC Address) and Management
+                           Address (IPv4 Address).
+disable                    Exclude TLV from PDUs (default).
+management                 Enable Sender ID TLV and send Management address (IPv4 Address).
+----
+An example is shown below:
+----
+(config)# cfm sender-id-tlv chassis-management
+(config)# cfm port-status-tlv enable
+(config)# cfm interface-status-tlv enable
+(config)# cfm organization-specific-tlv enable oui 01-02-03 subtype 1 value "Example of oui value string."
+----
+
+=== Configuration of Domain parameters
+The syntax for cfm domain CLI command is:
+[source, log]
+----
+cfm domain <md_name>
+no cfm domain { <md_name> | all }
+format { none | string <name> }
+interface-status-tlv { disable | enable | defer }
+level <level>
+organization-specific-tlv { disable | defer }
+port-status-tlv { disable | enable | defer }
+sender-id-tlv { disable | chassis | management | chassis-management | defer }
+----
+Where:
+----
+format                     Change format of this domain
+interface-status-tlv       Include or exclude Interface Status TLV in PDUs included in this 
+                           domain or let higher level determine (may be overridden in service)
+level                      Change level (MEG-level) of this domain
+organization-specific-tlv  Include or exclude Organization-Specific TLV in PDUs included in this
+                           MD or let higher level determine (may be overridden in service)
+port-status-tlv            Include or exclude Port Status TLV in PDUs included in this domain or
+                           let higher level determine (may be overridden in service)
+sender-id-tlv              Default Sender ID TLV format to be used in PDUs in this domain (may be 
+                           overridden in service)
+----
+Example:
+----
+(config)# cfm domain MyDomain
+(config-cfm-dmn)# format none
+(config-cfm-dmn)# level 3
+(config-cfm-dmn)# sender-id-tlv chassis-management
+(config-cfm-dmn)# port-status-tlv enable
+(config-cfm-dmn)# interface-status-tlv enable
+(config-cfm-dmn)# organization-specific-tlv defer
+----
+
+
+=== Configuration of Service parameters
+The syntax for cfm service level cli command is:
+[source, log]
+----
+service <ma_name>
+continuity-check interval { 3.3ms | 10ms | 100ms | 1s | 10s | 1min | 10min }
+format { string <format_string> | integer <format_integer> | icc <format_icc_string> | icc-cc <format_icc_cc_string> }
+interface-status-tlv { disable | enable | defer }
+mep <mepid>
+no mep { <mepid> | all }
+organization-specific-tlv { disable | defer }
+port-status-tlv { disable | enable | defer }
+sender-id-tlv { disable | chassis | management | chassis-management | defer }
+type { port | vlan <vid> }
+----
+Where:
+----
+continuity-check          Specify the CCM interval for all MEPs in this service (MA).
+                          Default is 1s.
+format                    Change the format used in MAID/MEGID for this service (MA).
+    string                Character string (type 2). A double quoted string with 1 to 45 
+                          characters.
+    integer               2-octet integer (type 3), <0-65535>.
+    icc                   ITU-T ICC-based format (type 32). Must be exactly 13 characters long 
+                          double quoted string.
+    icc-cc                ITU-T ICC-CC-based format (type 33). Must be exactly 15 characters long 
+                          double quoted string, and the first two characters must be from [A-Z].
+interface-status-tlv      Include or exclude Interface Status TLV in PDUs included in MEPs 
+                          running in this service or let domain determine.
+mep                       Create or modify a Maintenance association EndPoint (MEP).
+no                        Negate a command or set its defaults.
+organization-specific-tlv Include or exclude Organization-Specific TLV in PDUs on MEPs running in
+                          this service or let the domain determine.
+port-status-tlv           Include or exclude Port Status TLV in PDUs for MEPs included in this 
+                          service or let domain determine.
+sender-id-tlv             Default Sender ID TLV format to be used in PDUs in MEPs running in 
+                          this service.
+service                   Create or modify a Service (MA).
+type                      Specify whether MEPs created in this service are port or VLAN MEPs. 
+    port                  All MEPs created within this MA will be created as port MEPs
+                          (interface MEPs). There can only be one port MEP per interface.
+                          A given port MEP may still be created with tags, if that 
+                          MEP's VLAN is non-zero.
+    vlan                  All MEPs created within this MA will created as VLAN MEPs.
+                          A given MEP may be configured with another VLAN than the MA's 
+                          primary VID, but it is impossible to have untagged VLAN MEPs.
+----
+Example:
+----
+(config-cfm-dmn)# service MyService
+(config-cfm-dmn-svc)# format icc "ICC000MEG0000"
+(config-cfm-dmn-svc)# continuity-check interval 100ms
+(config-cfm-dmn-svc)# sender-id-tlv disable
+(config-cfm-dmn-svc)# port-status-tlv defer
+(config-cfm-dmn-svc)# interface-status-tlv defer
+(config-cfm-dmn-svc)# organization-specific-tlv defer
+(config-cfm-dmn-svc)# type vlan 6
+----
+
+
+
+=== Configuration of MEP parameters
+The syntax for cfm mep level cli command is as follows
+[source, log]
+----
+mep <1-8191>
+admin-state { enable | disable }
+alarm-level <alarm_level>
+alarm-time-absent <alarm_time_absent_ms>
+alarm-time-present <alarm_time_present_ms>
+continuity-check
+direction { up | down }
+interface <port_type> <port>
+mep <mepid>
+no continuity-check
+no remote mep { <rmepid> | all }
+no smac
+pcp <pcp>
+remote mep <rmepid>
+smac <mac>
+vlan { untagged | <vid> }
+----
+Where:
+----
+mep                Create or modify a MEP
+admin-state        Enable or disable this MEP.
+alarm-level        If a defect is detected with a priority higher than this level, a fault alarm
+                   notification will be generated.
+alarm-time-absent  The time in milliseconds that defects must be absent before a fault alarm
+                   notification is reset. Default is 10000 ms.
+alarm-time-present The time in milliseconds that defects must be present before a fault alarm
+                   notification is issued. Default is 2500 ms.
+continuity-check   Enable or disable (no-form) generation of conitinuity-check messages (CCMs)
+direction          Set whether this MEP is an Up- or a Down-MEP.
+interface          Select an interface to configure.
+mep                Create or modify a Maintenance association EndPoint (MEP).
+no                 Negate a command or set its defaults.
+pcp                Choose PCP value in PDUs' VLAN tag. Not used if untagged.
+remote             Specify the Remote MEPs that this MEP is expected to receive CCM PDUs from.
+smac               Set a Source MAC address to be used in PDUs for this MEP. Default to use
+                   interface's.
+vlan               VLAN commands.
+----
+Example:
+----
+(config-cfm-dmn-svc)# mep 301
+(config-cfm-dmn-svc-mep)# direction down
+(config-cfm-dmn-svc-mep)# interface GigabitEthernet 1/2
+(config-cfm-dmn-svc-mep)# vlan 100
+(config-cfm-dmn-svc-mep)# pcp 6
+(config-cfm-dmn-svc-mep)# no smac
+(config-cfm-dmn-svc-mep)# remote mep 300
+(config-cfm-dmn-svc-mep)# continuity-check
+(config-cfm-dmn-svc-mep)# alarm-level 1
+(config-cfm-dmn-svc-mep)# alarm-time-present 2500
+(config-cfm-dmn-svc-mep)# alarm-time-absent 10000
+(config-cfm-dmn-svc-mep)# admin-state disable
+----
+
+=== Show Status
+
+The format of the 'show cfm' CLI command is as shown below:
+
+[source, log]
+----
+show cfm domains [domain <md_name>] [details]
+show cfm services [domain <md_name>] [service <ma_name>] [details]
+show cfm errors
+show cfm meps [domain <md_name>] [service <ma_name>] [mep-id <mepid>] [details]
+----
+Where:
+----
+domains    Show CFM Domains.
+services   Show CFM Services
+errors     Show CFM configuration and run-time errors.
+meps       Show MEPs.
+details    Show detailed information.
+domain     Select domain to show info for.
+mep-id     Select a MEP to show info for.
+service    Select a service to show info for.
+----
+Example:
+----
+# show cfm mep det
+Defect abbreviations (alarm level in parentheses):
+R (1): someRDIdefect (RDI received from at least one remote MEP)
+M (2): someMACstatusDefect (received Port Status TLV != psUp or Interface Status TLV != isUp)
+C (3): someRMEPCCMdefect (valid CCM is not received within 3.5 times CCM interval from at least one remote MEP)
+E (4): errorCCMdefect (received CCM from an unknown remote MEP-ID or CCM interval mismatch)
+X (5): xconCCMdefect (received CCM with an MD/MEG level smaller than configured or wrong MAID/MEGID (cross-connect))
+
+Domain:                   MyDomain
+Service:                  MyService
+MEP-ID:                   200
+MAC Address:              00-01-c1-00-6a-42
+Direction:                Down
+Interface:                Gi 1/2
+Continuity-check:         Enabled
+presentRDI:               Yes
+Type:                     Untagged Port MEP
+MEP Active:               Yes
+enableRMEPdefect:         False (No link on residence interface)
+FNG State:                FNG_DEFECT_REPORTED (highest defect: errorCCMdefect)
+Defects:                  --CE-
+Rx CCM PDU Count:         0
+Tx CCM PDU Count:         14918
+Rx Invalid CCM PDU Count: 21062
+Rx CCM PDU Seq. Errors:   0
+Remote MEP-ID:            201
+  State:                  RMEP_FAILED
+  MAC Address:            00-00-00-00-00-00
+  Failed/OK Time:         4 minutes and 0 seconds after boot (4 hours, 5 minutes and 2 seconds ago)
+  RDI:                    0
+  Port Status:            Not received (0)
+  Interface Status:       Not received (0)
+  Sender ID:              Not received
+  Org-Specific TLV:       Not received
+----
+
