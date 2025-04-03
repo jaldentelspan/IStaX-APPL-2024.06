@@ -1,0 +1,33 @@
+# Copyright (c) 2004-2020 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: MIT
+
+XCC     = gcc
+
+DIR_vtss_api := ../base
+DIR_vtss_inc := ../include
+compile_c = $(XCC) -c -o $*.o -MD -DVTSS_OPSYS_LINUX=1 -DVTSS_OPT_PORT_COUNT=4 -DVTSS_CHIP_10G_PHY -DVTSS_FEATURE_PHY_TIMESTAMP -DVTSS_FEATURE_MACSEC -I$(DIR_vtss_inc) $<
+
+OBJECTS_vtss_api_core := vtss_api.o vtss_wis_api.o vtss_phy_10g_api.o
+OBJECTS_vtss_api_core += vtss_util.o vtss_common.o 
+OBJECTS_vtss_api_phy_ms := vtss_macsec_api.o 
+OBJECTS_vtss_api_phy_ts := vtss_phy_ts_api.o vtss_phy_ewis.o 
+OBJECTS_vtss_api_10g := vtss_phy_10g.o vtss_phy_10g_venice.o 
+
+OBJECTS_vtss_api: $(OBJECTS_vtss_api_core) $(OBJECTS_vtss_api_phy_ms) $(OBJECTS_vtss_api_10g) $(OBJECTS_vtss_api_phy_ts)
+	ar -cvq libvtss10g.a $(OBJECTS_vtss_api_core) $(OBJECTS_vtss_api_10g) $(OBJECTS_vtss_api_phy_ms) $(OBJECTS_vtss_api_phy_ts)
+	rm *.o *.d
+
+$(OBJECTS_vtss_api_core): %.o: $(DIR_vtss_api)/ail/%.c
+	$(call compile_c, $@, $<)
+
+$(OBJECTS_vtss_api_10g) : %.o: $(DIR_vtss_api)/phy/phy_10g/%.c
+	$(call compile_c, $@, $<)
+
+$(OBJECTS_vtss_api_phy_ms) : %.o: $(DIR_vtss_api)/phy/macsec/%.c
+	$(call compile_c, $@, $<)
+
+$(OBJECTS_vtss_api_phy_ts) : %.o: $(DIR_vtss_api)/phy/ts/%.c
+	$(call compile_c, $@, $<)
+
+all: $(OBJECTS_vtss_api)
+

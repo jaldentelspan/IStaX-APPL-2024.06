@@ -1,0 +1,214 @@
+// Copyright (c) 2004-2020 Microchip Technology Inc. and its subsidiaries.
+// SPDX-License-Identifier: MIT
+
+:sectnums:
+== Register Accessor Functions
+
+These APIs allows to read/write PHY registers. For convenience, registers are
+grouped and arranged page wise like general purpose registers in a page,
+extended registers in few pages, GPIO registers in a page, 1588 registers in
+a page, MACSEC registers in a page.
+
+The API `mepa_clause22_read()` helps to read register of a PHY, given
+regsiter address and page address embedded in address parameter.
+The API `mepa_clause22_write()` helps to write register of a PHY,
+given register address and page address embedded in address parameter and
+value to be written.
+
+Extended page registers can be accessed using `mepa_clause45_read()`
+and `mepa_clause45_write()` APIs.
+
+== PHY Information Details
+
+The API `mepa_phy_info_get()` allows to get current PHY information
+which includes `mepa_phy_info_t` details.
+
+== Port Interface
+
+Based on speed (`mepa_port_speed_t`) of the port, PHY interface details
+(`mepa_port_interface_t`) are fetched using `mepa_if_get()`.
+
+== Auto-Negotiation Status
+
+Auto-negotiation allows UTP (unshielded twisted pair) link partners to select
+the highest common mode of operation. During auto-negotiation, link partners
+advertise capabilities across the UTP link to each other, and then compare
+their own capabilities with those they received from their link partners. The
+highest speed and duplex setting that is common to the two link partners is
+selected as the operating mode.
+
+The API `mepa_aneg_status_get()` is used to get auto negotiation
+status of copper PHY using struct `mepa_aneg_status_t`.
+
+== Power Mode Configuration
+
+The API `mepa_power_set()` is used to configure power modes.
+Supported modes are `mepa_power_mode_t` which is listed as following:
+
+NOMINAL:: Default power settings to restore the original power level.
+ACTIPHY:: Actiphy Power Mgmt mode that supports power sensitive applications.
+DYNAMIC:: Enables PerfectReach capability at link-up to adjust power output
+based on cable length.
+ENABLED:: Enables Actiphy and PerfectReach together at link-up.
+
+== Media Configuration
+
+In case if port is dual media port with external PHY, media type
+(`mepa_media_interface_t`) is set using API `mepa_media_set()`
+API `mepa_media_get()` is used to get configured media type.
+
+== Loopbacks
+
+These APIs are used for debug purpose to check transmit and receive data
+paths using different loopback modes (`mepa_loopback_t`).
+
+The API `mepa_loopback_get()` allows getting loopback configuration
+on a given PHY.
+
+The API `mepa_loopback_set()` allows setting internal loopback on
+a given PHY.
+
+== PHY GPIO Configuration
+
+GPIOs are general purpose Input/output pins which can be used for multiple
+purposes. Few of those purposes are it can act as an input to a PIN, output
+to a pin, to drive an internal signal and output the generated interrupt
+from the PHY.
+
+The API `mepa_gpio_mode_set()` helps to configure GPIO pin mode to
+input , output and alternate function using struture `mepa_gpio_conf_t`.
+
+The API `mepa_gpio_in_get()` allows to get the current GPIO configuration
+on a given GPIO pin.
+
+The API `mepa_gpio_out_set()` allows to set GPIO configuration, given
+GPIO pin number and value to be written.
+
+== Isolate Mode
+
+The PHY may be forced to electrically isolate its data paths from MII or GMII.
+When isolated, PHY shall respond to management trasactions.
+
+The API `mepa_isolate_mode_conf()` can be used to enable or disable isolation
+of PHY from MII or GMII interface.
+
+== Register Dump
+
+The API `mepa_debug_info_dump()` is used for debugging purpose ONLY.
+This API will use trace function from callout APIs to dump information.
+It will dump following registers:
+
+* PHY registers like Basic and Extended page(0,1,2,3,4,5,7,28,29,31) registers.
+* TS registers like classifier(IP, MAC, VLAN) configuration, TS general settings
+and TS TX/RX settings.
+
+== Delete PHY Instance
+
+The API `mepa_delete()` is used to delete MEPA instance created for a
+PHY. It clears up the data allocated in `mepa_create()` function.
+
+== PHY SQI(Signal Quality Indicator) value
+The API `mepa_sqi_read()` is used to get the signal quality indication
+
+== PHY SOF(Start Of Frame) Pulse
+The API `mepa_start_of_frame_conf_set` is used to set the start of frame
+configuration for generation of an SOF pulse in receive and transmit paths
+using structure `mepa_start_of_frame_conf_t`.
+
+The above structure has below fields:
+
+. `mepa_start_of_frame_conf_t::sof_no`: Four SOF outputs, each of which is
+configurable to be any of the eight available SOF pulses (Tx SOF and Rx SOF on
+each port).
+. `mepa_start_of_frame_conf_t::ingress`: If true SOF pulse is detected for
+ingress packet else it is detected for egress packet.  Direction of frame
+transmission.
+. `mepa_start_of_frame_conf_t::sof_preemption_mode`: This is an enum of type
+`mepa_preemption_mode_t` which can be set to:
+.. `MEPA_PREEMPTION_NORMAL_SFD` or `MEPA_PREEMPTION_SMD_E`: The SOF pulse is
+generated for SMD-E (0xD5 / normal SFD).
+.. `MEPA_PREEMPTION_SMD_EXCEPT_CONTINUOUS`: The SOF pulse is generated for any
+of the SMD values listed in 802.3br-2016 except for the continuation frame:
+SMD-V (0x07), SMD-R (0x19), SMD-E (0xD5) and SMD-S[0,1,2,3] (0xE6. 0x4C, 0x7F or
+0xB3).
+.. `MEPA_PREEMPTION_SMD_ALL`: The SOF pulse is also generated for the
+continuation SMD values SMD-C[0,1,2,3] (0x61, 0x52, 0x9E or 0x2A).
+
+The API `mepa_start_of_frame_conf_get` is used to get the start of frame
+configuration
+
+== PCH/MCH and Frame Preemption support
+
+The extension-type (refered to as `ExtTy` in the datasheets) in the preamble is
+used by the PCH/MCH and the Preemption features.
+
+A MAC which support PCH/MCH, but does not support preemption will transmit
+frames with `ExtType` set to either `0b00` or `0b01`:
+
+- `0b00`: indicate that the frame shall be forwarded normally and not perform any
+  timestamping operations.
+- `0b01`: indicate that the frame shall be timestamped.
+
+A MAC which support PCH/MCH preemption will always set the `ExtType` to `0b10`,
+regardless of if the frame shall be timestamped or not. In this case extention
+bit 31 is used to signal if a frame shall be timestamped or not.
+
+The PHY and MAC needs to agree on how time-stamp requests are signal in the
+frame. By default the PHY will use `ExtType` `0b00` or `0b01` and discard frames
+with `0b10`.
+
+If the PHY is connected to a MAC which generates frames with `ExtType == 0b10`
+and signales timestamp request in extension bit 31, then
+`mepa_reset_param_t::framepreempt_en` shall be set to true when calling
+`mepa_reset()`.
+
+The configured value can be read back using `mepa_framepreempt_get()`.
+
+== PHY Self-Test Frame Generation and Checking
+The API `mepa_selftest_start()` is used to start PHY self-test Frame generation in connector loopback mode.
+The API `mepa_selftest_read()` is used to read PHY correct and error frames in 10/100/1000M speed
+Use `mepa_reset()`, to disable self-test on PHY
+
+== Pseudo Random Binary Sequence (PRBS7) Generation and Checker
+PRBS generators are used in telecommunication, such as in analog-to-information conversion,
+but also in encryption, simulation, correlation technique and time-of-flight spectroscopy.
+The  sequence is  generated by a (maximal) linear feedback shift register (LFSR).
+PRBS-7 has a repetition period of 127 values.
+
+The API `mepa_prbs_set()` is used for enable or disable, mode selection, clock selection(25MHz or 125MHz), loopback selection, type selection, direction selection.
+The API `mepa_prbs_get()` is used for getting the configuration of PRBS.
+The API `mepa_prbs_monitor_set()` is used for injecting an error into the PRBS sequence.
+The API `mepa_prbs_monitor_get()` is used to get the error count of PRBS sequence.
+
+NOTE: PRBS CHECK DOES NOT RESTORE QSGMII SETTINGS AFTER OPERATION SO A CHIP RESET FOLLOWED BY A REINITIALIZATION IS REQUIRED Ref. "mepa_instantiation::6. Link Up Sequence"
+
+== API References
+
+`mepa_clause22_read()` +
+`mepa_clause22_write()` +
+`mepa_clause45_read()` +
+`mepa_clause45_write()` +
+`mepa_phy_info_get()` +
+`mepa_if_get()` +
+`mepa_aneg_status_get()` +
+`mepa_power_set()` +
+`mepa_media_set()` +
+`mepa_media_get()` +
+`mepa_loopback_get()` +
+`mepa_loopback_set()` +
+`mepa_gpio_mode_set()` +
+`mepa_gpio_in_get()` +
+`mepa_gpio_out_set()` +
+`mepa_isolate_mode_conf()` +
+`mepa_debug_info_dump()` +
+`mepa_delete()` +
+`mepa_sqi_read()` +
+`mepa_start_of_frame_conf_set()` +
+`mepa_start_of_frame_conf_get()` +
+`mepa_framepreempt_get()` +
+`mepa_selftest_start()` +
+`mepa_selftest_read()` +
+`mepa_prbs_set()` +
+`mepa_prbs_get()` +
+`mepa_prbs_monitor_set` +
+`mepa_prbs_monitor_get`
